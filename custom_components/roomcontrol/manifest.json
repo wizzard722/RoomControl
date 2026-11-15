@@ -1,7 +1,9 @@
 {
   "domain": "roomcontrol",
   "name": "RoomControl",
-  "codeowners": [],
+  "codeowners": [
+    "@wizzard722"
+  ],
   "config_flow": true,
   "dependencies": [
     "http",
@@ -9,10 +11,11 @@
     "panel_custom",
     "websocket_api"
   ],
-  "documentation": "https://github.com/",
+  "documentation": "https://github.com/wizzard722/RoomControl",
   "integration_type": "hub",
   "iot_class": "calculated",
+  "issue_tracker": "https://github.com/wizzard722/RoomControl/issues",
   "requirements": [],
-  "version": "1.17.1",
-  "single_config_entry": true
+  "single_config_entry": true,
+  "version": "1.17.1"
 }
