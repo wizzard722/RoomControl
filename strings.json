@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add RoomControl",
+        "description": "RoomControl creates a light for every area in Home Assistant. Configure each room in the RoomControl panel in the sidebar."
+      }
+    },
+    "abort": {
+      "already_configured": "RoomControl is already set up.",
+      "single_instance_allowed": "RoomControl is already set up."
+    }
+  },
+  "services": {
+    "announce": {
+      "name": "Announce",
+      "description": "Speak a message on RoomControl's speakers. Rooms where none of the linked persons is home are skipped.",
+      "fields": {
+        "message": {
+          "name": "Message",
+          "description": "What is said."
+        },
+        "areas": {
+          "name": "Areas",
+          "description": "Only these areas (empty: all)."
+        }
+      }
+    }
+  }
+}

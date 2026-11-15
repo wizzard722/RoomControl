@@ -1,0 +1,3029 @@
+"""Light platform: one group-like light entity per Home Assistant area.
+
+Each room light also runs the room's rules:
+- schedules: outside the active schedule nothing is turned on, and the
+  lights go off when the schedule ends;
+- motion (any of the room's or linked rooms' sensors) turns the lights on
+  (if dark enough and someone is home), also outside the schedule; they go
+  off after the room's grace period (0-10 min, default 5) without motion,
+  when motion turned them on, or always during an active schedule;
+- dusk turns the lights on when the sun sets (or when the schedule starts
+  after sunset);
+- alarm: lights go off when the alarm goes from disarmed to armed_home;
+- smart options (per room, see learn.py): a grace period that learns, media
+  and "the last motion was here" keeping the lights on, a learned standard
+  brightness, replaying past evenings when nobody is home, and notifications
+  for unusual motion or lights left on.
+"""
+from __future__ import annotations
+
+from collections import deque
+from collections.abc import Callable
+from datetime import datetime, timedelta
+import logging
+from typing import Any
+
+from homeassistant.components.light import (
+    ATTR_BRIGHTNESS,
+    ATTR_COLOR_TEMP_KELVIN,
+    ATTR_HS_COLOR,
+    ColorMode,
+    LightEntity,
+)
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import ATTR_ENTITY_ID, STATE_ON
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, State, callback
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry as ar
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.components import persistent_notification
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util, slugify
+from homeassistant.util.color import color_temperature_to_rgb
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_interval,
+)
+
+from .const import (
+    CONF_COVERS_CLOSE_AT,
+    DIM_LEVEL_DEFAULT,
+    SETTING_DIM_LEVEL,
+    DUSK_ELEVATION_DEFAULT,
+    SETTING_DUSK_ELEVATION,
+    GENERAL_DEVICE,
+    CONF_LATE_HOME,
+    SIGNAL_LATE_HOME,
+    SIGNAL_VACATION,
+    SIGNAL_LAST_MOTION,
+    CONF_ADAPTIVE_GRACE,
+    CONF_MEDIA_HOLD,
+    CONF_MEDIA_PLAYERS,
+    MEDIA_ACTIVE_STATES,
+    CONF_LAST_MOTION_HOLD,
+    LAST_MOTION_HOLD_MAX,
+    CONF_LEARN_BRIGHTNESS,
+    CONF_AWAY_REPLAY,
+    CONF_ANOMALY_ALERTS,
+    ANOMALY_LIGHTS_ON_HOURS,
+    ALARM_ARMED_AWAY,
+    CONF_AWAY_FOLLOW_SCHEDULE,
+    LUX_CONTROL_MIN_BRIGHTNESS,
+    LUX_CONTROL_START_PCT,
+    SETTING_SUN_ENTITY,
+    CONF_LUX_CONTROL_OFF_ALARM,
+    CONF_FAN_MOTION,
+    CONF_FAN_TEMP_MIN,
+    CONF_FAN_TEMP_SENSOR,
+    CONF_FAN_TEMP_SPEED,
+    FAN_TEMP_HYSTERESIS,
+    CONF_FAN_RUN_ON,
+    FAN_RUN_ON_MAX,
+    VERSION,
+    ALARM_ARMED_HOME,
+    ARMED_HOME_NO_MOTION,
+    CONF_ARMED_HOME_MODE,
+    ALARM_DISARMED,
+    ALARM_TRANSITIONAL,
+    CONF_ALARM_ENTITY,
+    CONF_COVER_GROUPS,
+    CONF_COVERS_FOLLOW,
+    CONF_COVERS,
+    CONF_DAYLIGHT_LIGHTS,
+    CONF_DAYLIGHT_MAX_KELVIN,
+    CONF_DAYLIGHT_MIN_KELVIN,
+    CONF_DAYLIGHT_PREFER_RGB,
+    DAYLIGHT_MAX_KELVIN,
+    DAYLIGHT_MIN_KELVIN,
+    KELVIN_COLOR_MODES,
+    RGB_COLOR_MODES,
+    CONF_DOOR_GROUPS,
+    CONF_DOOR_SENSORS,
+    CONF_DOOR_TURN_ON,
+    CONF_GROUPS,
+    CONF_LIGHTS_NAME,
+    DOOR_OPEN_STATES,
+    CONF_FIXED_LEVELS,
+    CONF_FOLLOW_DAYLIGHT,
+    DAYLIGHT_UPDATE_INTERVAL,
+    SETTING_ALARM_ENTITY,
+    CONF_SCHEDULE_SELECTOR,
+    CONF_SCHEDULES,
+    CONF_SUN_ENTITY,
+    CONF_TARGET_LUX,
+    CONF_TARGET_LUX_ENABLED,
+    CONF_DARK_LUX,
+    CONF_DEFAULT_BRIGHTNESS,
+    CONF_LUX_CONTROL,
+    LUX_CONTROL_DEADBAND,
+    LUX_CONTROL_INTERVAL,
+    LUX_CONTROL_MAX_STEP,
+    LUX_CONTROL_MIN_GAP,
+    DOMAIN,
+    CONF_MANUAL_DURATION,
+    CONF_MOTION_OFF_DELAY,
+    MANUAL_DURATION_DEFAULT,
+    MANUAL_DURATION_MAX,
+    MANUAL_DURATION_MIN,
+    MOTION_OFF_DELAY,
+    MOTION_OFF_DELAY_MAX,
+    SIGNAL_CONFIG_UPDATED,
+)
+from .control import rc_call
+from .learn import LearnStore
+from .smoke import SIGNAL_SMOKE, smoke_active
+from .clocks import SIGNAL_CLOCKS_UPDATED
+from .texts import text
+from .vacuums import SIGNAL_VACUUM_UPDATED
+from .slots import hm_minutes, slot_part
+from .devices import split_identifier
+from .rooms import (
+    active_schedule,
+    daylight_kelvin,
+    supports_kelvin,
+    presence_allows,
+    room_allows,
+    room_lights,
+    room_locks,
+    room_motion_sensors,
+    room_lux,
+    room_lux_sensors,
+    group_motion_sensors,
+    anyone_home,
+    fan_group,
+    household_persons,
+    room_fan_steps,
+    room_fans,
+    linked_group,
+    managed_areas,
+    room_persons,
+    schedule_allows,
+    stored_room,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+MOTION_ON_STATES = ("on", "detected")
+# Lux model: at most this much brightness (of 255) per step once the gain is known.
+LUX_MODEL_MAX_STEP = 128
+# A hand-made brightness change counts once the lamp stayed there this long (s).
+BRIGHT_SETTLE = 20
+# At most one notification of a kind per room in this time.
+ANOMALY_REPEAT = timedelta(hours=6)
+# A lamp at this brightness (of 255) or lower reads as 0%: it goes off instead.
+ZERO_BRIGHTNESS = 1
+
+
+def _reads_zero(data: dict[str, Any]) -> bool:
+    """Would a turn_on with this data leave the lamp on at 0%?"""
+    if "brightness_pct" in data:
+        return round(float(data["brightness_pct"])) <= 0
+    if ATTR_BRIGHTNESS in data:
+        return float(data[ATTR_BRIGHTNESS]) <= ZERO_BRIGHTNESS
+    return False
+
+
+def _truthy(value: Any) -> bool:
+    """Schedule block data: true / "true" / "yes" / "on" / 1 count as yes."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "yes", "on", "1", "ja")
+    return value is True or value == 1
+
+
+def _lamp_modes(hass: HomeAssistant, entity_id: str) -> set[str]:
+    state = hass.states.get(entity_id)
+    return {str(m) for m in (state.attributes.get("supported_color_modes") or [])} if state else set()
+
+
+def _colour_state(hass: HomeAssistant, lamps: list[str]) -> dict[str, Any]:
+    """What a RoomControl light offers for colour, from its lamps: colour (HS)
+    when any lamp can do colour, colour temperature when any lamp can do that
+    (or colour), else brightness only; plus the current colour of a lamp that is on."""
+    modes: set[str] = set()
+    lo: list[int] = []
+    hi: list[int] = []
+    for e in lamps:
+        m = _lamp_modes(hass, e)
+        modes |= m
+        st = hass.states.get(e)
+        if st is not None and m & KELVIN_COLOR_MODES:
+            if isinstance(v := st.attributes.get("min_color_temp_kelvin"), (int, float)):
+                lo.append(int(v))
+            if isinstance(v := st.attributes.get("max_color_temp_kelvin"), (int, float)):
+                hi.append(int(v))
+    supported: set[ColorMode] = set()
+    if modes & RGB_COLOR_MODES:
+        supported.add(ColorMode.HS)
+    if modes & KELVIN_COLOR_MODES:
+        supported.add(ColorMode.COLOR_TEMP)
+    if not supported:
+        supported = {ColorMode.BRIGHTNESS}
+    mode = ColorMode.BRIGHTNESS if supported == {ColorMode.BRIGHTNESS} else None
+    hs = kelvin = None
+    for e in lamps:
+        st = hass.states.get(e)
+        if st is None or st.state != STATE_ON:
+            continue
+        if ColorMode.HS in supported and str(st.attributes.get("color_mode")) in RGB_COLOR_MODES and st.attributes.get("hs_color"):
+            mode, hs = ColorMode.HS, tuple(st.attributes["hs_color"])
+            break
+        if ColorMode.COLOR_TEMP in supported and isinstance(st.attributes.get("color_temp_kelvin"), (int, float)):
+            mode, kelvin = ColorMode.COLOR_TEMP, int(st.attributes["color_temp_kelvin"])
+            break
+    if mode is None:
+        mode = ColorMode.COLOR_TEMP if ColorMode.COLOR_TEMP in supported else next(iter(supported))
+    return {
+        "supported": supported, "mode": mode, "hs": hs, "kelvin": kelvin,
+        "min_kelvin": min(lo) if lo else 2000, "max_kelvin": max(hi) if hi else 6500,
+    }
+
+
+def _colour_request(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """The colour part of a turn_on call on a RoomControl light."""
+    return {k: kwargs[k] for k in (ATTR_HS_COLOR, ATTR_COLOR_TEMP_KELVIN) if k in kwargs}
+
+
+def _unique_id(area_id: str) -> str:
+    return f"{DOMAIN}_{area_id}"
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Create a room light (and device) for every managed room, keep that in
+    sync, and remove the devices of areas RoomControl does not manage."""
+    area_reg = ar.async_get(hass)
+    known: dict[str, RoomControlLight] = {}
+
+    @callback
+    def _sync_rooms(*_: Any) -> None:
+        wanted = managed_areas(hass)
+        new = [RoomControlLight(hass, a) for a in wanted - known.keys()]
+        for entity in new:
+            known[entity._area_id] = entity
+        if new:
+            async_add_entities(new)
+        ent_reg = er.async_get(hass)
+        for area_id in list(known.keys() - wanted):
+            del known[area_id]
+            if entity_id := ent_reg.async_get_entity_id("light", DOMAIN, _unique_id(area_id)):
+                ent_reg.async_remove(entity_id)
+        # Devices of unmanaged areas (also those left from older versions,
+        # which gave every area a device) leave the integration page.
+        # Sub-devices of an older version ("<area>::wekkers" …) go once their
+        # entities are back on the room's device; the General device stays.
+        dev_reg = dr.async_get(hass)
+        for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
+            ids = [i[1] for i in device.identifiers if i[0] == DOMAIN]
+            if not ids or GENERAL_DEVICE in ids:
+                continue
+            parts = [split_identifier(i) for i in ids]
+            area_ids = {a for a, _ in parts}
+            is_sub = any(kind for _, kind in parts)
+            gone = not area_ids & wanted
+            empty = is_sub and not er.async_entries_for_device(ent_reg, device.id)
+            if gone or empty:
+                dev_reg.async_update_device(device.id, remove_config_entry_id=entry.entry_id)
+
+    _sync_rooms()
+    entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_CONFIG_UPDATED, _sync_rooms))
+
+    @callback
+    def _on_area_event(event: Event) -> None:
+        action = event.data.get("action")
+        area_id = event.data.get("area_id")
+        if not area_id:
+            return
+        if action in ("create", "remove"):
+            _sync_rooms()
+        elif action == "update":
+            dev_reg = dr.async_get(hass)
+            device = dev_reg.async_get_device(identifiers={(DOMAIN, area_id)})
+            area = area_reg.async_get_area(area_id)
+            if area and device:
+                dev_reg.async_update_device(device.id, name=area.name)
+
+    entry.async_on_unload(hass.bus.async_listen(ar.EVENT_AREA_REGISTRY_UPDATED, _on_area_event))
+
+    # Lamp groups from the panel: one light entity per group, on the room's device.
+    group_entities: dict[tuple[str, str], LampGroupLight] = {}
+
+    @callback
+    def _sync_groups(*_: Any) -> None:
+        rooms = hass.data.get(DOMAIN, {}).get("rooms", [])
+        wanted = {
+            (room["area_id"], group["id"])
+            for room in rooms
+            if room.get("area_id") in known
+            for group in room.get(CONF_GROUPS, []) or []
+            if group.get("id")
+        }
+        new = [LampGroupLight(hass, a, g) for (a, g) in wanted - group_entities.keys()]
+        ent_reg = er.async_get(hass)
+        for entity in new:
+            group_entities[(entity.area_id, entity.group_id)] = entity
+            _group_entity_id(hass, ent_reg, entity)
+        if new:
+            async_add_entities(new)
+        for key in list(group_entities.keys() - wanted):
+            del group_entities[key]
+            if entity_id := ent_reg.async_get_entity_id("light", DOMAIN, _group_unique_id(*key)):
+                ent_reg.async_remove(entity_id)
+
+    _sync_groups()
+    entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_CONFIG_UPDATED, _sync_groups))
+
+
+def _group_unique_id(area_id: str, group_id: str) -> str:
+    return f"{DOMAIN}_{area_id}_group_{group_id}"
+
+
+def _group_object_id(hass: HomeAssistant, area_id: str, name: str) -> str:
+    """light.roomcontrol_<room>_<bundle>, e.g. roomcontrol_tuin_bundel_1 for
+    "Bundel 1" or "Tuin bundel 1" in the area Tuin (the room only once)."""
+    area = ar.async_get(hass).async_get_area(area_id)
+    room = slugify(area.name if area else area_id)
+    bundle = slugify(name)
+    if bundle != room and not bundle.startswith(f"{room}_"):
+        bundle = f"{room}_{bundle}" if bundle else room
+    return f"{DOMAIN}_{bundle}"
+
+
+@callback
+def _group_entity_id(hass: HomeAssistant, ent_reg: er.EntityRegistry, entity: LampGroupLight) -> None:
+    """Give a bundle light the entity ID light.roomcontrol_<room>_<bundle>.
+
+    New bundles get it at registration. Bundles registered before, with the ID
+    Home Assistant made itself (<device>_<name>, e.g. light.tuin_tuin_bundel_1),
+    are renamed once; an ID the user chose is left alone."""
+    name = entity.group_id
+    for index, group in enumerate((stored_room(hass, entity.area_id) or {}).get(CONF_GROUPS, []) or []):
+        if group.get("id") == entity.group_id:
+            name = (group.get("name") or "").strip() or f"Groep {index + 1}"
+            break
+    object_id = _group_object_id(hass, entity.area_id, name)
+    wanted = f"light.{object_id}"
+    current = ent_reg.async_get_entity_id("light", DOMAIN, entity.unique_id)
+    if current is None:
+        entity.entity_id = wanted  # suggested ID for the registry
+        return
+    if current == wanted or current.startswith(f"light.{DOMAIN}_"):
+        return
+    entry = ent_reg.async_get(current)
+    device = dr.async_get(hass).async_get(entry.device_id) if entry and entry.device_id else None
+    device_name = (device.name_by_user or device.name) if device else ""
+    auto = slugify(f"{device_name} {entry.original_name or name}" if entry else "")
+    current_obj = current.split(".", 1)[1]
+    made_by_ha = bool(auto) and (current_obj == auto or (
+        current_obj.startswith(f"{auto}_") and current_obj[len(auto) + 1:].isdigit()
+    ))
+    if not made_by_ha or ent_reg.async_is_registered(wanted) or hass.states.get(wanted) is not None:
+        return
+    _LOGGER.info("Renaming %s to %s", current, wanted)
+    ent_reg.async_update_entity(current, new_entity_id=wanted)
+
+
+class LampGroupLight(LightEntity):
+    """A lamp group from the panel, as a light on the room's device.
+
+    Switching and dimming go through the room light, so fixed levels, the
+    daylight colour and the room's rules (schedule, presence, manual control)
+    apply exactly as for the room itself.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_color_mode = ColorMode.BRIGHTNESS
+    _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+    _attr_icon = "mdi:lightbulb-group-outline"
+
+    def __init__(self, hass: HomeAssistant, area_id: str, group_id: str) -> None:
+        self.area_id = area_id
+        self.group_id = group_id
+        self._attr_unique_id = _group_unique_id(area_id, group_id)
+        self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, area_id)})
+        self._lamps: list[str] = []
+        self._unsub: CALLBACK_TYPE | None = None
+
+    def _group(self) -> tuple[int, dict[str, Any]] | None:
+        room = stored_room(self.hass, self.area_id) or {}
+        for index, group in enumerate(room.get(CONF_GROUPS, []) or []):
+            if group.get("id") == self.group_id:
+                return index, group
+        return None
+
+    @property
+    def name(self) -> str:
+        found = self._group()
+        if not found:
+            return self.group_id
+        index, group = found
+        # Same name as in the panel; an empty name shows as "Groep n" there too.
+        return (group.get("name") or "").strip() or f"Groep {index + 1}"
+
+    @callback
+    def _refresh(self, *_: Any) -> None:
+        found = self._group()
+        room_lamps = room_lights(self.hass, self.area_id)
+        lamps = [e for e in (found[1].get("lights", []) if found else []) if e in room_lamps]
+        if lamps != self._lamps:
+            if self._unsub:
+                self._unsub()
+            self._lamps = lamps
+            self._unsub = async_track_state_change_event(self.hass, lamps, self._refresh) if lamps else None
+        states = [self.hass.states.get(e) for e in self._lamps]
+        on = [st for st in states if st is not None and st.state == STATE_ON]
+        brightness = [
+            st.attributes[ATTR_BRIGHTNESS] for st in on
+            if isinstance(st.attributes.get(ATTR_BRIGHTNESS), (int, float))
+        ]
+        self._attr_available = any(st is not None for st in states)
+        self._attr_is_on = bool(on)
+        self._attr_brightness = round(sum(brightness) / len(brightness)) if brightness else None
+        colour = _colour_state(self.hass, self._lamps)
+        self._attr_supported_color_modes = colour["supported"]
+        self._attr_color_mode = colour["mode"]
+        self._attr_hs_color = colour["hs"]
+        self._attr_color_temp_kelvin = colour["kelvin"]
+        self._attr_min_color_temp_kelvin = colour["min_kelvin"]
+        self._attr_max_color_temp_kelvin = colour["max_kelvin"]
+        self._attr_extra_state_attributes = {
+            ATTR_ENTITY_ID: list(self._lamps),
+            "roomcontrol_area": self.area_id,
+            "roomcontrol_group": self.group_id,
+        }
+        if self.entity_id:
+            self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        self._refresh()
+        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._refresh))
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsub:
+            self._unsub()
+            self._unsub = None
+
+    def _room_light(self) -> RoomControlLight | None:
+        return self.hass.data.get(DOMAIN, {}).get("entities", {}).get(self.area_id)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        room = self._room_light()
+        if room is None:
+            return
+        lamps = room.lamps_allowed(self._lamps)
+        if self._lamps and not lamps:
+            raise HomeAssistantError(f"{self.name}: lights are blocked (outside schedule or nobody home)")
+        data = {ATTR_BRIGHTNESS: kwargs[ATTR_BRIGHTNESS]} if ATTR_BRIGHTNESS in kwargs else {}
+        await room.async_call_lamps("turn_on", lamps, **data, **_colour_request(kwargs))
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        room = self._room_light()
+        if room is not None:
+            await room.async_call_lamps("turn_off", self._lamps)
+
+
+class RoomControlLight(LightEntity):
+    """Controls all lights of one room (area) as a single entity."""
+
+    @property
+    def name(self) -> str | None:
+        """The name given to the room's lamp group, or None (= the room's name)."""
+        if self.hass is None:
+            return None
+        return (self._room.get(CONF_LIGHTS_NAME) or "").strip() or None
+
+    _attr_has_entity_name = True
+    _attr_name = None  # use the device (area) name
+    _attr_should_poll = False
+    _attr_color_mode = ColorMode.BRIGHTNESS
+    _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+    _attr_icon = "mdi:lightbulb-group"
+
+    def __init__(self, hass: HomeAssistant, area_id: str) -> None:
+        self._area_id = area_id
+        area = ar.async_get(hass).async_get_area(area_id)
+        name = area.name if area else area_id
+
+        self._attr_unique_id = _unique_id(area_id)
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, area_id)},
+            name=name,
+            manufacturer="RoomControl",
+            sw_version=VERSION,
+            suggested_area=name,
+        )
+        self._members: list[str] = []
+        # key -> (tracked entity ids, unsubscribe)
+        self._tracks: dict[str, tuple[tuple[str, ...], CALLBACK_TYPE]] = {}
+        self._allowed: bool | None = None
+        self._in_schedule: bool | None = None
+        # Curtains that follow schedule/dusk: last wanted state (True = open)
+        self._covers_open: bool | None = None
+        self._covers_init = False
+        # Lux control: periodic check and when we last adjusted
+        self._cancel_lux_interval: CALLBACK_TYPE | None = None
+        # Schedule on + sun down: check every minute that the bundles are on.
+        self._cancel_evening_check: CALLBACK_TYPE | None = None
+        self._evening_last_fix: datetime | None = None
+        self._lux_last_adjust: datetime | None = None
+        # Fan: activity start (UTC), applied speed, step timers, end timer
+        self._activity_since: datetime | None = None
+        self._fan_pct: int | None = None
+        self._fan_step_unsubs: list[CALLBACK_TYPE] = []
+        self._cancel_fan_end: CALLBACK_TYPE | None = None
+        self._fan_off_at: datetime | None = None
+        # Fan by temperature: speed wanted now (None = temperature not in range)
+        self._fan_temp_pct: int | None = None
+        # Last non-transitional alarm state, so disarmed → arming → armed_home counts.
+        self._alarm_settled: str | None = None
+        # When the alarm last switched the room's lights off (for the panel)
+        self._alarm_last_off: datetime | None = None
+        # 1% mode switched on by the alarm (so leaving armed home restores it)
+        self._dim_by_alarm = False
+        # Lamps of bundles with own times whose slot was running (None: not checked yet)
+        self._own_prev: set[str] | None = None
+        # Lamps in Dim because their time slot's Dim time has come
+        self._dim_slots: set[str] = set()
+        self._dim_option_seen: tuple[bool, ...] | None = None
+        # (schedule on, sun down, someone home) at the last evaluation
+        self._conditions: tuple[bool, bool, bool] | None = None
+        # Debug log: why bundles did or did not go on/off (newest last).
+        self._debug: deque[dict[str, Any]] = deque(maxlen=80)
+        # "Later thuis": an off was held back; do it once the person is home.
+        self._late_pending = False
+        # "Later thuis": the bundles were switched on for it already.
+        self._late_on_done = False
+        self._on_by_motion = False
+        # Lamps whose bundle reacted to motion at the last config (None: not read yet)
+        self._prev_motion_lamps: set[str] | None = None
+        self._cancel_motion_off: CALLBACK_TYPE | None = None
+        # End of the running grace period (no motion, lights still on), UTC
+        self._grace_until: datetime | None = None
+        # Why the last motion did not switch the lights on (None = it did)
+        self._motion_note: str | None = None
+        # Manual control: RoomControl does nothing automatic until this time (UTC)
+        self._manual_until: datetime | None = None
+        self._cancel_manual: CALLBACK_TYPE | None = None
+        self._cancel_daylight: CALLBACK_TYPE | None = None
+        self._last_kelvins: dict[str, int] = {}
+        # 1% dim: brightness per lamp before dimming (None = was off)
+        # 1% mode, per lamp. Sources: the room button / alarm (all lamps) and
+        # the active schedule's data (dim / dim_<group>). Remembered brightness
+        # per dimmed lamp, restored when no source dims it any more.
+        self._dim_room = False
+        self._dim_sched: set[str] = set()
+        self._dim_saved: dict[str, int] = {}
+        # Smart options. Last no-motion off (adaptive grace period).
+        self._idle_off_at: datetime | None = None
+        # Re-check when the "last motion was here" hold ends.
+        self._cancel_hold: CALLBACK_TYPE | None = None
+        # Lux model: lux per brightness step (0-255), and what we measured at the last adjustment.
+        self._lux_gain: float | None = None
+        self._lux_probe: tuple[float, float, tuple[str, ...]] | None = None
+        # Brightness set by hand, waiting to settle before it is learned.
+        self._bright_pending: dict[str, CALLBACK_TYPE] = {}
+        # When the room's lamps went on (sessions for replay) and which lamps were on.
+        self._session_start: datetime | None = None
+        self._session_lamps: set[str] = set()
+        self._session_skip = False
+        # Lamps the replay switched on.
+        self._replay_on: set[str] = set()
+        self._cancel_smart_tick: CALLBACK_TYPE | None = None
+        self._last_motion_at: datetime = dt_util.utcnow()
+        self._anomaly_sent: dict[str, datetime] = {}
+        self._long_on_sent = False
+        # Lamps whose brightness a person changed: RoomControl leaves their
+        # brightness alone (lux control, schemer) until they go off.
+        self._hand_set: set[str] = set()
+
+    # ── config & subscriptions ─────────────────────────────────────────────
+
+    @property
+    def _room(self) -> dict[str, Any]:
+        return stored_room(self.hass, self._area_id) or {}
+
+    @callback
+    def _track(
+        self, key: str, entity_ids: list[str], handler: Callable[[Event], None]
+    ) -> bool:
+        """Track state changes of `entity_ids` under `key`; True if it changed."""
+        ids = tuple(e for e in entity_ids if e)
+        current = self._tracks.get(key)
+        if current and current[0] == ids:
+            return False
+        if current:
+            current[1]()
+            del self._tracks[key]
+        if ids:
+            self._tracks[key] = (
+                ids,
+                async_track_state_change_event(self.hass, list(ids), handler),
+            )
+        return True
+
+    @callback
+    def _subscribe(self) -> None:
+        """(Re)subscribe after a config or area change, then re-evaluate."""
+        room = self._room
+        self._members = room_lights(self.hass, self._area_id)
+        self._track("members", self._members, self._on_member_change)
+
+        alarm = self._alarm_entity() if self._members else None
+        if self._track("alarm", [alarm] if alarm else [], self._on_alarm_change):
+            self._alarm_settled = self._settled(self.hass.states.get(alarm)) if alarm else None
+        # Dim at armed home: apply at startup and when the option is switched.
+        dim_wanted = (bool(alarm), room.get(CONF_ARMED_HOME_MODE) == ARMED_HOME_NO_MOTION)
+        if dim_wanted != self._dim_option_seen:
+            self._dim_option_seen = dim_wanted
+            self._reconcile_alarm_dim()
+
+        self._track(
+            "schedule",
+            [
+                room.get(CONF_SCHEDULE_SELECTOR, ""),
+                *room.get(CONF_SCHEDULES, []),
+                *room_persons(self.hass, room),
+            ],
+            self._on_schedule_change,
+        )
+        self._track("motion", self._motion_sensors(), self._on_motion_change)
+        self._track("media", self._media_players() if room.get(CONF_MEDIA_HOLD) else [], self._on_media_change)
+        self._setup_smart_tick()
+        self._track("door", [s for s in room.get(CONF_DOOR_SENSORS, []) or [] if s], self._on_door_change)
+        self._track("locks", [lock["entity_id"] for lock in room_locks(room)], self._on_lock_change)
+        self._track("sun", [self._sun_entity()] if self._members or self._following_covers() else [], self._on_sun_change)
+        self._setup_daylight()
+        self._setup_lux_control()
+        self._setup_evening_check()
+        self._setup_fan_temp()
+        if self._activity_since is not None and (
+            not self._room.get(CONF_FAN_MOTION, True) or not self._fans() or not self._fan_steps()
+        ):
+            self._fan_stop_activity()  # activity control switched off in the panel
+        self._recompute()
+        # A config change (or startup) only remembers what the curtains should
+        # be; they move at the next real change of schedule or daylight.
+        self._covers_init = False
+        self._evaluate_covers()
+        self._update_schedule_dim()
+        self._evaluate_schedule()
+
+    # ── follow daylight ────────────────────────────────────────────────────
+
+    # ── bundles: per-lamp settings ─────────────────────────────────────────
+    #
+    # Lamps are configured in bundles (the room's lamp groups; one bundle per
+    # lamp). A bundle may set: brightness_mode ("default"/"fixed") + brightness,
+    # follow_daylight, daylight_prefer_rgb, daylight_min/max_kelvin, on_motion,
+    # on_door, on_dusk, follow_schedule, dim, lux_control. A setting a bundle
+    # does not have falls back to the room's own setting (older rooms).
+
+    def _bundle(self, lamp: str) -> dict[str, Any] | None:
+        for group in self._room.get(CONF_GROUPS, []) or []:
+            if lamp in (group.get("lights") or []):
+                return group
+        return None
+
+    def _bopt(self, lamp: str, key: str, fallback: Any) -> Any:
+        bundle = self._bundle(lamp)
+        return bundle[key] if bundle is not None and key in bundle else fallback
+
+    def _lamps_where(self, key: str, fallback: Any) -> list[str]:
+        """Room lamps whose bundle (or the room) has `key` switched on."""
+        return [e for e in self._members if self._bopt(e, key, fallback)]
+
+    def _motion_lamps(self) -> list[str]:
+        """Lamps that go on with motion (bundle "on_motion", default yes)."""
+        return self._lamps_where("on_motion", True)
+
+    def _schedule_lamps(self) -> list[str]:
+        """Lamps that follow the room's schedule (bundle "follow_schedule",
+        default yes) — not those of bundles with their own times."""
+        own = set(self._own_lamps())
+        return [e for e in self._lamps_where("follow_schedule", True) if e not in own]
+
+    # ── own times per bundle ───────────────────────────────────────────────
+    # A bundle with "own_times" has its own time slots instead of the room's
+    # schedule: [{"days": [0..6] (Monday = 0), "start": {"type": "time",
+    # "time": "HH:MM"} | {"type": "dusk"} | {"type": "dark"}, "end": {"type":
+    # "time", "time": "HH:MM"} | {"type": "sunrise"}, "dim_at": "HH:MM" (optional:
+    # Dim from then until the end)}]. A slot that ends
+    # before it starts (or at sunrise) runs past midnight into the next day.
+
+    def _own_lamps(self) -> list[str]:
+        return [e for e in self._members if self._bopt(e, "own_times", False)]
+
+    @staticmethod
+    def _hm(value: Any) -> int | None:
+        return hm_minutes(value)
+
+    def _slot_active(self, slot: dict[str, Any], now: datetime, phase: str) -> bool:
+        return self._slot_part(slot, now, phase) is not None
+
+    def _slot_part(self, slot: dict[str, Any], now: datetime, phase: str) -> str | None:
+        """"today" (the slot started today), "carry" (yesterday's slot running
+        past midnight) or None (not running)."""
+        return slot_part(slot, now, phase, self._sun_down())
+
+    def _slot_dim_now(self, slot: dict[str, Any], now: datetime, phase: str) -> bool:
+        """The slot runs and its Dim time ("dim_at") has come: Dim until it ends."""
+        dim = self._hm(slot.get("dim_at"))
+        part = self._slot_part(slot, now, phase) if dim is not None else None
+        if part is None:
+            return False
+        start = slot.get("start") or {}
+        s_ref = (self._hm(start.get("time")) or 0) if start.get("type", "time") == "time" else 12 * 60
+        t = now.hour * 60 + now.minute
+        if part == "today":
+            return dim >= s_ref and t >= dim  # a Dim time before the start is after midnight
+        return dim >= s_ref or t >= dim
+
+    def _slot_dim_lamps(self) -> set[str]:
+        """Lamps whose running time slot is past its Dim time."""
+        now, phase = dt_util.as_local(dt_util.now()), self._phase()
+        return {
+            e for e in self._own_lamps()
+            if any(self._slot_dim_now(s, now, phase) for s in self._mode_slots(e))
+        }
+
+    @callback
+    def _update_slot_dim(self) -> None:
+        """Lamps reach / leave their slot's Dim time: to Dim, or back."""
+        if self._manual:
+            return
+        wanted = self._slot_dim_lamps()
+        if wanted == self._dim_slots:
+            return
+        before = self._dimmed_lamps()
+        self._dim_slots = wanted
+        after = self._dimmed_lamps()
+        self.hass.async_create_task(self._async_apply_dim(before, after))
+
+    def _dim_pct(self, lamp: str) -> int:
+        """Dim level of a lamp (Dim button, alarm, schedule): the general
+        setting (default 1%)."""
+        value = self._settings().get(SETTING_DIM_LEVEL, DIM_LEVEL_DEFAULT)
+        return int(min(100, max(1, value))) if isinstance(value, (int, float)) and value > 0 else DIM_LEVEL_DEFAULT
+
+    def _own_slot_now(self, lamp: str) -> dict[str, Any] | None:
+        """The slot of this lamp's bundle that is running now (None: none)."""
+        if not self._bopt(lamp, "own_times", False):
+            return None
+        now, phase = dt_util.as_local(dt_util.now()), self._phase()
+        for slot in self._mode_slots(lamp):
+            if self._slot_active(slot, now, phase):
+                return slot
+        return None
+
+    def _mode_slots(self, lamp: str) -> list[dict[str, Any]]:
+        """The slots that count now: normal ones; during vacation (the
+        "Vakantie" switch) the bundle's vacation slots — or, when it has none,
+        its normal slots."""
+        slots = [s for s in self._bopt(lamp, "slots", []) or [] if isinstance(s, dict)]
+        is_vacation = lambda s: s.get("holiday") in ("vacation", "only")  # noqa: E731 ("only": older)
+        normal = [s for s in slots if not is_vacation(s)]
+        if self.hass.data.get(DOMAIN, {}).get("vacation"):
+            return [s for s in slots if is_vacation(s)] or normal
+        return normal
+
+    def _own_active(self) -> list[str]:
+        """Lamps of bundles with own times whose slot is running now."""
+        return [e for e in self._own_lamps() if self._own_slot_now(e) is not None]
+
+    def _dusk_bundle(self, lamp: str) -> bool:
+        """On from schemer: the room-schedule setting, or a running own slot
+        that starts at schemer (both get the schemer level / lux control)."""
+        if self._bopt(lamp, "on_from", "schedule") == "dusk" and not self._bopt(lamp, "own_times", False):
+            return True
+        slot = self._own_slot_now(lamp)
+        return slot is not None and (slot.get("start") or {}).get("type") == "dusk"
+
+    @callback
+    def _evaluate_own_times(self) -> bool:
+        """Slots start or end: their lamps go on (at their level) or off
+        (unless someone is moving and motion may keep them on)."""
+        active = set(self._own_active())
+        # First check (startup / config loaded): like the room's schedule, the
+        # lamps take the state their slots ask for right away.
+        previous, self._own_prev = (self._own_prev or set()), active
+        if self._manual or self._alarm_mode() == "home":
+            return False
+        if not presence_allows(self.hass, self._room):
+            return False
+        acted = False
+        blocked = self._alarm_blocked()
+        lux = set(self._lux_lamps_now())
+        started = [e for e in active - previous if e not in blocked and e not in lux]
+        if started:
+            self._on_by_motion = False
+            self._auto_on("own times", lamps=started, levels=self._phase_levels(started))
+            acted = True
+        is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
+        ended = [e for e in previous - active if is_on(e)]
+        if ended:
+            if self._any_motion() and (self._sun_down() or self._is_dark()):
+                self._on_by_motion = True
+            else:
+                self._auto_off("own times ended", lamps=ended)
+                acted = True
+        if active & lux:
+            self._regulate_lux(force=True)
+        return acted
+
+    def _dusk_lamps(self) -> list[str]:
+        """No longer used: during the schedule, sun down means the lamps burn at
+        their level (see _evening_lamps); outside it only motion switches on."""
+        return []
+
+    def _room_allows(self) -> bool:
+        """Someone linked is home, and the schedule allows light or it is dark
+        for lamps that go on at dusk."""
+        room = self._room
+        dusk = bool(self._dusk_lamps()) and self._sun_down()
+        return presence_allows(self.hass, room) and (schedule_allows(self.hass, room) or dusk)
+
+    def lamps_allowed(self, lamps: list[str]) -> list[str]:
+        """Of `lamps`, those that may be switched on now (by hand or automatically).
+
+        Lamps that do not follow the schedule may always go on (if someone is
+        home); during manual control everything may.
+        """
+        if self._manual:
+            return list(lamps)
+        if not presence_allows(self.hass, self._room):
+            return []
+        sched = set(self._schedule_lamps())
+        ok = self._room_allows()
+        return [e for e in lamps if e not in sched or ok]
+
+    def _follows_daylight(self) -> bool:
+        return bool(self._daylight_lamps())
+
+    def _daylight_lamps(self) -> list[str]:
+        """Lamps that follow the sun (bundle setting, else the room's choice)."""
+        room = self._room
+        chosen = room.get(CONF_DAYLIGHT_LIGHTS)
+        room_on = bool(room.get(CONF_FOLLOW_DAYLIGHT))
+        return [
+            e for e in self._members
+            if self._bopt(e, "follow_daylight", room_on and (chosen is None or e in chosen))
+        ]
+
+    def _kelvin_for(self, lamp: str) -> int | None:
+        if self._manual or lamp not in self._daylight_lamps():
+            return None
+        room = self._room
+        lo = self._bopt(lamp, "daylight_min_kelvin", room.get(CONF_DAYLIGHT_MIN_KELVIN)) or DAYLIGHT_MIN_KELVIN
+        hi = self._bopt(lamp, "daylight_max_kelvin", room.get(CONF_DAYLIGHT_MAX_KELVIN)) or DAYLIGHT_MAX_KELVIN
+        lo, hi = int(min(lo, hi)), int(max(lo, hi))
+        return daylight_kelvin(self.hass, self._sun_entity(), lo, hi)
+
+    def _kelvin(self) -> int | None:
+        """The room's daylight colour (first lamp that follows the sun), for display."""
+        lamps = self._daylight_lamps()
+        return self._kelvin_for(lamps[0]) if lamps else None
+
+    def _colour_data(self, entity_id: str, kelvin: int) -> dict[str, Any]:
+        """Colour for one lamp (after Adaptive Lighting).
+
+        Colour lamps with "prefer RGB" (or without colour temperature) get the
+        sun's colour as rgb_color; other lamps get color_temp_kelvin, kept
+        within the lamp's own supported range.
+        """
+        state = self.hass.states.get(entity_id)
+        modes = {str(m) for m in (state.attributes.get("supported_color_modes") or [])} if state else set()
+        rgb_capable = bool(modes & RGB_COLOR_MODES)
+        ct_capable = "color_temp" in modes
+        prefer_rgb = self._bopt(entity_id, "daylight_prefer_rgb", self._room.get(CONF_DAYLIGHT_PREFER_RGB))
+        if rgb_capable and (prefer_rgb or not ct_capable):
+            r, g, b = color_temperature_to_rgb(kelvin)
+            return {"rgb_color": (int(round(r)), int(round(g)), int(round(b)))}
+        lo = state.attributes.get("min_color_temp_kelvin") if state else None
+        hi = state.attributes.get("max_color_temp_kelvin") if state else None
+        if isinstance(lo, (int, float)):
+            kelvin = max(kelvin, int(lo))
+        if isinstance(hi, (int, float)):
+            kelvin = min(kelvin, int(hi))
+        return {"color_temp_kelvin": kelvin}
+
+    def _daylight_members(self) -> list[str]:
+        """Lamps that follow the sun and can take a colour temperature."""
+        return [e for e in self._daylight_lamps() if supports_kelvin(self.hass, e)]
+
+    @callback
+    def _setup_daylight(self) -> None:
+        if self._follows_daylight() and self._cancel_daylight is None:
+            self._cancel_daylight = async_track_time_interval(
+                self.hass, self._daylight_tick, timedelta(seconds=DAYLIGHT_UPDATE_INTERVAL)
+            )
+        elif not self._follows_daylight() and self._cancel_daylight is not None:
+            self._cancel_daylight()
+            self._cancel_daylight = None
+            self._last_kelvins = {}
+
+    @callback
+    def _daylight_tick(self, _now: Any = None) -> None:
+        """Shift lights that are on towards the current daylight colour."""
+        wanted = {
+            e: k for e in self._daylight_members()
+            if (s := self.hass.states.get(e)) is not None and s.state == STATE_ON
+            and (k := self._kelvin_for(e)) is not None
+        }
+        changed = {e: k for e, k in wanted.items() if self._last_kelvins.get(e) != k}
+        self._last_kelvins = {e: k for e, k in wanted.items()}
+        if changed:
+            self.hass.async_create_task(self._async_set_kelvins(changed))
+
+    def _fixed_levels(self) -> dict[str, int]:
+        """Lamps at a fixed level: {entity_id: percent 1-100} (bundle, else room pin)."""
+        room_levels = self._room.get(CONF_FIXED_LEVELS) or {}
+        out: dict[str, int] = {}
+        for e in self._members:
+            bundle = self._bundle(e)
+            if bundle is not None and "brightness_mode" in bundle:
+                value = bundle.get("brightness") if bundle.get("brightness_mode") == "fixed" else None
+            else:
+                value = room_levels.get(e)
+            if isinstance(value, (int, float)) and value > 0:
+                out[e] = int(min(100, max(1, value)))
+        return out
+
+    def _default_pct_for(self, lamp: str) -> int | None:
+        """Standard brightness for a lamp: learned for this hour (never above
+        the bundle's maximum), else the bundle's level."""
+        top = self._auto_max_pct(lamp)
+        if self._room.get(CONF_LEARN_BRIGHTNESS) and (learn := self._learn()) is not None:
+            learned = learn.learned_pct(self._area_id, lamp, dt_util.now().hour)
+            if learned is not None:
+                return min(learned, top) if top else learned
+        return top
+
+    def _auto_max_pct(self, lamp: str) -> int | None:
+        """The bundle's level (panel slider): what RoomControl switches it on
+        at, and the most it makes it by itself (motion, times, lux control).
+        A person may set it brighter by hand. None: the lamp's own level."""
+        bundle = self._bundle(lamp)
+        if bundle is not None and "brightness_mode" in bundle:
+            value = bundle.get("brightness") if bundle.get("brightness_mode") == "default" else None
+        else:
+            value = self._room.get(CONF_DEFAULT_BRIGHTNESS)
+        if not isinstance(value, (int, float)) or value <= 0:
+            return None
+        return int(min(100, max(1, value)))
+
+    async def _async_adjust(self, entity_id: str, kelvin: int | None, pct: int | None) -> None:
+        data: dict[str, Any] = {ATTR_ENTITY_ID: [entity_id]}
+        if kelvin is not None:
+            data.update(self._colour_data(entity_id, kelvin))
+        if pct is not None:
+            data["brightness_pct"] = pct
+        await rc_call(self.hass,"light", "turn_on", data, blocking=True)
+
+    async def _async_set_kelvins(self, kelvins: dict[str, int]) -> None:
+        # Lamps that get the same colour data share one call.
+        groups: dict[tuple[tuple[str, Any], ...], list[str]] = {}
+        for entity_id, kelvin in kelvins.items():
+            groups.setdefault(tuple(sorted(self._colour_data(entity_id, kelvin).items())), []).append(entity_id)
+        for colour, ids in groups.items():
+            await rc_call(self.hass,
+                "light", "turn_on", {ATTR_ENTITY_ID: ids, **dict(colour), "transition": 2}, blocking=True
+            )
+
+    @callback
+    def _recompute(self) -> None:
+        states = [self.hass.states.get(e) for e in self._members]
+        on = [s for s in states if s is not None and s.state == STATE_ON]
+        self._attr_available = any(s is not None for s in states)
+        self._attr_is_on = bool(on)
+        brightnesses = [
+            s.attributes[ATTR_BRIGHTNESS]
+            for s in on
+            if isinstance(s.attributes.get(ATTR_BRIGHTNESS), (int, float))
+        ]
+        self._attr_brightness = (
+            round(sum(brightnesses) / len(brightnesses)) if brightnesses else None
+        )
+        colour = _colour_state(self.hass, self._members)
+        self._attr_supported_color_modes = colour["supported"]
+        self._attr_color_mode = colour["mode"]
+        self._attr_hs_color = colour["hs"]
+        self._attr_color_temp_kelvin = colour["kelvin"]
+        self._attr_min_color_temp_kelvin = colour["min_kelvin"]
+        self._attr_max_color_temp_kelvin = colour["max_kelvin"]
+        self._attr_extra_state_attributes = {
+            ATTR_ENTITY_ID: list(self._members),
+            "active_schedule": active_schedule(self.hass, self._room),
+            "schedule_allows": schedule_allows(self.hass, self._room),
+            "presence_allows": presence_allows(self.hass, self._room),
+            "daylight_kelvin": self._kelvin(),
+            "dimmed": self._dim_room,
+            "dimmed_lamps": sorted(self._dimmed_lamps()),
+            "roomcontrol_area": self._area_id,
+            "alarm_last_off": self._alarm_last_off.isoformat() if self._alarm_last_off else None,
+            "armed_home_motion_only": self._armed_home_motion_only(),
+            "armed_home_no_motion": self._armed_home_no_motion(),
+            **self._vacuum_attrs(),
+            "activity_since": self._activity_since.isoformat() if self._activity_since else None,
+            "fan_percentage": self._fan_pct,
+            "fan_off_at": self._fan_off_at.isoformat() if self._fan_off_at else None,
+            "fan_temp_active": self._fan_temp_pct is not None,
+            "fan_nobody_home": bool(self._fans()) and not anyone_home(self.hass),
+            "fixed_levels": self._fixed_levels(),
+            "motion_sensors": self._motion_sensors(),
+            "motion_note": self._motion_note,
+            "manual_until": self._manual_until.isoformat() if self._manual_until else None,
+            "manual_duration": self._manual_duration(),
+            "motion_off_delay": self._motion_off_delay(),
+            "grace_until": self._grace_until.isoformat() if self._grace_until else None,
+            "linked_rooms": [a for a in linked_group(self.hass, self._area_id) if a != self._area_id],
+            "smart": self._smart_attrs(),
+            "hand_set": sorted(self._hand_set),
+            **self._clock_attrs(),
+            "smoke": manager.status() if (manager := self.hass.data.get(DOMAIN, {}).get("smoke")) else None,
+        }
+
+    @callback
+    def _on_member_change(self, event: Event) -> None:
+        # A lamp switched on by anyone gets the daylight colour right away.
+        old: State | None = event.data.get("old_state")
+        new: State | None = event.data.get("new_state")
+        if smoke_active(self.hass):
+            # Smoke: lamps stay as they are (full on), no Dim, level or colour.
+            self._recompute()
+            self.async_write_ha_state()
+            return
+        if (
+            new is not None and new.state == STATE_ON
+            and isinstance(b := new.attributes.get(ATTR_BRIGHTNESS), (int, float)) and b <= ZERO_BRIGHTNESS
+        ):
+            # On at 0% (dimmed all the way down, by anyone): switch it off.
+            self._dbg("off", "zero_pct", [new.entity_id])
+            self.hass.async_create_task(
+                rc_call(self.hass, "light", "turn_off", {ATTR_ENTITY_ID: [new.entity_id]}, blocking=True)
+            )
+            return
+        # A lamp switched on by anyone gets its fixed level and daylight colour.
+        if new is not None and new.state == STATE_ON and (old is None or old.state != STATE_ON) and self._lamp_dimmed(new.entity_id):
+            # 1% mode: a lamp switched on (by anyone) burns at 1%. Remember the
+            # brightness it came on with, unless we switched it on ourselves.
+            brightness = new.attributes.get(ATTR_BRIGHTNESS)
+            if not isinstance(brightness, (int, float)) or brightness / 255 * 100 > 1.5:
+                if new.entity_id not in self._dim_saved:
+                    self._dim_remember(new.entity_id, brightness if isinstance(brightness, (int, float)) else 255)
+                kelvin = self._kelvin_for(new.entity_id) if new.entity_id in self._daylight_members() else None
+                self.hass.async_create_task(self._async_adjust(new.entity_id, kelvin, 1))
+        elif new is not None and new.state == STATE_ON and (old is None or old.state != STATE_ON):
+            kelvin = self._kelvin_for(new.entity_id) if new.entity_id in self._daylight_members() else None
+            if kelvin is not None:
+                wanted = self._colour_data(new.entity_id, kelvin)
+                if all(
+                    tuple(new.attributes.get(k)) == tuple(v) if isinstance(v, tuple) else new.attributes.get(k) == v
+                    for k, v in wanted.items()
+                    if new.attributes.get(k) is not None
+                ) and any(new.attributes.get(k) is not None for k in wanted):
+                    kelvin = None  # already in the daylight colour
+            if not self._recently_commanded(new.entity_id):
+                self._dbg("info", "external_on", [new.entity_id])
+            pct = self._fixed_levels().get(new.entity_id)
+            if pct is None and not self._recently_commanded(new.entity_id):
+                # Switched on by someone else (wall switch, app, automation): the
+                # bundle's standard level, like RoomControl would have used.
+                pct = self._default_pct_for(new.entity_id)
+            brightness = new.attributes.get(ATTR_BRIGHTNESS)
+            if pct is not None and isinstance(brightness, (int, float)) and abs(brightness / 255 * 100 - pct) <= 1.5:
+                pct = None  # already at its level
+            if kelvin is not None or pct is not None:
+                self.hass.async_create_task(self._async_adjust(new.entity_id, kelvin, pct))
+        if (
+            new is not None and new.state != STATE_ON and old is not None and old.state == STATE_ON
+            and new.entity_id in self._evening_lamps() and self._keep_evening_on("schedule, sun down: back on")
+        ):
+            pass  # schedule on + sun down: this bundle stays on
+        if new is not None and new.state != STATE_ON:
+            self._hand_set.discard(new.entity_id)  # off: RoomControl may set it again next time
+        if (
+            new is not None and old is not None and new.state == STATE_ON and old.state == STATE_ON
+            and isinstance(b := new.attributes.get(ATTR_BRIGHTNESS), (int, float))
+            and b != old.attributes.get(ATTR_BRIGHTNESS)
+        ):
+            if not self._recently_commanded(new.entity_id, 10) and not self._lamp_dimmed(new.entity_id):
+                if new.entity_id not in self._hand_set:
+                    self._dbg("info", "brightness_by_hand", [new.entity_id], pct=round(b / 255 * 100))
+                self._hand_set.add(new.entity_id)
+            self._maybe_learn_brightness(new.entity_id)
+        if not any(
+            (s := self.hass.states.get(e)) is not None and s.state == STATE_ON
+            for e in self._members
+        ):
+            self._on_by_motion = False  # turned off (by anyone): motion timer no longer ours
+        self._track_session()
+        self._recompute()
+        self._check_idle()
+        self.async_write_ha_state()
+
+    def _recently_commanded(self, entity_id: str, seconds: float = 5) -> bool:
+        """RoomControl itself switched this lamp on a moment ago (it already sent
+        the right brightness and colour)."""
+        wanted = self.hass.data.get(DOMAIN, {}).get("wanted", {}).get(entity_id) or {}
+        at = wanted.get("at")
+        return bool(at) and (dt_util.utcnow() - at).total_seconds() < seconds
+
+    @callback
+    def _on_config_updated(self) -> None:
+        self._subscribe()
+        self._apply_motion_config_change()
+        self._check_idle()
+        self.async_write_ha_state()
+
+    @callback
+    def _apply_motion_config_change(self) -> None:
+        """A bundle's "on_motion" was switched in the panel:
+        - switched off: its lamps that are on go off (unless the schedule or
+          lux control keeps them on now — that would only switch them on again);
+        - switched on: if there is motion now, its lamps go on, as motion would."""
+        now = set(self._motion_lamps())
+        prev, self._prev_motion_lamps = self._prev_motion_lamps, now
+        if prev is None:
+            return
+        members = set(self._members)
+        is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
+
+        removed = (prev - now) & members
+        if removed:
+            kept = set(self._evening_lamps()) | set(self._lux_lamps_now())
+            off = [e for e in self._members if e in removed and e not in kept and is_on(e)]
+            if off:
+                by_motion = self._on_by_motion
+                self._auto_off("motion_removed", lamps=off)
+                # The other motion bundles keep their grace period.
+                self._on_by_motion = by_motion and any(is_on(e) for e in now & members)
+
+        added = (now - prev) & members
+        if added and self._any_motion():
+            on = [e for e in self._members if e in added and self._motion_ok(e) and not is_on(e)]
+            if on:
+                self._on_by_motion = True
+                self._auto_on("motion_added", by_motion=True, lamps=on)
+
+    # ── rules ──────────────────────────────────────────────────────────────
+
+    def _is_dark(self) -> bool:
+        """Darker than the room's "dark from" lux (no sensor/threshold: always dark)."""
+        room = self._room
+        threshold = room.get(CONF_DARK_LUX)
+        if threshold is None:
+            threshold = room.get(CONF_TARGET_LUX) or 0  # older rooms
+        if not room_lux_sensors(room) or not threshold or threshold <= 0:
+            return True
+        lux = room_lux(self.hass, room)
+        return lux < threshold if lux is not None else True
+
+    def _sun_entity(self) -> str:
+        """The sun entity from the general settings (older rooms: their own)."""
+        return self._settings().get(SETTING_SUN_ENTITY) or self._room.get(CONF_SUN_ENTITY) or "sun.sun"
+
+    def _sun_down(self) -> bool:
+        state = self.hass.states.get(self._sun_entity())
+        return state is not None and state.state == "below_horizon"
+
+    def _phase(self) -> str:
+        """"light", "dusk" (schemer: sun lower than the general setting's
+        elevation) or "dark" (donker: the sun has set)."""
+        if self._sun_down():
+            return "dark"
+        state = self.hass.states.get(self._sun_entity())
+        elevation = state.attributes.get("elevation") if state is not None else None
+        limit = self._settings().get(SETTING_DUSK_ELEVATION, DUSK_ELEVATION_DEFAULT)
+        if isinstance(elevation, (int, float)) and isinstance(limit, (int, float)) and elevation < limit:
+            return "dusk"
+        return "light"
+
+    def _phase_ok(self, lamp: str, phase: str | None = None) -> bool:
+        """May this lamp burn now for the schedule? Bundles "on from schemer"
+        or "on from donker" wait for that phase; others: the whole schedule."""
+        on_from = self._bopt(lamp, "on_from", "schedule")
+        phase = phase or self._phase()
+        if on_from == "dusk":
+            return phase in ("dusk", "dark")
+        if on_from == "dark":
+            return phase == "dark"
+        return True
+
+    def _dusk_progress(self) -> float:
+        """How far schemer is: 0 when it starts, 1 when the sun sets."""
+        state = self.hass.states.get(self._sun_entity())
+        elevation = state.attributes.get("elevation") if state is not None else None
+        limit = self._settings().get(SETTING_DUSK_ELEVATION, DUSK_ELEVATION_DEFAULT)
+        if not isinstance(elevation, (int, float)) or not isinstance(limit, (int, float)) or limit <= 0:
+            return 1.0
+        return min(1.0, max(0.0, (limit - elevation) / limit))
+
+    @callback
+    def _dusk_ramp(self) -> None:
+        """Schemer without lux control: the bundles on from schemer go up
+        step by step as the sun sinks (the sun entity updates its elevation)."""
+        if self._manual or self._phase() != "dusk":
+            return
+        lux = set(self._lux_lamps_now())
+        lamps = [
+            e for e in self._evening_lamps()
+            if e not in lux and self._dusk_bundle(e) and e not in self._hand_set
+            and (st := self.hass.states.get(e)) is not None and st.state == STATE_ON
+        ]
+        levels = self._phase_levels(lamps)
+        changed: dict[str, int] = {}
+        for e, pct in levels.items():
+            have = self.hass.states.get(e).attributes.get(ATTR_BRIGHTNESS)
+            have_pct = round(have * 100 / 255) if isinstance(have, (int, float)) else None
+            if have_pct is None or abs(have_pct - pct) >= 2:
+                changed[e] = pct
+        if changed:
+            self._dbg("adjust", "dusk", list(changed), pct=max(changed.values()))
+            self.hass.async_create_task(self._async_call("turn_on", lamps=list(changed), levels=changed))
+
+    def _normal_pct(self, lamp: str) -> int:
+        """The bundle's own level: its fixed level, its standard brightness, else 100%."""
+        return self._fixed_levels().get(lamp) or self._default_pct_for(lamp) or 100
+
+    def _dusk_target(self, lamp: str) -> int:
+        """The level a schemer slot works up to: the bundle's own level."""
+        return self._normal_pct(lamp)
+
+    def _phase_levels(self, lamps: list[str]) -> dict[str, int]:
+        """Brightness for bundles on from schemer (no lux control): from 0%
+        when schemer starts slowly up to the slot's dim level at sunset, along
+        with the sun; once it is dark their own level."""
+        phase = self._phase()
+        out: dict[str, int] = {}
+        for e in lamps:
+            if not self._dusk_bundle(e):
+                continue
+            if phase == "dusk":
+                out[e] = max(1, round(self._dusk_target(e) * self._dusk_progress()))
+            elif phase == "dark":
+                out[e] = self._normal_pct(e)
+        return out
+
+    # ── what the schedule, the sun and the alarm ask for ───────────────────
+    #
+    # Schedule on:
+    #   sun up, target lux on → lux control: lamps on/brighter/dimmer/off until
+    #                            the target lux; motion does nothing
+    #   sun up, no target lux → motion switches on below "dark from", off after
+    #                            the grace period
+    #   sun down              → lamps burn at their bundle's level; no lux
+    #                            control, no motion
+    # Schedule off (or none): only motion switches on — when the sun is down,
+    #   or with the sun up when the room is darker than "dark from"; off after
+    #   the grace period. When the schedule ends: off.
+    # Alarm: armed home → off (unless there is motion), motion → on at Dim, off
+    #   after the grace period; or (room option "no_motion") off, motion does
+    #   nothing, the alarm clock / by hand still switch on; armed away → off, except bundles marked to keep
+    #   following the schedule.
+
+    def _schedule_on(self) -> bool:
+        schedule = active_schedule(self.hass, self._room)
+        state = self.hass.states.get(schedule) if schedule else None
+        return state is not None and state.state == "on"
+
+    def _alarm_mode(self) -> str:
+        """'home', 'away' or 'normal' (disarmed / other / no alarm panel)."""
+        state = self._alarm_state() if self._alarm_entity() else None
+        if state == ALARM_ARMED_HOME:
+            return "home"
+        if state == ALARM_ARMED_AWAY:
+            return "away"
+        return "normal"
+
+    def _alarm_blocked(self) -> set[str]:
+        """Lamps that must stay off for the alarm: armed away, unless the room
+        ignores armed away (then it keeps following its schedule)."""
+        if self._alarm_mode() != "away" or self._room.get(CONF_AWAY_FOLLOW_SCHEDULE):
+            return set()
+        return {e for e in self._members if not self._bopt(e, CONF_AWAY_FOLLOW_SCHEDULE, False)}
+
+    def _evening_lamps(self) -> list[str]:
+        """Schedule on: the lamps that follow the schedule burn at their level
+        (the schedule wins over motion). During the day, bundles with lux
+        control are left to the target lux instead (see _lux_lamps_now)."""
+        if self._alarm_mode() == "home":
+            return []
+        blocked = self._alarm_blocked()
+        lux = set(self._lux_lamps_now())
+        phase = self._phase()
+        room = [
+            e for e in self._schedule_lamps()
+            if self._schedule_on() and e not in blocked and e not in lux and self._phase_ok(e, phase)
+        ]
+        own = [e for e in self._own_active() if e not in blocked and e not in lux]
+        return room + own
+
+    def _lux_lamps_now(self) -> list[str]:
+        """Schedule on, sun up, target lux on: lamps lux control drives now."""
+        room = self._room
+        if (
+            self._alarm_mode() == "home" or self._sun_down()
+            or self._target_lux() <= 0 or not room_lux_sensors(room) or self._lux_paused_by_alarm()
+        ):
+            return []
+        blocked = self._alarm_blocked()
+        # Room-schedule lamps while it runs, plus own-times lamps whose slot runs.
+        sched = set(self._schedule_lamps()) if self._schedule_on() else set()
+        sched |= set(self._own_active())
+        if not sched:
+            return []
+        clocks = self.hass.data.get(DOMAIN, {}).get("clocks")
+        waking = clocks.lamps_ringing(self._area_id) if clocks is not None else set()  # a clock sets these
+        phase = self._phase()
+        # Lux-controlled bundles, plus during schemer the bundles on from schemer
+        # (with a lux sensor they work towards the target lux).
+        lamps = set(self._lux_control_lamps())
+        if phase == "dusk":
+            lamps |= {e for e in sched if self._dusk_bundle(e)}
+        return [
+            e for e in self._members
+            if e in lamps and e in sched and e not in blocked and e not in waking
+            and (self._bopt(e, "own_times", False) or self._phase_ok(e, phase))
+        ]
+
+    def _motion_ok(self, lamp: str) -> bool:
+        """May motion (or the door) switch `lamp` on now?"""
+        if self._alarm_mode() == "home":
+            # armed home: motion only, at Dim — or not at all (no_motion)
+            return not self._armed_home_no_motion()
+        if lamp in self._alarm_blocked():
+            return False
+        if lamp in self._evening_lamps() or lamp in self._lux_lamps_now():
+            return False  # the schedule decides these now (it wins over motion)
+        # Schedule off (or a bundle that doesn't follow it): motion switches on —
+        # with the sun up only when the room is darker than "dark from" (no lux
+        # sensor or no threshold: always).
+        return self._sun_down() or self._is_dark()
+
+    def _bundle_names(self, lamps: list[str] | set[str] | None) -> list[str]:
+        """Names of the bundles these lamps are in (a lamp outside a bundle: its own name)."""
+        if lamps is None:
+            lamps = list(self._members)
+        names: list[str] = []
+        groups = self._room.get(CONF_GROUPS, []) or []
+        for e in lamps:
+            for index, group in enumerate(groups):
+                if e in (group.get("lights") or []):
+                    name = (group.get("name") or "").strip() or f"Bundel {index + 1}"
+                    break
+            else:
+                st = self.hass.states.get(e)
+                name = (st.attributes.get("friendly_name") if st else None) or e
+            if name not in names:
+                names.append(name)
+        return names
+
+    @callback
+    def _dbg(self, kind: str, reason: str, lamps: list[str] | set[str] | None = None, **detail: Any) -> None:
+        """Remember a decision for the panel's debug log (kind: on, off, ignored,
+        blocked, adjust, info)."""
+        self._debug.append({
+            "at": dt_util.utcnow().isoformat(),
+            "kind": kind,
+            "reason": reason,
+            "bundles": self._bundle_names(lamps) if lamps is not None or kind in ("on", "off") else [],
+            **{k: v for k, v in detail.items() if v is not None},
+        })
+
+    def debug_log(self) -> list[dict[str, Any]]:
+        """The debug log, newest first."""
+        return list(reversed(self._debug))
+
+    def debug_now(self) -> dict[str, Any]:
+        """What RoomControl sees right now and, per bundle, what it wants."""
+        room = self._room
+        sun = self.hass.states.get(self._sun_entity())
+        evening = set(self._evening_lamps())
+        lux_now = set(self._lux_lamps_now())
+        blocked = self._alarm_blocked()
+        sched = set(self._schedule_lamps())
+        lux_ctrl = set(self._lux_control_lamps())
+        motion_lamps = set(self._motion_lamps())
+        is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
+        bundles = []
+        for index, group in enumerate(room.get(CONF_GROUPS, []) or []):
+            lamps = [e for e in group.get("lights", []) or [] if e in self._members]
+            if not lamps:
+                continue
+            first = lamps[0]
+            if first in blocked:
+                wants = "off_away"
+            elif self._armed_home_no_motion():
+                wants = "armed_home_no_motion"
+            elif self._alarm_mode() == "home":
+                wants = "motion_1pct"
+            elif first in evening:
+                wants = "on_schedule"
+            elif first in lux_now:
+                wants = "lux"
+            elif first in motion_lamps and self._motion_ok(first):
+                wants = "motion"
+            elif first in sched and not self._schedule_on():
+                wants = "off_schedule" if not self._sun_down() else "motion"
+            else:
+                wants = "nothing"
+            bundles.append({
+                "name": (group.get("name") or "").strip() or f"Bundel {index + 1}",
+                "on": any(is_on(e) for e in lamps),
+                "follows_schedule": first in sched,
+                "lux_control": first in lux_ctrl,
+                "on_motion": first in motion_lamps,
+                "wants": wants,
+            })
+        lux = room_lux(self.hass, room) if room_lux_sensors(room) else None
+        return {
+            "schedule": active_schedule(self.hass, room),
+            "schedule_on": self._schedule_on(),
+            "sun_entity": self._sun_entity(),
+            "sun_state": sun.state if sun else None,
+            "sun_down": self._sun_down(),
+            "alarm": self._alarm_mode(),
+            "someone_home": presence_allows(self.hass, room),
+            "manual": self._manual,
+            "lux": round(lux) if lux is not None else None,
+            "dark_from": room.get(CONF_DARK_LUX),
+            "target_lux": self._target_lux(),
+            "motion": self._any_motion(),
+            "bundles": bundles,
+            "locks": self._debug_locks(),
+            "doors": [
+                {
+                    "name": (st.attributes.get("friendly_name") if st else None) or d,
+                    "state": st.state if st else None,
+                    "since": st.last_changed.isoformat() if st else None,
+                }
+                for d in room.get(CONF_DOOR_SENSORS, []) or [] if d
+                for st in [self.hass.states.get(d)]
+            ],
+        }
+
+    def _debug_locks(self) -> list[dict[str, Any]]:
+        manager = self.hass.data.get(DOMAIN, {}).get("locks")
+        now = dt_util.utcnow()
+        out = []
+        for lock in room_locks(self._room):
+            st = self.hass.states.get(lock["entity_id"])
+            out.append({
+                "name": (st.attributes.get("friendly_name") if st else None) or lock["entity_id"],
+                "state": st.state if st else None,
+                "since": st.last_changed.isoformat() if st else None,
+                **(manager.lock_info(self._area_id, lock, now) if manager else {}),
+            })
+        return out
+
+    @callback
+    def _auto_on(
+        self, reason: str, by_motion: bool = False, lamps: list[str] | None = None,
+        levels: dict[str, int] | None = None,
+    ) -> None:
+        """Switch lamps on automatically; `levels`: brightness % per lamp
+        (schemer/donker levels), also for lamps that are on already."""
+        if self._manual:
+            self._dbg("blocked", reason, lamps, why="manual")
+            return  # manual control: RoomControl does nothing
+        if not by_motion and self._armed_home_motion_only():
+            self._dbg("blocked", reason, lamps, why="armed_home")
+            return  # armed home, motion only: dusk etc. switch nothing on
+        if by_motion and self._armed_home_no_motion():
+            self._dbg("blocked", reason, lamps, why="armed_home_no_motion")
+            return  # armed home, not on motion: motion switches nothing on
+        lamps = list(self._members) if lamps is None else [e for e in lamps if e in self._members]
+        wanted = list(lamps)
+        blocked = self._alarm_blocked()
+        lamps = [e for e in lamps if e not in blocked]
+        if blocked & set(wanted):
+            self._dbg("blocked", reason, sorted(blocked & set(wanted)), why="armed_away")
+        # Motion only needs someone home; it works outside the schedule too.
+        if by_motion:
+            lamps = lamps if presence_allows(self.hass, self._room) else []
+        else:
+            lamps = self.lamps_allowed(lamps)
+        if not lamps:
+            if wanted and not (blocked and set(wanted) <= blocked):
+                why = "nobody_home" if not presence_allows(self.hass, self._room) else "schedule"
+                self._dbg("blocked", reason, wanted, why=why)
+            return
+        if self._hand_set:
+            # Set by hand and still on: keep the person's brightness.
+            if levels:
+                levels = {e: v for e, v in levels.items() if e not in self._hand_set}
+            lamps = [e for e in lamps if not (e in self._hand_set and self._is_on(e))]
+            if not lamps:
+                return
+        self._dbg("on", reason, lamps)
+        _LOGGER.debug("%s: turning on %s (%s)", self.entity_id, lamps, reason)
+        self.hass.async_create_task(self._async_call("turn_on", lamps=lamps, levels=levels))
+
+    def _late_home_holds(self) -> bool:
+        """A "Later thuis" switch is on and this room keeps its bundles on for it."""
+        return bool(self._room.get(CONF_LATE_HOME)) and bool(
+            self.hass.data.get(DOMAIN, {}).get("late_home_active")
+        )
+
+    @callback
+    def _on_late_home(self) -> None:
+        """A "Later thuis" switch changed (or the sun set). Switched on and the
+        sun down: the room's bundles go on (and stay on). Once none holds the room any more: off again (the off
+        that was held back)."""
+        if self._late_home_holds():
+            # Only when it is dark (sun down); switched on during the day, they go on at sunset.
+            if not self._late_on_done and not self._manual and self._sun_down():
+                self._late_on_done = True
+                off = [
+                    e for e in self._members
+                    if (st := self.hass.states.get(e)) is not None and st.state not in (STATE_ON, "unavailable", "unknown")
+                ]
+                if off:
+                    # Straight to the lamps: presence, schedule and alarm don't stop this.
+                    self._dbg("on", "late home", off)
+                    self._late_pending = True
+                    self.hass.async_create_task(self._async_call("turn_on", lamps=off))
+            return
+        self._late_on_done = False
+        if not self._late_pending:
+            return
+        self._late_pending = False
+        held = set(self._evening_lamps()) | set(self._lux_lamps_now())
+        is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
+        lamps = [e for e in self._members if is_on(e) and e not in held]
+        if lamps and not (self._any_motion() and presence_allows(self.hass, self._room)):
+            self._auto_off("late home: arrived", lamps=lamps)
+        self._check_idle()
+        self._recompute()
+        self.async_write_ha_state()
+
+    @callback
+    def _auto_off(self, reason: str, lamps: list[str] | None = None) -> None:
+        lamps = list(self._members) if lamps is None else [e for e in lamps if e in self._members]
+        if lamps and not self._manual and self._late_home_holds():
+            # Someone comes home later: the bundles stay on until they are home.
+            self._late_pending = True
+            self._dbg("blocked", reason, lamps, why="late_home")
+            return
+        if not lamps or self._manual:
+            if lamps and self._manual:
+                self._dbg("blocked", reason, lamps, why="manual")
+            return
+        self._dbg("off", reason, lamps)
+        _LOGGER.debug("%s: turning off %s (%s)", self.entity_id, lamps, reason)
+        self._on_by_motion = False
+        self.hass.async_create_task(self._async_call("turn_off", lamps=lamps))
+
+    @callback
+    def _keep_evening_on(self, reason: str = "schedule, sun down") -> bool:
+        """Schedule on and sun down: the bundles that follow the schedule are
+        always on — motion, the target lux etc. don't matter then. A bundle
+        that is off (switched off by hand, a wall switch, …) goes on again.
+        Not during manual control, armed home/away or with nobody home."""
+        phase = self._phase()
+        if self._manual or self._alarm_mode() == "home" or phase == "light":
+            return False
+        if not presence_allows(self.hass, self._room):
+            return False
+        # Donker: all of them; schemer: only bundles that are on from schemer.
+        lamps = [
+            e for e in self._evening_lamps()
+            if phase == "dark" or self._dusk_bundle(e)
+        ]
+        is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
+        off = [
+            e for e in lamps
+            if not is_on(e) and (st := self.hass.states.get(e)) is not None and st.state not in ("unavailable", "unknown")
+        ]
+        if not off:
+            return False
+        now = dt_util.utcnow()
+        if self._evening_last_fix and (now - self._evening_last_fix).total_seconds() < 10:
+            return False  # just did; don't fight a lamp that refuses
+        self._evening_last_fix = now
+        self._on_by_motion = False
+        self._auto_on(reason, lamps=off, levels=self._phase_levels(off))
+        return True
+
+    @callback
+    def _evening_tick(self, _now: Any = None) -> None:
+        acted = self._evaluate_own_times()
+        self._update_slot_dim()  # a time slot's Dim time
+        if acted:
+            self._recompute()
+            self.async_write_ha_state()
+        self._keep_evening_on()
+
+    @callback
+    def _setup_evening_check(self) -> None:
+        wanted = (bool(self._schedule_lamps()) and bool(self._room.get(CONF_SCHEDULES))) or bool(self._own_lamps())
+        if wanted and self._cancel_evening_check is None:
+            self._cancel_evening_check = async_track_time_interval(
+                self.hass, self._evening_tick, timedelta(seconds=60)
+            )
+        elif not wanted and self._cancel_evening_check is not None:
+            self._cancel_evening_check()
+            self._cancel_evening_check = None
+
+    @callback
+    def _evaluate_schedule(self) -> bool:
+        """Act on changes of schedule, sun and presence. At startup the room
+        takes the state the schedule asks for right away (schedule on + sun
+        down: the bundles on; schedule on + sun up: lux control starts)."""
+        room = self._room
+        present = presence_allows(self.hass, room)
+        key = (self._schedule_on(), self._phase(), present)
+        previous, self._conditions = self._conditions, key
+        self._allowed = self._room_allows()
+        if self._manual:
+            return False
+        if previous is None:
+            sched_on, phase, _ = key
+            self._dbg("info", "conditions", schedule="on" if sched_on else "off",
+                      sun=phase, home="yes" if present else "no")
+            if self._alarm_mode() == "home" or not present:
+                return False
+            if self._phase() != "light" and self._keep_evening_on():
+                return True
+            lamps = self._evening_lamps()
+            is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
+            if lamps and not any(is_on(e) for e in lamps):
+                self._auto_on("schedule", lamps=lamps, levels=self._phase_levels(lamps))
+                return True
+            if self._lux_lamps_now():
+                self._regulate_lux(force=True)
+            return False
+        was_on, was_phase, was_present = previous
+        sched_on, phase, _ = key
+        sun_down = phase == "dark"
+        if previous != key:
+            self._dbg("info", "conditions", schedule="on" if sched_on else "off",
+                      sun=phase, home="yes" if present else "no")
+        acted = False
+        if was_present and not present:
+            self._auto_off("nobody home")
+            return True
+        if self._alarm_mode() == "home":
+            return False  # armed home: only motion counts
+        if was_on and not sched_on:
+            # Schedule ended: off, unless someone is moving and motion may keep it on.
+            lamps = self._schedule_lamps()
+            if self._any_motion() and (sun_down or self._is_dark()):
+                self._on_by_motion = True
+            else:
+                self._auto_off("schedule ended", lamps=lamps)
+                acted = True
+        elif sched_on and (not was_on or phase != was_phase):
+            # Schedule starts, or licht/schemer/donker changes during it: the
+            # lamps that follow the schedule (and whose phase it is) burn at
+            # their level (the schedule wins over motion); during the day
+            # bundles with lux control follow the target lux.
+            if lamps := self._evening_lamps():
+                self._on_by_motion = False
+                reason = {"dark": "schedule, dark", "dusk": "schedule, dusk"}.get(phase, "schedule")
+                self._auto_on(reason, lamps=lamps, levels=self._phase_levels(lamps))
+                acted = True
+            # Bundles on from schemer/donker whose phase is over (it got light): off.
+            is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
+            if done := [
+                e for e in self._schedule_lamps()
+                if self._bopt(e, "on_from", "schedule") != "schedule" and not self._phase_ok(e, phase) and is_on(e)
+            ]:
+                self._auto_off("light again", lamps=done)
+                acted = True
+            if self._lux_lamps_now():
+                self._regulate_lux(force=True)
+        return acted
+
+    @callback
+    def _on_schedule_change(self, _event: Event) -> None:
+        self._update_schedule_dim()
+        self._evaluate_covers()
+        self._evaluate_schedule()
+        self._recompute()
+        self._check_idle()
+        self.async_write_ha_state()
+
+    @callback
+    # ── door sensors ───────────────────────────────────────────────────────
+
+    def _door_lamps(self) -> list[str]:
+        """Room lamps of the groups chosen for "door opens → lights on"."""
+        room = self._room
+        chosen = set(room.get(CONF_DOOR_GROUPS, []) or []) if room.get(CONF_DOOR_TURN_ON) else set()
+        lamps: list[str] = []
+        for group in room.get(CONF_GROUPS, []) or []:
+            wanted = group["on_door"] if "on_door" in group else group.get("id") in chosen
+            if wanted:
+                lamps += [e for e in group.get("lights", []) if e in self._members and e not in lamps]
+        return lamps
+
+    @callback
+    def _on_door_change(self, event: Event) -> None:
+        """A door opened: switch on the chosen groups if it is dark enough."""
+        old: State | None = event.data.get("old_state")
+        new: State | None = event.data.get("new_state")
+        if new is not None and old is not None and (new.state in DOOR_OPEN_STATES) != (old.state in DOOR_OPEN_STATES):
+            self._dbg("door", "door_open" if new.state in DOOR_OPEN_STATES else "door_closed",
+                      device=new.attributes.get("friendly_name") or new.entity_id)
+        if new is None or new.state not in DOOR_OPEN_STATES:
+            return
+        if old is not None and old.state in DOOR_OPEN_STATES:
+            return  # was already open
+        room = self._room
+        if self._manual or self._alarm_mode() == "home":
+            return  # armed home: only motion
+        lamps = [e for e in self._door_lamps() if self._motion_ok(e)]
+        off = [e for e in lamps if (s := self.hass.states.get(e)) is None or s.state != STATE_ON]
+        if not off or not presence_allows(self.hass, room):
+            return
+        self._dbg("on", "door", off)
+        _LOGGER.debug("%s: door opened, turning on %s", self.entity_id, off)
+        # Treated like motion: without further motion they go off after the grace period.
+        self._on_by_motion = True
+        self.hass.async_create_task(self._async_call("turn_on", lamps=off))
+
+    @callback
+    def _on_lock_change(self, event: Event) -> None:
+        """A lock of the room changed: into the debug log (who did it is not known)."""
+        old: State | None = event.data.get("old_state")
+        new: State | None = event.data.get("new_state")
+        if new is None or (old is not None and old.state == new.state):
+            return
+        if new.state in ("locking", "unlocking", "opening"):
+            return  # only where it ends up
+        self._dbg("lock", f"lock_state_{new.state}", device=new.attributes.get("friendly_name") or new.entity_id)
+
+    # ── curtains ───────────────────────────────────────────────────────────
+
+    def _following_covers(self) -> list[str]:
+        """Curtains that follow the schedule and dusk: all of them (room option),
+        or those in an older curtain group that follows."""
+        room = self._room
+        if room.get(CONF_COVERS_FOLLOW):
+            return [c for c in room.get(CONF_COVERS, []) or [] if c]
+        own = set(room.get(CONF_COVERS, []) or [])
+        covers: list[str] = []
+        for group in room.get(CONF_COVER_GROUPS, []) or []:
+            if group.get("follow"):
+                covers += [c for c in group.get("covers", []) if c in own and c not in covers]
+        return covers
+
+    def _covers_wanted_open(self) -> bool | None:
+        """True = open, False = closed, None = no opinion (stay as they are).
+
+        Open while the active schedule is on and the sun is up; closed when the
+        schedule is off or it is dark. Without an active schedule only darkness
+        counts (closed at dusk, never opened automatically).
+        """
+        room = self._room
+        # Closed when it is dark — or already at schemer (room option).
+        phase = self._phase()
+        closed_time = phase == "dark" or (phase == "dusk" and room.get(CONF_COVERS_CLOSE_AT) == "dusk")
+        if active_schedule(self.hass, room) is None:
+            return False if closed_time else None
+        return schedule_allows(self.hass, room) and not closed_time
+
+    @callback
+    def _evaluate_covers(self) -> None:
+        """Open/close following curtains when what is wanted changes.
+
+        The first evaluation only remembers the wanted state, so a restart or a
+        config change never moves curtains; between changes they stay as the
+        user left them.
+        """
+        wanted = self._covers_wanted_open()
+        if not self._covers_init:
+            self._covers_init = True
+            self._covers_open = wanted
+            return
+        previous, self._covers_open = self._covers_open, wanted
+        if wanted is None or wanted == previous or self._manual:
+            return
+        covers = self._following_covers()
+        if not covers:
+            return
+        service = "open_cover" if wanted else "close_cover"
+        _LOGGER.debug("%s: %s %s", self.entity_id, service, covers)
+        self.hass.async_create_task(
+            rc_call(self.hass,"cover", service, {ATTR_ENTITY_ID: covers}, blocking=True)
+        )
+
+    # ── lux control & standard brightness ──────────────────────────────────
+
+    def _default_pct(self) -> int | None:
+        value = self._room.get(CONF_DEFAULT_BRIGHTNESS)
+        if not isinstance(value, (int, float)) or value <= 0:
+            return None
+        return int(min(100, max(1, value)))
+
+    def _adjustable_on(self) -> list[str]:
+        """Room lamps that are on and not pinned to a fixed level."""
+        fixed = self._fixed_levels()
+        return [
+            e for e in self._members
+            if e not in fixed and (s := self.hass.states.get(e)) is not None and s.state == STATE_ON
+        ]
+
+    def _target_lux(self) -> float:
+        """The room's target lux; 0 when the target is switched off."""
+        if not self._room.get(CONF_TARGET_LUX_ENABLED, True):
+            return 0
+        return self._room.get(CONF_TARGET_LUX) or 0
+
+    def _lux_control_lamps(self) -> list[str]:
+        """Lamps with lux control (none while the target lux is switched off)."""
+        if not self._room.get(CONF_TARGET_LUX_ENABLED, True):
+            return []
+        return self._lamps_where("lux_control", self._room.get(CONF_LUX_CONTROL))
+
+    def _lux_paused_by_alarm(self) -> bool:
+        """The alarm is in a state for which this room pauses lux control."""
+        states = self._room.get(CONF_LUX_CONTROL_OFF_ALARM) or []
+        return bool(states) and bool(self._alarm_entity()) and self._alarm_state() in states
+
+    @callback
+    def _setup_lux_control(self) -> None:
+        room = self._room
+        sensors = room_lux_sensors(room)
+        wanted = bool(self._lux_control_lamps() and sensors and self._target_lux() > 0)
+        self._track("lux", sensors if wanted else [], self._on_lux_change)
+        if wanted and self._cancel_lux_interval is None:
+            self._cancel_lux_interval = async_track_time_interval(
+                self.hass, self._lux_tick, timedelta(seconds=LUX_CONTROL_INTERVAL)
+            )
+        elif not wanted and self._cancel_lux_interval is not None:
+            self._cancel_lux_interval()
+            self._cancel_lux_interval = None
+
+    @callback
+    def _on_lux_change(self, _event: Event) -> None:
+        self._regulate_lux()
+
+    @callback
+    def _lux_tick(self, now: datetime | None = None) -> None:
+        self._regulate_lux(now)
+
+    @callback
+    def _regulate_lux(self, now: datetime | None = None, force: bool = False) -> None:
+        """Schedule on, sun up: bring the room to the target lux. Too dark → lamps
+        on and gradually brighter; too light → gradually dimmer, and off when
+        the lamps no longer make a difference (lowest level, still too light)."""
+        room = self._room
+        lamps = self._lux_lamps_now()
+        if not lamps or self._manual or not presence_allows(self.hass, room):
+            return
+        target = self._target_lux()
+        lux = room_lux(self.hass, room)
+        if target <= 0 or lux is None:
+            return
+        now = now or dt_util.utcnow()
+        if not force and self._lux_last_adjust and (now - self._lux_last_adjust).total_seconds() < LUX_CONTROL_MIN_GAP:
+            return
+        if abs(lux - target) <= target * LUX_CONTROL_DEADBAND:
+            return
+        is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
+        on = [e for e in lamps if is_on(e)]
+        off = [e for e in lamps if not is_on(e)]
+        fixed = self._fixed_levels()
+        # Set by hand: brightness and on/off stay as the person left them.
+        on = [e for e in on if e not in self._hand_set]
+        adjustable = [e for e in on if e not in fixed and not self._lamp_dimmed(e)]
+        levels = [
+            b for e in adjustable
+            if isinstance(b := self.hass.states.get(e).attributes.get(ATTR_BRIGHTNESS), (int, float))
+        ]
+        current = sum(levels) / len(levels) if levels else 255
+        # Lux control never makes lamps brighter than their bundle's maximum.
+        caps = [self._auto_max_pct(e) or 100 for e in adjustable]
+        cap = round(min(caps) * 255 / 100) if caps else 255
+        self._learn_lux_gain(lux, current, adjustable)
+        if lux < target:
+            if off:
+                # Too dark: switch the lamps on, starting low.
+                self._lux_last_adjust = now
+                self._dbg("on", "lux_dark", off, lux=round(lux), target=round(target))
+                _LOGGER.debug("%s: lux %s < target %s, switching on %s", self.entity_id, lux, target, off)
+                start = min([LUX_CONTROL_START_PCT, *[self._auto_max_pct(e) or 100 for e in off if e not in fixed]])
+                data = {ATTR_ENTITY_ID: [e for e in off if e not in fixed], "brightness_pct": start}
+                if data[ATTR_ENTITY_ID]:
+                    self.hass.async_create_task(rc_call(self.hass, "light", "turn_on", data, blocking=True))
+                if pinned := [e for e in off if e in fixed]:
+                    self.hass.async_create_task(self._async_call("turn_on", lamps=pinned))
+                return
+            if not adjustable:
+                return
+            factor = (target / lux) if lux > 0 else 1 + LUX_CONTROL_MAX_STEP
+        else:
+            if not on:
+                return
+            if not adjustable or current <= LUX_CONTROL_MIN_BRIGHTNESS:
+                # Lowest level and still too light: the lamps make no difference → off.
+                self._lux_last_adjust = now
+                self._dbg("off", "lux_bright", on, lux=round(lux), target=round(target))
+                _LOGGER.debug("%s: lux %s > target %s at the lowest level, switching off", self.entity_id, lux, target)
+                self.hass.async_create_task(
+                    rc_call(self.hass, "light", "turn_off", {ATTR_ENTITY_ID: on}, blocking=True)
+                )
+                return
+            factor = target / lux
+        if self._lux_gain:
+            # Known lux per brightness step: go (almost) straight to the target.
+            step = max(-LUX_MODEL_MAX_STEP, min(LUX_MODEL_MAX_STEP, (target - lux) / self._lux_gain))
+            new = int(round(min(255, max(LUX_CONTROL_MIN_BRIGHTNESS, current + step))))
+        else:
+            factor = min(1 + LUX_CONTROL_MAX_STEP, max(1 - LUX_CONTROL_MAX_STEP, factor))
+            new = int(round(min(255, max(LUX_CONTROL_MIN_BRIGHTNESS, current * factor))))
+        if lux < target:
+            # Brighter, but not above the maximum; set brighter by hand: leave it.
+            new = min(new, cap)
+            if new <= round(current):
+                return
+        if new == round(current):
+            return  # already at the limit (e.g. full brightness and still too dark)
+        self._lux_probe = (lux, current, tuple(sorted(adjustable)))
+        self._lux_last_adjust = now
+        self._dbg("adjust", "lux_brighter" if new > current else "lux_dimmer", adjustable,
+                  lux=round(lux), target=round(target), pct=round(new / 255 * 100))
+        _LOGGER.debug("%s: lux %s → target %s, brightness %s → %s", self.entity_id, lux, target, current, new)
+        self.hass.async_create_task(
+            rc_call(self.hass, "light", "turn_on", {ATTR_ENTITY_ID: adjustable, ATTR_BRIGHTNESS: new}, blocking=True)
+        )
+
+    def _lux_now(self) -> int | None:
+        lux = room_lux(self.hass, self._room) if room_lux_sensors(self._room) else None
+        return round(lux) if lux is not None else None
+
+    def _motion_sensors(self) -> list[str]:
+        """Own sensors plus those of linked rooms: motion anywhere in the group counts."""
+        return group_motion_sensors(self.hass, self._area_id)
+
+    def _any_motion(self) -> bool:
+        return any(
+            (s := self.hass.states.get(e)) is not None and s.state in MOTION_ON_STATES
+            for e in self._motion_sensors()
+        )
+
+    @callback
+    def _on_motion_change(self, event: Event) -> None:
+        """Any sensor on → lights on; only when all are off does the timer start."""
+        new: State | None = event.data.get("new_state")
+        if new is None:
+            return
+        if new.entity_id in room_motion_sensors(self._room):
+            self._own_motion_seen(new.state in MOTION_ON_STATES)
+        if new.state in MOTION_ON_STATES:
+            reason = self._motion_block_reason()
+            if reason is None:
+                self._on_by_motion = True
+                off = [
+                    e for e in self._motion_lamps()
+                    if self._motion_ok(e) and ((st := self.hass.states.get(e)) is None or st.state != STATE_ON)
+                ]
+                self._auto_on("motion", by_motion=True, lamps=off)
+            else:
+                self._dbg("ignored", "motion", why=reason, lux=self._lux_now())
+                _LOGGER.debug("%s: motion ignored (%s)", self.entity_id, reason)
+            self._motion_note = reason
+            self._recompute()
+            self.async_write_ha_state()
+        self._check_idle()
+        self._fan_update()
+
+    # ── smart options ──────────────────────────────────────────────────────
+
+    def _learn(self) -> LearnStore | None:
+        return self.hass.data.get(DOMAIN, {}).get("learn")
+
+    def _is_on(self, entity_id: str) -> bool:
+        return (st := self.hass.states.get(entity_id)) is not None and st.state == STATE_ON
+
+    def _smart_attrs(self) -> dict[str, Any]:
+        """What the smart options learned / do now (panel)."""
+        learn = self._learn()
+        room = self._room
+        return {
+            "grace_extra": learn.grace_extra(self._area_id) if learn else 0,
+            "media_active": self._media_active(),
+            "last_motion_hold": round(self._last_motion_hold_left()),
+            "lux_gain": round(self._lux_gain, 2) if self._lux_gain else None,
+            "learned_brightness": learn.learned_count(self._area_id) if learn and room.get(CONF_LEARN_BRIGHTNESS) else 0,
+            "replay_days": learn.session_days(self._area_id) if learn and room.get(CONF_AWAY_REPLAY) else 0,
+            "replay_active": self._replay_active(),
+            "replay_lamps": sorted(self._replay_on),
+            "motion_weeks": learn.motion_weeks(self._area_id) if learn and room.get(CONF_ANOMALY_ALERTS) else 0,
+        }
+
+    def _clock_attrs(self) -> dict[str, Any]:
+        """The room's active alarm clocks (panel card): next ring, ringing now."""
+        manager = self.hass.data.get(DOMAIN, {}).get("clocks")
+        states = [
+            st for key, st in (manager.states.items() if manager else [])
+            if key.startswith(f"{self._area_id}:")
+        ]
+        nexts = [st.next for st in states if st.next]
+        return {
+            "clock_next": min(nexts).isoformat() if nexts else None,
+            "clock_ringing": any(st.ringing for st in states),
+        }
+
+    @callback
+    def restore_auto(self, lamps: list[str] | None = None) -> None:
+        """Panel "herstel": forget the brightness set by hand; lamps that are
+        on go back to the level RoomControl wants now."""
+        lamps = [e for e in (lamps or self._members) if e in self._members]
+        self._hand_set -= set(lamps)
+        on = [e for e in lamps if self._is_on(e)]
+        if on and not self._manual:
+            lux = set(self._lux_lamps_now())
+            levels = self._phase_levels([e for e in on if e not in lux])
+            fixed = self._fixed_levels()
+            for e in on:
+                if e in lux or e in levels:
+                    continue
+                if (pct := fixed.get(e) or self._default_pct_for(e)) is not None:
+                    levels[e] = pct
+            if levels:
+                self._dbg("adjust", "restore", list(levels))
+                self.hass.async_create_task(self._async_call("turn_on", lamps=list(levels), levels=levels))
+            if lux & set(on):
+                self._regulate_lux(force=True)
+        self._recompute()
+        self.async_write_ha_state()
+
+    @callback
+    def refresh_state(self) -> None:
+        self._recompute()
+        self.async_write_ha_state()
+
+    # Media keeps the room in use.
+
+    def _media_players(self) -> list[str]:
+        return [p for p in self._room.get(CONF_MEDIA_PLAYERS, []) or [] if p]
+
+    def _media_active(self) -> bool:
+        return bool(self._room.get(CONF_MEDIA_HOLD)) and any(
+            (st := self.hass.states.get(p)) is not None and st.state in MEDIA_ACTIVE_STATES
+            for p in self._media_players()
+        )
+
+    @callback
+    def _on_media_change(self, _event: Event) -> None:
+        self._check_idle()
+        self._recompute()
+        self.async_write_ha_state()
+
+    # The last motion in the house was here.
+
+    def _last_motion_hold_left(self) -> float:
+        """Seconds the "last motion was here" hold still runs (0 = none)."""
+        if not self._room.get(CONF_LAST_MOTION_HOLD):
+            return 0
+        last = self.hass.data.get(DOMAIN, {}).get("last_motion")
+        if not last or last[0] not in linked_group(self.hass, self._area_id):
+            return 0
+        return max(0.0, LAST_MOTION_HOLD_MAX - (dt_util.utcnow() - last[1]).total_seconds())
+
+    @callback
+    def _on_last_motion(self) -> None:
+        self._check_idle()
+        self._recompute()
+        self.async_write_ha_state()
+
+    @callback
+    def _hold_expired(self, _now: Any) -> None:
+        self._cancel_hold = None
+        self._check_idle()
+        self._recompute()
+        self.async_write_ha_state()
+
+    @callback
+    def _own_motion_seen(self, on: bool) -> None:
+        """A sensor of this room itself changed: remember it for the smart options."""
+        now = dt_util.utcnow()
+        self._last_motion_at = now
+        self._long_on_sent = False
+        if not on:
+            return
+        data = self.hass.data.get(DOMAIN, {})
+        previous = data.get("last_motion")
+        data["last_motion"] = (self._area_id, now)
+        if not previous or previous[0] != self._area_id:
+            async_dispatcher_send(self.hass, SIGNAL_LAST_MOTION)
+        learn = self._learn()
+        if learn is None:
+            return
+        if self._idle_off_at is not None:
+            seconds = (now - self._idle_off_at).total_seconds()
+            self._idle_off_at = None
+            if self._room.get(CONF_ADAPTIVE_GRACE):
+                extra = learn.grace_feedback(self._area_id, seconds)
+                if extra is not None:
+                    self._dbg("info", "grace_learned", extra=extra, after=round(seconds))
+        if learn.record_motion(self._area_id, now) and self._room.get(CONF_ANOMALY_ALERTS):
+            self._notify("motion", "anomaly_motion")
+
+    # Learned standard brightness.
+
+    @callback
+    def _maybe_learn_brightness(self, entity_id: str) -> None:
+        """A lamp's brightness changed while on: learn it once it settled, if
+        it was a person (not RoomControl, Dim or lux control)."""
+        if (
+            not self._room.get(CONF_LEARN_BRIGHTNESS) or self._manual
+            or self._recently_commanded(entity_id, 10) or self._lamp_dimmed(entity_id)
+            or entity_id in self._fixed_levels() or entity_id in self._lux_lamps_now()
+            or entity_id in self._replay_on
+        ):
+            return
+        if cancel := self._bright_pending.pop(entity_id, None):
+            cancel()
+
+        @callback
+        def _settled(_now: Any) -> None:
+            self._bright_pending.pop(entity_id, None)
+            st = self.hass.states.get(entity_id)
+            learn = self._learn()
+            if (
+                learn is None or st is None or st.state != STATE_ON
+                or not isinstance(b := st.attributes.get(ATTR_BRIGHTNESS), (int, float))
+                or self._recently_commanded(entity_id, BRIGHT_SETTLE + 5)
+            ):
+                return
+            learn.record_brightness(self._area_id, entity_id, dt_util.now().hour, b / 255 * 100)
+            self._dbg("info", "brightness_learned", [entity_id], pct=round(b / 255 * 100))
+
+        self._bright_pending[entity_id] = async_call_later(self.hass, BRIGHT_SETTLE, _settled)
+
+    # Lux model.
+
+    @callback
+    def _learn_lux_gain(self, lux: float, current: float, adjustable: list[str]) -> None:
+        """After an adjustment: how much lux did the brightness change bring?"""
+        probe, self._lux_probe = self._lux_probe, None
+        if probe is None or probe[2] != tuple(sorted(adjustable)):
+            return
+        delta_b = current - probe[1]
+        if abs(delta_b) < 5:
+            return
+        sample = (lux - probe[0]) / delta_b
+        if not 0.05 <= sample <= 50:
+            return  # daylight changed more than the lamps did: no use
+        self._lux_gain = sample if self._lux_gain is None else self._lux_gain * 0.6 + sample * 0.4
+
+    # Sessions and replay.
+
+    @callback
+    def _track_session(self) -> None:
+        """Remember when the room's lamps were on (for replay)."""
+        on = {e for e in self._members if self._is_on(e)}
+        now = dt_util.utcnow()
+        if on and self._session_start is None:
+            self._session_start = now
+            self._session_lamps = set(on)
+            # Replayed or nobody home: not how the room is really used.
+            self._session_skip = bool(self._replay_on) or not anyone_home(self.hass)
+        elif on:
+            self._session_lamps |= on
+        elif self._session_start is not None:
+            if not self._session_skip and (learn := self._learn()) is not None:
+                learn.record_session(self._area_id, self._session_start, now, sorted(self._session_lamps))
+            self._session_start = None
+            self._session_lamps = set()
+        if not on:
+            self._replay_on = set()
+
+    def _replay_active(self) -> bool:
+        return (
+            bool(self._room.get(CONF_AWAY_REPLAY)) and not self._manual and bool(self._members)
+            and (self._alarm_mode() == "away" or not anyone_home(self.hass))
+            and self._sun_down()
+        )
+
+    @callback
+    def _setup_smart_tick(self) -> None:
+        wanted = bool(self._room.get(CONF_AWAY_REPLAY) or self._room.get(CONF_ANOMALY_ALERTS))
+        if wanted and self._cancel_smart_tick is None:
+            self._cancel_smart_tick = async_track_time_interval(
+                self.hass, self._smart_tick, timedelta(seconds=60)
+            )
+        elif not wanted and self._cancel_smart_tick is not None:
+            self._cancel_smart_tick()
+            self._cancel_smart_tick = None
+
+    @callback
+    def _smart_tick(self, _now: Any = None) -> None:
+        self._replay_step()
+        self._long_on_check()
+
+    @callback
+    def _replay_step(self) -> None:
+        learn = self._learn()
+        if learn is None:
+            return
+        if not self._replay_active():
+            if self._replay_on and not self._manual and not anyone_home(self.hass):
+                # Still nobody home (e.g. the sun came up): the replayed lamps go off.
+                lamps = [e for e in self._replay_on if self._is_on(e)]
+                if lamps:
+                    self._dbg("off", "replay_end", lamps)
+                    self.hass.async_create_task(self._async_call("turn_off", lamps=lamps))
+            self._replay_on = set()
+            return
+        wanted = learn.replay_lamps(self._area_id, dt_util.utcnow()) & set(self._members)
+        to_on = sorted(e for e in wanted if not self._is_on(e))
+        to_off = sorted(e for e in self._replay_on - wanted if self._is_on(e))
+        if to_on:
+            self._replay_on |= set(to_on)
+            self._dbg("on", "replay", to_on)
+            self.hass.async_create_task(self._async_call("turn_on", lamps=to_on))
+        if to_off:
+            self._replay_on -= set(to_off)
+            self._dbg("off", "replay", to_off)
+            self.hass.async_create_task(self._async_call("turn_off", lamps=to_off))
+        if to_on or to_off:
+            self._recompute()
+            self.async_write_ha_state()
+
+    # Notifications.
+
+    @callback
+    def _long_on_check(self) -> None:
+        """Lights on for hours without motion, while nothing holds them on."""
+        if not self._room.get(CONF_ANOMALY_ALERTS) or self._long_on_sent or self._manual:
+            return
+        if not room_motion_sensors(self._room) or self._any_motion():
+            return
+        held = set(self._evening_lamps()) | set(self._lux_lamps_now()) | self._replay_on
+        on = [e for e in self._members if self._is_on(e) and e not in held]
+        if not on or self._media_active():
+            return
+        if dt_util.utcnow() - self._last_motion_at >= timedelta(hours=ANOMALY_LIGHTS_ON_HOURS):
+            self._long_on_sent = True
+            self._notify("lights_on", "anomaly_lights_on", lamps=on)
+
+    @callback
+    def _notify(self, kind: str, reason: str, lamps: list[str] | None = None) -> None:
+        now = dt_util.utcnow()
+        last = self._anomaly_sent.get(kind)
+        if last is not None and now - last < ANOMALY_REPEAT:
+            return
+        self._anomaly_sent[kind] = now
+        area = ar.async_get(self.hass).async_get_area(self._area_id)
+        name = area.name if area else self._area_id
+        if kind == "motion":
+            message = text(self.hass, "anomaly_motion", room=name)
+        else:
+            message = text(self.hass, "anomaly_lights_on", room=name, hours=ANOMALY_LIGHTS_ON_HOURS)
+        self._dbg("info", reason, lamps)
+        persistent_notification.async_create(
+            self.hass, message, title="RoomControl", notification_id=f"roomcontrol_{self._area_id}_{kind}"
+        )
+        self.hass.bus.async_fire(
+            "roomcontrol_anomaly", {"area_id": self._area_id, "kind": kind, "message": message}
+        )
+
+    # ── fan ────────────────────────────────────────────────────────────────
+
+    def _fans(self) -> list[str]:
+        """Own fans plus the fans shared with other rooms."""
+        return room_fans(self.hass, self._area_id)
+
+    def _fan_steps(self) -> list[tuple[float, int]]:
+        """Valid steps as (minutes, percentage), sorted by minutes."""
+        steps = []
+        for step in room_fan_steps(self.hass, self._area_id):
+            minutes, pct = step.get("minutes"), step.get("percentage")
+            if isinstance(minutes, (int, float)) and isinstance(pct, (int, float)) and minutes >= 0:
+                steps.append((float(minutes), int(min(100, max(0, pct)))))
+        return sorted(steps)
+
+    def _own_motion(self) -> bool:
+        """Motion on this room's own sensors (linked rooms do not count here)."""
+        return any(
+            (s := self.hass.states.get(e)) is not None and s.state in MOTION_ON_STATES
+            for e in room_motion_sensors(self._room)
+        )
+
+    @callback
+    def _fan_update(self) -> None:
+        """Start/continue activity on motion; end it after the run-on time without motion."""
+        if (
+            not self._fans() or not self._fan_steps() or not self._room.get(CONF_FAN_MOTION, True)
+            or not anyone_home(self.hass)  # nobody home: the fan stays off
+        ):
+            self._fan_stop_activity()
+            return
+        if self._own_motion():
+            if self._cancel_fan_end:
+                self._cancel_fan_end()
+                self._cancel_fan_end = None
+                self._fan_off_at = None
+                self.async_write_ha_state()
+            if self._activity_since is None:
+                self._activity_since = dt_util.utcnow()
+                for minutes, pct in self._fan_steps():
+                    # Must be a @callback so HA runs it in the event loop.
+                    @callback
+                    def _fire(_now: Any, p: int = pct) -> None:
+                        self._fan_step(p)
+
+                    self._fan_step_unsubs.append(async_call_later(self.hass, minutes * 60, _fire))
+                self._recompute()
+                self.async_write_ha_state()
+        elif self._activity_since is not None and self._cancel_fan_end is None:
+            run_on = self._fan_run_on()
+            self._fan_off_at = dt_util.utcnow() + timedelta(seconds=run_on)
+            self._cancel_fan_end = async_call_later(self.hass, run_on, self._fan_end)
+            self.async_write_ha_state()
+
+    @callback
+    def _fan_step(self, pct: int) -> None:
+        """A step's time is reached: speed up (never down during activity)."""
+        if self._activity_since is None or self._manual:
+            return
+        if self._fan_pct is not None and pct <= self._fan_pct:
+            return
+        self._fan_pct = pct
+        _LOGGER.debug("%s: fan step %s%%", self.entity_id, pct)
+        self._fan_apply()
+        self._recompute()
+        self.async_write_ha_state()
+
+    @callback
+    def _fan_end(self, _now: Any = None) -> None:
+        """Activity over: fans off (if we switched them on)."""
+        self._cancel_fan_end = None
+        was_running = self._fan_pct is not None
+        self._fan_reset()
+        if was_running:
+            self._fan_apply()
+        self._recompute()
+        self.async_write_ha_state()
+
+    # ── fan by temperature ─────────────────────────────────────────────────
+
+    def _fan_temp_config(self) -> tuple[str, float, int] | None:
+        """(sensor, from temperature, speed %) when set up and the room has fans."""
+        room = self._room
+        sensor = room.get(CONF_FAN_TEMP_SENSOR)
+        lo, speed = room.get(CONF_FAN_TEMP_MIN), room.get(CONF_FAN_TEMP_SPEED)
+        if not sensor or not self._fans():
+            return None
+        if not all(isinstance(v, (int, float)) for v in (lo, speed)) or speed <= 0:
+            return None
+        return sensor, float(lo), int(min(100, speed))
+
+    def _fan_temperature(self) -> float | None:
+        config = self._fan_temp_config()
+        state = self.hass.states.get(config[0]) if config else None
+        try:
+            return float(state.state) if state else None
+        except ValueError:
+            return None
+
+    @callback
+    def _setup_fan_temp(self) -> None:
+        config = self._fan_temp_config()
+        self._track("fan_temp", [config[0]] if config else [], self._on_fan_temp_change)
+        # Nobody home → the fan stays off; someone comes home → temperature counts again.
+        self._track("fan_persons", household_persons(self.hass) if self._fans() else [], self._on_fan_presence_change)
+        self._fan_temp_eval(write=False)
+
+    @callback
+    def _on_fan_presence_change(self, _event: Event) -> None:
+        if not anyone_home(self.hass) and self._activity_since is not None:
+            self._fan_stop_activity()
+        self._fan_temp_eval(write=False)
+        self._recompute()
+        if self.entity_id:
+            self.async_write_ha_state()
+
+    @callback
+    def _on_fan_temp_change(self, _event: Event) -> None:
+        self._fan_temp_eval()
+
+    @callback
+    def _fan_temp_eval(self, write: bool = True) -> None:
+        """Temperature at or above the limit → the fan runs at the chosen speed."""
+        config = self._fan_temp_config()
+        temp = self._fan_temperature()
+        if config is None or temp is None or not anyone_home(self.hass):
+            wanted = None
+        else:
+            _, lo, speed = config
+            # Already running: a little margin before it stops (no flapping).
+            margin = FAN_TEMP_HYSTERESIS if self._fan_temp_pct is not None else 0.0
+            wanted = speed if temp >= lo - margin else None
+        if wanted == self._fan_temp_pct or self._manual:
+            return
+        _LOGGER.debug("%s: temperature %s → fan %s", self.entity_id, temp, wanted)
+        self._fan_temp_pct = wanted
+        self._fan_apply()
+        if write and self.entity_id:
+            self.async_write_ha_state()
+
+    @callback
+    def _fan_apply(self) -> None:
+        """Drive the (possibly shared) fans: highest speed of the rooms that are
+        active, off once no room sharing them is active any more."""
+        fans = self._fans()
+        if not fans or smoke_active(self.hass):
+            return  # smoke: fans stay off
+        entities = self.hass.data.get(DOMAIN, {}).get("entities", {})
+        speeds = [
+            pct for a in fan_group(self.hass, self._area_id)
+            if (e := entities.get(a)) is not None and set(e._fans()) & set(fans)
+            for pct in (e._fan_pct, e._fan_temp_pct) if pct is not None
+        ]
+        applied: dict[tuple[str, ...], int] = self.hass.data[DOMAIN].setdefault("fan_applied", {})
+        key = tuple(sorted(fans))
+        if speeds:
+            target = max(speeds)
+            if applied.get(key) == target:
+                return
+            applied[key] = target
+            _LOGGER.debug("%s: fans %s to %s%%", self.entity_id, fans, target)
+            call = ("set_percentage", {ATTR_ENTITY_ID: fans, "percentage": target})
+        else:
+            if applied.pop(key, None) is None or self._manual:
+                return
+            call = ("turn_off", {ATTR_ENTITY_ID: fans})
+        self.hass.async_create_task(self.hass.services.async_call("fan", call[0], call[1], blocking=True))
+
+    @callback
+    def _fan_stop_activity(self) -> None:
+        """No (more) activity control: stop it, and the fans if it had started them."""
+        was_running = self._fan_pct is not None
+        self._fan_reset()
+        if was_running:
+            self._fan_apply()
+
+    @callback
+    def _fan_reset(self) -> None:
+        for unsub in self._fan_step_unsubs:
+            unsub()
+        self._fan_step_unsubs = []
+        if self._cancel_fan_end:
+            self._cancel_fan_end()
+            self._cancel_fan_end = None
+        self._fan_off_at = None
+        self._activity_since = None
+        self._fan_pct = None
+
+    def _motion_block_reason(self) -> str | None:
+        """Why motion would not switch the lights on now (None = it would)."""
+        if self._manual:
+            return "manual"
+        if not self._members:
+            return "no_lights"
+        if self._armed_home_no_motion():
+            return "armed_home_no_motion"
+        motion_lamps = self._motion_lamps()
+        if not motion_lamps:
+            return "no_motion_lamps"
+        if not presence_allows(self.hass, self._room) and self._alarm_mode() != "home":
+            return "nobody_home"
+        allowed = [e for e in motion_lamps if self._motion_ok(e)]
+        if not allowed:
+            if self._alarm_mode() == "away":
+                return "armed_away"
+            if self._evening_lamps():
+                return "schedule"
+            if self._lux_lamps_now():
+                return "lux_control"
+            return "too_bright"  # sun up and lighter than "dark from"
+        if all((st := self.hass.states.get(e)) is not None and st.state == STATE_ON for e in allowed):
+            return "already_on"
+        return None
+
+    def _schedule_needs_motion(self) -> bool:
+        """With motion sensors and an active schedule, light needs motion to stay on."""
+        return bool(self._motion_sensors()) and (
+            active_schedule(self.hass, self._room) is not None
+            and schedule_allows(self.hass, self._room)
+        )
+
+    @callback
+    def _check_idle(self) -> None:
+        """Start the no-motion timer when lights are on without motion; else stop it.
+
+        Applies to lights motion switched on, and during an active schedule to
+        any light in the room (however it was switched on).
+        """
+        hold = self._last_motion_hold_left()
+        idle_lamps = bool(self._idle_lamps())
+        idle = (
+            not self._manual and not self._any_motion() and idle_lamps
+            and hold <= 0 and not self._media_active()
+        )
+        if self._cancel_hold:
+            self._cancel_hold()
+            self._cancel_hold = None
+        if hold > 0 and idle_lamps and not self._manual:
+            # The last motion in the house was here: check again when that hold ends.
+            self._cancel_hold = async_call_later(self.hass, hold + 1, self._hold_expired)
+        if not idle:
+            if self._cancel_motion_off:
+                self._cancel_motion_off()
+                self._cancel_motion_off = None
+                self._set_grace(None)
+        elif self._cancel_motion_off is None:
+            delay = self._motion_off_delay()
+            self._cancel_motion_off = async_call_later(self.hass, delay, self._motion_timeout)
+            self._set_grace(dt_util.utcnow() + timedelta(seconds=delay))
+
+    def _idle_lamps(self) -> list[str]:
+        """Lamps that are on and should go off after the grace period without motion:
+        those motion or the door switched on, those following an active schedule
+        that needs motion, and (armed home, motion only) all of them."""
+        on = [e for e in self._members if (st := self.hass.states.get(e)) is not None and st.state == STATE_ON]
+        if not on:
+            return []
+        if self._armed_home_no_motion():
+            return []  # armed home, not on motion: what is on (clock, by hand) stays on
+        if self._alarm_mode() == "home":
+            return on  # armed home: everything follows motion
+        held = set(self._evening_lamps()) | set(self._lux_lamps_now())  # the schedule holds these
+        lamps: set[str] = set()
+        if self._on_by_motion:
+            lamps |= set(self._motion_lamps()) | set(self._door_lamps())
+        if self._schedule_needs_motion() and not self._sun_down():
+            lamps |= set(self._schedule_lamps())
+        return [e for e in on if e in lamps and e not in held]
+
+    def _fan_run_on(self) -> int:
+        """Seconds the fan keeps running after the last motion (default: the grace period)."""
+        value = self._room.get(CONF_FAN_RUN_ON)
+        if not isinstance(value, (int, float)):
+            return self._motion_off_delay()
+        return int(min(FAN_RUN_ON_MAX, max(0, value)))
+
+    def _motion_off_delay(self) -> int:
+        """Grace period in seconds: the room's setting (0-10 min) or the default."""
+        value = self._room.get(CONF_MOTION_OFF_DELAY)
+        base = MOTION_OFF_DELAY if not isinstance(value, (int, float)) else int(min(MOTION_OFF_DELAY_MAX, max(0, value)))
+        if self._room.get(CONF_ADAPTIVE_GRACE) and (learn := self._learn()) is not None:
+            return base + learn.grace_extra(self._area_id)
+        return base
+
+    @callback
+    def _set_grace(self, until: datetime | None) -> None:
+        if until == self._grace_until:
+            return
+        self._grace_until = until
+        if self.hass is not None and self.entity_id:
+            self._recompute()
+            self.async_write_ha_state()
+
+    @callback
+    def _motion_timeout(self, _now: Any) -> None:
+        self._cancel_motion_off = None
+        self._set_grace(None)
+        if not self._any_motion() and (lamps := self._idle_lamps()):
+            self._auto_off("no motion", lamps=lamps)
+            if not self._manual and not self._late_home_holds():
+                self._idle_off_at = dt_util.utcnow()
+
+    @callback
+    def _on_sun_change(self, event: Event) -> None:
+        self._evaluate_covers()
+        own = self._evaluate_own_times()  # slots that start at schemer/donker or end at sunrise
+        if not self._evaluate_schedule() and not own:
+            self._dusk_ramp()  # schemer: a bit brighter as the sun sinks
+        if self._late_home_holds():
+            self._on_late_home()  # sunset while someone comes home later: bundles on
+        self._recompute()
+        self._check_idle()
+        self.async_write_ha_state()
+
+    @staticmethod
+    def _settled(state: State | None) -> str | None:
+        if state is None or state.state in ALARM_TRANSITIONAL:
+            return None
+        return state.state
+
+    @callback
+    def _on_alarm_change(self, event: Event) -> None:
+        new = self._settled(event.data.get("new_state"))
+        if new is None:
+            return  # arming/pending/unavailable: wait for the settled state
+        previous, self._alarm_settled = self._alarm_settled, new
+        entered = previous is not None and previous != new
+        if entered and not self._manual:
+            if new == ALARM_ARMED_HOME:
+                # Off, unless someone is still moving: then it stays on (at Dim)
+                # and goes off after the grace period without motion. Not on
+                # motion (room option): always off.
+                if self._any_motion() and not self._armed_home_no_motion():
+                    self._on_by_motion = True
+                else:
+                    if self.is_on:
+                        self._alarm_last_off = dt_util.utcnow()
+                    self._auto_off("alarm armed home")
+            elif new == ALARM_ARMED_AWAY:
+                if lamps := sorted(self._alarm_blocked()):
+                    if self.is_on:
+                        self._alarm_last_off = dt_util.utcnow()
+                    self._auto_off("alarm armed away", lamps=lamps)
+            elif previous in (ALARM_ARMED_HOME, ALARM_ARMED_AWAY):
+                # Back to normal: if the schedule wants light now, give it.
+                if lamps := self._evening_lamps():
+                    self._auto_on("alarm off, schedule, sun down", lamps=lamps)
+                elif self._lux_lamps_now():
+                    self._regulate_lux(force=True)
+        # Dim at armed home.
+        if entered or previous is None:
+            self._reconcile_alarm_dim()
+        # The motion-only rule starts or stops with the alarm state.
+        self._recompute()
+        self._check_idle()
+        self.async_write_ha_state()
+
+    def _alarm_state(self) -> str | None:
+        alarm = self._alarm_entity()
+        state = self.hass.states.get(alarm) if alarm else None
+        return state.state if state is not None else None
+
+    def _armed_home_motion_only(self) -> bool:
+        """Armed home: nothing but motion switches the lamps on (dusk, schedule,
+        door, lux control don't); in "no_motion" mode motion doesn't either."""
+        return self._alarm_mode() == "home"
+
+    def _armed_home_no_motion(self) -> bool:
+        """Armed home and the room chose "no_motion": the lamps don't react to
+        motion; the alarm clock and switching on by hand still work."""
+        return self._alarm_mode() == "home" and self._room.get(CONF_ARMED_HOME_MODE) == ARMED_HOME_NO_MOTION
+
+    def _settings(self) -> dict[str, Any]:
+        return self.hass.data.get(DOMAIN, {}).get("settings", {})
+
+    def _alarm_entity(self) -> str | None:
+        """The room's own alarm panel, or else the one from the general settings."""
+        return self._room.get(CONF_ALARM_ENTITY) or self._settings().get(SETTING_ALARM_ENTITY) or None
+
+    def _alarm_dim_for(self, state: str | None) -> bool:
+        """Armed home (on motion): the lamps burn at Dim."""
+        return state == ALARM_ARMED_HOME and self._room.get(CONF_ARMED_HOME_MODE) != ARMED_HOME_NO_MOTION
+
+    @callback
+    def _reconcile_alarm_dim(self) -> None:
+        """1% mode on while armed home (if enabled); off again when it ends,
+        but only if the alarm switched it on (a manual 1% is left alone)."""
+        if self._manual or not self._members:
+            return
+        state = self._alarm_state() if self._alarm_entity() else None
+        wanted = state is not None and self._alarm_dim_for(state)
+        if wanted and not self.dimmed:
+            self._dim_by_alarm = True
+            self.hass.async_create_task(self.async_set_dim(True, by_alarm=True))
+        elif not wanted and self.dimmed and self._dim_by_alarm:
+            self._dim_by_alarm = False
+            self.hass.async_create_task(self.async_set_dim(False, by_alarm=True))
+
+    # ── lifecycle ──────────────────────────────────────────────────────────
+
+    # ── for lamp group lights ──────────────────────────────────────────────
+
+    @property
+    def manual_active(self) -> bool:
+        return self._manual
+
+    @property
+    def room_config(self) -> dict[str, Any]:
+        return self._room
+
+    async def async_call_lamps(self, service: str, lamps: list[str], **data: Any) -> None:
+        """Switch some of the room's lamps, with fixed levels and daylight colour."""
+        await self._async_call(service, lamps=lamps, **data)
+
+    # ── manual control ─────────────────────────────────────────────────────
+
+    @property
+    def _manual(self) -> bool:
+        # Smoke: RoomControl does nothing automatic until "Alles veilig".
+        return self._manual_until is not None or smoke_active(self.hass)
+
+    def _manual_duration(self) -> int:
+        """Minutes of manual control: the room's setting (5 min - 8 h) or 60."""
+        value = self._room.get(CONF_MANUAL_DURATION)
+        if not isinstance(value, (int, float)):
+            return MANUAL_DURATION_DEFAULT
+        return int(min(MANUAL_DURATION_MAX, max(MANUAL_DURATION_MIN, value)))
+
+    @callback
+    def async_set_manual(self, minutes: float | None) -> None:
+        """Start manual control (minutes; None = the room's duration) or stop it (0)."""
+        if self._cancel_manual:
+            self._cancel_manual()
+            self._cancel_manual = None
+        if minutes == 0:
+            self._end_manual()
+            return
+        seconds = (minutes if minutes is not None else self._manual_duration()) * 60
+        self._manual_until = dt_util.utcnow() + timedelta(seconds=seconds)
+        self._dbg("info", "manual_start", minutes=round(seconds / 60))
+        self._cancel_manual = async_call_later(self.hass, seconds, self._manual_expired)
+        self._check_idle()  # stops a running grace period
+        self._recompute()
+        self.async_write_ha_state()
+
+    @callback
+    def _manual_expired(self, _now: Any) -> None:
+        self._cancel_manual = None
+        self._end_manual()
+
+    @callback
+    def _end_manual(self) -> None:
+        """RoomControl takes over again and applies the rules to the current state."""
+        if self._manual_until is None:
+            return
+        self._manual_until = None
+        self._dbg("info", "manual_end")
+        room = self._room
+        motion_keeps = self._any_motion() and presence_allows(self.hass, room)
+        on = [e for e in self._members if (st := self.hass.states.get(e)) is not None and st.state == STATE_ON]
+        not_allowed = [e for e in on if e not in self.lamps_allowed([e])]
+        if not_allowed and not motion_keeps:
+            self._auto_off("manual control ended: lights not allowed now", lamps=not_allowed)
+        elif not self.is_on and self._any_motion() and self._is_dark() and presence_allows(self.hass, room):
+            self._on_by_motion = True
+            self._auto_on("manual control ended: motion", by_motion=True, lamps=self._motion_lamps())
+        elif self.is_on and motion_keeps:
+            self._on_by_motion = True
+        self._check_idle()
+        self._last_kelvins = {}
+        self._daylight_tick()
+        self._recompute()
+        self.async_write_ha_state()
+
+    @property
+    def dimmed(self) -> bool:
+        """The room's own 1% mode (button / alarm), shown on the 1% button."""
+        return self._dim_room
+
+    def _dimmed_lamps(self) -> set[str]:
+        lamps = set(self._dim_sched) | set(self._dim_slots)
+        if self._dim_room:
+            lamps |= {e for e in self._members if self._bopt(e, "dim", True)}
+        return lamps & set(self._members)
+
+    def _lamp_dimmed(self, entity_id: str) -> bool:
+        return entity_id in self._dimmed_lamps()
+
+    async def _async_apply_dim(self, before: set[str], after: set[str]) -> None:
+        """Lamps entering 1% mode go to 1% (if on); lamps leaving it get their
+        remembered brightness back (if on; 100% if unknown). Off stays off."""
+        def is_on(e: str) -> bool:
+            return (st := self.hass.states.get(e)) is not None and st.state == STATE_ON
+
+        entering = [e for e in self._members if e in after and e not in before]
+        leaving = [e for e in self._members if e in before and e not in after]
+        to_dim: dict[int, list[str]] = {}
+        for e in entering:
+            if is_on(e):
+                b = self.hass.states.get(e).attributes.get(ATTR_BRIGHTNESS)
+                self._dim_saved.setdefault(e, int(b) if isinstance(b, (int, float)) else 255)
+                to_dim.setdefault(self._dim_pct(e), []).append(e)
+        for pct, ids in to_dim.items():
+            await rc_call(self.hass,
+                "light", "turn_on", {ATTR_ENTITY_ID: ids, "brightness_pct": pct}, blocking=True
+            )
+        for e in leaving:
+            brightness = self._dim_saved.pop(e, 255)
+            if is_on(e):
+                await rc_call(self.hass,
+                    "light", "turn_on", {ATTR_ENTITY_ID: e, ATTR_BRIGHTNESS: brightness}, blocking=True
+                )
+
+    async def async_set_dim(self, dim: bool, by_alarm: bool = False) -> None:
+        """Room 1% mode on (lamps that are on go to 1%, off stays off) or off.
+
+        While the mode is on, any lamp that goes on burns at 1%. Each lamp's
+        brightness from before (or the one it was switched on with during the
+        mode) is remembered and restored when the mode ends.
+        """
+        if not by_alarm:
+            self._dim_by_alarm = False  # the user decides now; leaving armed home won't undo it
+        if dim == self._dim_room or not self._members:
+            return
+        before = self._dimmed_lamps()
+        self._dim_room = dim
+        after = self._dimmed_lamps()
+        self._recompute()
+        self.async_write_ha_state()
+        await self._async_apply_dim(before, after)
+
+    def _dim_remember(self, entity_id: str, brightness: int) -> None:
+        """A lamp in 1% mode: remember what it would have burned at."""
+        if self._lamp_dimmed(entity_id):
+            self._dim_saved[entity_id] = int(min(255, max(1, brightness)))
+
+    # ── 1% from the schedule's data (dim / dim_light1 / dim_<group name>) ──
+
+    def _schedule_dim_lamps(self) -> set[str]:
+        """Lamps the active schedule block asks to dim.
+
+        The schedule helper's block data shows up in its attributes while the
+        block is active: `dim: true` dims the whole room, `dim_light1: true`
+        lamp group 1 (`dim_light2` group 2, ...) and `dim_<group name>: true`
+        the group with that name (lowercase, spaces as _).
+        """
+        room = self._room
+        schedule = active_schedule(self.hass, room)
+        state = self.hass.states.get(schedule) if schedule else None
+        if state is None or state.state != "on":
+            return set()
+        groups = room.get(CONF_GROUPS, []) or []
+        lamps: set[str] = set()
+        for key, value in state.attributes.items():
+            if not _truthy(value) or not str(key).startswith("dim"):
+                continue
+            key = str(key).lower()
+            if key == "dim":
+                lamps |= {e for e in self._members if self._bopt(e, "dim", True)}
+                continue
+            if not key.startswith("dim_"):
+                continue
+            name = key[4:]
+            for index, group in enumerate(groups):
+                if name in (f"light{index + 1}", slugify(group.get("name") or "")):
+                    lamps |= set(group.get("lights", []))
+        return lamps & set(self._members)
+
+    @callback
+    def _update_schedule_dim(self) -> None:
+        if self._manual:
+            return
+        wanted = self._schedule_dim_lamps()
+        if wanted == self._dim_sched:
+            return
+        before = self._dimmed_lamps()
+        self._dim_sched = wanted
+        after = self._dimmed_lamps()
+        self.hass.async_create_task(self._async_apply_dim(before, after))
+        self._recompute()
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        self.hass.data[DOMAIN].setdefault("entities", {})[self._area_id] = self
+        self._subscribe()
+        self._prev_motion_lamps = set(self._motion_lamps())
+        self._check_idle()  # e.g. lights already on without motion at startup
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._on_config_updated)
+        )
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_LATE_HOME, self._on_late_home)
+        )
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_VACATION, self._on_vacation)
+        )
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_LAST_MOTION, self._on_last_motion)
+        )
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_SMOKE, self.refresh_state)
+        )
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_CLOCKS_UPDATED, self.refresh_state)
+        )
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_VACUUM_UPDATED, self._on_vacuum_updated)
+        )
+
+    @callback
+    def _on_vacation(self) -> None:
+        """Vacation on/off: other time slots may run now."""
+        self._evaluate_own_times()
+        self._recompute()
+        self.async_write_ha_state()
+
+    def _vacuum_attrs(self) -> dict[str, Any]:
+        """When the room was last vacuumed and what its cleaning moments do (panel)."""
+        manager = self.hass.data.get(DOMAIN, {}).get("vacuums")
+        if manager is None:
+            return {}
+        return {
+            "vacuumed_at": manager.last_clean.get(self._area_id),
+            "vacuum_plans": manager.plan_info(self._area_id),
+        }
+
+    @callback
+    def _on_vacuum_updated(self) -> None:
+        self._recompute()
+        self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        entities = self.hass.data.get(DOMAIN, {}).get("entities", {})
+        if entities.get(self._area_id) is self:
+            del entities[self._area_id]
+        for _ids, unsub in self._tracks.values():
+            unsub()
+        self._tracks.clear()
+        if self._cancel_motion_off:
+            self._cancel_motion_off()
+            self._cancel_motion_off = None
+        if self._cancel_daylight:
+            self._cancel_daylight()
+            self._cancel_daylight = None
+        if self._cancel_lux_interval:
+            self._cancel_lux_interval()
+            self._cancel_lux_interval = None
+        if self._cancel_evening_check:
+            self._cancel_evening_check()
+            self._cancel_evening_check = None
+        if self._cancel_manual:
+            self._cancel_manual()
+            self._cancel_manual = None
+        if self._cancel_hold:
+            self._cancel_hold()
+            self._cancel_hold = None
+        if self._cancel_smart_tick:
+            self._cancel_smart_tick()
+            self._cancel_smart_tick = None
+        for cancel in self._bright_pending.values():
+            cancel()
+        self._bright_pending.clear()
+        self._fan_reset()
+
+    # ── commands ───────────────────────────────────────────────────────────
+
+    async def _async_call(
+        self, service: str, lamps: list[str] | None = None, levels: dict[str, int] | None = None, **data: Any
+    ) -> None:
+        """Call a light service for the room's lamps (or just `lamps`)."""
+        targets = self._members if lamps is None else [e for e in self._members if e in lamps]
+        if not targets:
+            return
+        if service != "turn_on":
+            await rc_call(self.hass,
+                "light", service, {ATTR_ENTITY_ID: targets, **data}, blocking=True
+            )
+            return
+        # Per lamp: daylight colour if it follows the sun, its fixed level if it
+        # is pinned (ignoring any requested brightness), else the request.
+        colour = set(self._daylight_members())
+        fixed = self._fixed_levels()
+        groups: dict[tuple[tuple[str, Any], ...], list[str]] = {}
+        off: list[str] = []
+        for entity_id in targets:
+            extra: dict[str, Any] = {}
+            modes = _lamp_modes(self.hass, entity_id)
+            if ATTR_HS_COLOR in data and modes & RGB_COLOR_MODES:
+                extra[ATTR_HS_COLOR] = tuple(data[ATTR_HS_COLOR])  # colour chosen on the RoomControl light
+            elif ATTR_COLOR_TEMP_KELVIN in data and modes & KELVIN_COLOR_MODES:
+                extra.update(self._colour_data(entity_id, int(data[ATTR_COLOR_TEMP_KELVIN])))
+            elif entity_id in colour and (kelvin := self._kelvin_for(entity_id)) is not None:
+                extra.update(self._colour_data(entity_id, kelvin))
+            if levels and entity_id in levels:
+                extra["brightness_pct"] = levels[entity_id]  # schemer ramp / donker level
+            elif entity_id in fixed:
+                extra["brightness_pct"] = fixed[entity_id]
+            elif ATTR_BRIGHTNESS in data:
+                extra[ATTR_BRIGHTNESS] = data[ATTR_BRIGHTNESS]
+            elif (default := self._default_pct_for(entity_id)) and not (
+                (st := self.hass.states.get(entity_id)) is not None and st.state == STATE_ON
+            ):
+                extra["brightness_pct"] = default  # standard brightness for a lamp going on
+            if self._lamp_dimmed(entity_id):
+                # 1% mode: burn at 1%, remember what it would have been.
+                was_on = (st := self.hass.states.get(entity_id)) is not None and st.state == STATE_ON
+                if not was_on:
+                    intended = (
+                        round(extra["brightness_pct"] * 255 / 100) if "brightness_pct" in extra
+                        else extra.get(ATTR_BRIGHTNESS, 255)
+                    )
+                    self._dim_remember(entity_id, intended)
+                extra.pop(ATTR_BRIGHTNESS, None)
+                extra["brightness_pct"] = self._dim_pct(entity_id)
+            if _reads_zero(extra):
+                off.append(entity_id)  # 0%: off, not on at a level nobody can see
+                continue
+            groups.setdefault(tuple(sorted(extra.items())), []).append(entity_id)
+        if off:
+            await rc_call(self.hass, "light", "turn_off", {ATTR_ENTITY_ID: off}, blocking=True)
+        for extra_items, ids in groups.items():
+            await rc_call(self.hass,
+                "light", "turn_on", {ATTR_ENTITY_ID: ids, **dict(extra_items)}, blocking=True
+            )
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        lamps = self.lamps_allowed(list(self._members))
+        if self._members and not lamps:
+            raise HomeAssistantError(
+                f"{self.name or self.entity_id}: lights are blocked (outside schedule or nobody home)"
+            )
+        data = {ATTR_BRIGHTNESS: kwargs[ATTR_BRIGHTNESS]} if ATTR_BRIGHTNESS in kwargs else {}
+        await self._async_call("turn_on", lamps=lamps, **data, **_colour_request(kwargs))
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        self._on_by_motion = False
+        await self._async_call("turn_off")

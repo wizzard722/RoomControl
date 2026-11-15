@@ -1,0 +1,12 @@
+announce:
+  fields:
+    message:
+      required: true
+      example: "De was is klaar"
+      selector:
+        text:
+    areas:
+      required: false
+      selector:
+        area:
+          multiple: true

@@ -1,0 +1,18 @@
+{
+  "domain": "roomcontrol",
+  "name": "RoomControl",
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": [
+    "http",
+    "frontend",
+    "panel_custom",
+    "websocket_api"
+  ],
+  "documentation": "https://github.com/",
+  "integration_type": "hub",
+  "iot_class": "calculated",
+  "requirements": [],
+  "version": "1.17.1",
+  "single_config_entry": true
+}
