@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "RoomControl toevoegen",
+        "description": "RoomControl maakt voor elke ruimte in Home Assistant een lamp aan. Stel de kamers in via het RoomControl-paneel in de zijbalk."
+      }
+    },
+    "abort": {
+      "already_configured": "RoomControl is al ingesteld.",
+      "single_instance_allowed": "RoomControl is al ingesteld."
+    }
+  },
+  "services": {
+    "announce": {
+      "name": "Omroepen",
+      "description": "Spreek een bericht uit op de speakers van RoomControl. Ruimten waar geen van de gekoppelde personen thuis is, worden overgeslagen.",
+      "fields": {
+        "message": {
+          "name": "Bericht",
+          "description": "Wat er gezegd wordt."
+        },
+        "areas": {
+          "name": "Ruimten",
+          "description": "Alleen deze ruimten (leeg: alle)."
+        }
+      }
+    }
+  }
+}
