@@ -582,6 +582,9 @@ class RoomControlLight(LightEntity):
         # Lux model: lux per brightness step (0-255), and what we measured at the last adjustment.
         self._lux_gain: float | None = None
         self._lux_probe: tuple[float, float, tuple[str, ...]] | None = None
+        # Lamps lux control already asked for the lowest level (too light):
+        # still too light next time → off (some lamps can't go that low).
+        self._lux_min_asked: tuple[str, ...] | None = None
         # Brightness set by hand, waiting to settle before it is learned.
         self._bright_pending: dict[str, CALLBACK_TYPE] = {}
         # When the room's lamps went on (sessions for replay) and which lamps were on.
@@ -1864,6 +1867,7 @@ class RoomControlLight(LightEntity):
             if off:
                 # Too dark: switch the lamps on, starting low.
                 self._lux_last_adjust = now
+                self._lux_min_asked = None
                 self._dbg("on", "lux_dark", off, lux=round(lux), target=round(target))
                 _LOGGER.debug("%s: lux %s < target %s, switching on %s", self.entity_id, lux, target, off)
                 start = min([LUX_CONTROL_START_PCT, *[self._auto_max_pct(e) or 100 for e in off if e not in fixed]])
@@ -1879,8 +1883,10 @@ class RoomControlLight(LightEntity):
         else:
             if not on:
                 return
-            if not adjustable or current <= LUX_CONTROL_MIN_BRIGHTNESS:
+            at_min = self._lux_min_asked is not None and self._lux_min_asked == tuple(sorted(adjustable))
+            if not adjustable or current <= LUX_CONTROL_MIN_BRIGHTNESS or at_min:
                 # Lowest level and still too light: the lamps make no difference → off.
+                self._lux_min_asked = None
                 self._lux_last_adjust = now
                 self._dbg("off", "lux_bright", on, lux=round(lux), target=round(target))
                 _LOGGER.debug("%s: lux %s > target %s at the lowest level, switching off", self.entity_id, lux, target)
@@ -1901,6 +1907,12 @@ class RoomControlLight(LightEntity):
             new = min(new, cap)
             if new <= round(current):
                 return
+            self._lux_min_asked = None
+        else:
+            # Too light: always a noticeable step down (a tiny step would round
+            # to no change and leave the lamps too bright for good).
+            new = max(LUX_CONTROL_MIN_BRIGHTNESS, min(new, round(current) - max(3, round(current * 0.05))))
+            self._lux_min_asked = tuple(sorted(adjustable)) if new <= LUX_CONTROL_MIN_BRIGHTNESS else None
         if new == round(current):
             return  # already at the limit (e.g. full brightness and still too dark)
         self._lux_probe = (lux, current, tuple(sorted(adjustable)))

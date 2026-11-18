@@ -156,7 +156,7 @@ LUX_CONTROL_MIN_GAP = 30  # s between two adjustments (let the sensor settle)
 LUX_CONTROL_DEADBAND = 0.10  # within ±10% of the target: leave it
 LUX_CONTROL_MAX_STEP = 0.25  # change brightness by at most 25% per step
 LUX_CONTROL_START_PCT = 30  # lamps switched on by lux control start here
-LUX_CONTROL_MIN_BRIGHTNESS = 8  # of 255 (~3%): lower than this the lamps go off
+LUX_CONTROL_MIN_BRIGHTNESS = 3  # of 255 (= 1%, the lowest level): still too light there → off
 # Room option: ignore armed_away here — the room keeps following its time
 # slots (and goes off when a slot ends). Older rooms may have it per bundle.
 CONF_AWAY_FOLLOW_SCHEDULE = "away_follow_schedule"
