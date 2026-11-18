@@ -341,7 +341,7 @@ def _group_unique_id(area_id: str, group_id: str) -> str:
 
 def _group_object_id(hass: HomeAssistant, area_id: str, name: str) -> str:
     """light.roomcontrol_<room>_<bundle>, e.g. roomcontrol_tuin_bundel_1 for
-    "Bundel 1" or "Tuin bundel 1" in the area Tuin (the room only once)."""
+    "Lichtbundel 1" or "Tuin lichtbundel 1" in the area Tuin (the room only once)."""
     area = ar.async_get(hass).async_get_area(area_id)
     room = slugify(area.name if area else area_id)
     bundle = slugify(name)
@@ -1329,7 +1329,7 @@ class RoomControlLight(LightEntity):
         for e in lamps:
             for index, group in enumerate(groups):
                 if e in (group.get("lights") or []):
-                    name = (group.get("name") or "").strip() or f"Bundel {index + 1}"
+                    name = (group.get("name") or "").strip() or f"Lichtbundel {index + 1}"
                     break
             else:
                 st = self.hass.states.get(e)
@@ -1385,7 +1385,7 @@ class RoomControlLight(LightEntity):
             lamps = [e for e in group.get("lights", []) or [] if e in self._members]
             if not lamps or not self._bopt(lamps[0], "own_times", False):
                 continue
-            name = (group.get("name") or "").strip() or f"Bundel {index + 1}"
+            name = (group.get("name") or "").strip() or f"Lichtbundel {index + 1}"
             for slot in self._mode_slots(lamps[0]):
                 days = {d for d in slot.get("days", []) or [] if isinstance(d, int)}
                 start, end = slot.get("start") or {}, slot.get("end") or {}
@@ -1479,7 +1479,7 @@ class RoomControlLight(LightEntity):
             else:
                 wants = "nothing"
             bundles.append({
-                "name": (group.get("name") or "").strip() or f"Bundel {index + 1}",
+                "name": (group.get("name") or "").strip() or f"Lichtbundel {index + 1}",
                 "on": any(is_on(e) for e in lamps),
                 "lux_control": first in lux_ctrl,
                 "on_motion": first in motion_lamps,
