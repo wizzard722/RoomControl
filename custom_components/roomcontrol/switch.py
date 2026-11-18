@@ -19,6 +19,7 @@ from homeassistant.util import dt as dt_util
 from .clocks import SIGNAL_CLOCKS_UPDATED, clock_key, room_clocks
 from .entity_ids import with_roomcontrol_ids
 from .const import (
+    ALARM_DISARMED,
     DOMAIN,
     GENERAL_DEVICE,
     SETTING_ALARM_ENTITY,
@@ -224,6 +225,7 @@ class RoomDimSwitch(SwitchEntity):
 
 
 SETTING_ALL_DIM_WINDOW = "all_dim_window"  # {"start": "HH:MM", "end": "HH:MM"} or absent
+SETTING_ALL_DIM_FOLLOWS_ALARM = "all_dim_follows_alarm"  # disarmed → all back
 
 
 def all_dim_window(hass: HomeAssistant) -> tuple[int, int] | None:
@@ -241,7 +243,7 @@ class AllDimSwitch(SwitchEntity):
 
     With a time window (general settings) it switches on by itself when the
     window starts and off when it ends; in between it can still be switched
-    by hand."""
+    by hand. "Follows the alarm": when the alarm goes to disarmed, all back."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -258,6 +260,8 @@ class AllDimSwitch(SwitchEntity):
         self._window: tuple[int, int] | None = None
         self._window_unsubs: list[CALLBACK_TYPE] = []
         self._in_window: bool | None = None
+        self._alarm_unsub: CALLBACK_TYPE | None = None
+        self._alarm_watching: str | None = None
 
     def _room_lights(self) -> list[Any]:
         entities = self.hass.data.get(DOMAIN, {}).get("entities", {})
@@ -290,6 +294,29 @@ class AllDimSwitch(SwitchEntity):
     def _on_config(self, *_: Any) -> None:
         self._refresh()
         self._setup_window()
+        self._setup_alarm()
+
+    @callback
+    def _setup_alarm(self) -> None:
+        settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
+        alarm = settings.get(SETTING_ALARM_ENTITY) if settings.get(SETTING_ALL_DIM_FOLLOWS_ALARM) else None
+        if alarm == self._alarm_watching:
+            return
+        if self._alarm_unsub:
+            self._alarm_unsub()
+            self._alarm_unsub = None
+        self._alarm_watching = alarm or None
+        if alarm:
+            self._alarm_unsub = async_track_state_change_event(self.hass, [alarm], self._on_alarm)
+
+    @callback
+    def _on_alarm(self, event: Any) -> None:
+        """The alarm goes to disarmed (from any other settled state): all back."""
+        new, old = event.data.get("new_state"), event.data.get("old_state")
+        if new is None or new.state != ALARM_DISARMED or old is None or old.state == ALARM_DISARMED:
+            return
+        if any(e.dimmed for e in self._room_lights()):
+            self.hass.async_create_task(self._set(False))
 
     @callback
     def _setup_window(self) -> None:
@@ -322,6 +349,7 @@ class AllDimSwitch(SwitchEntity):
     async def async_added_to_hass(self) -> None:
         self._refresh()
         self._setup_window()
+        self._setup_alarm()
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._on_config))
 
     async def async_will_remove_from_hass(self) -> None:
@@ -331,6 +359,9 @@ class AllDimSwitch(SwitchEntity):
         for unsub in self._window_unsubs:
             unsub()
         self._window_unsubs = []
+        if self._alarm_unsub:
+            self._alarm_unsub()
+            self._alarm_unsub = None
 
     async def _set(self, dim: bool) -> None:
         for light in self._room_lights():
