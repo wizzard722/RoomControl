@@ -301,6 +301,34 @@ def inverted_covers(hass: HomeAssistant) -> set[str]:
     return out
 
 
+# General setting "layout" (panel → Indeling): where each room is drawn per
+# floor and how rooms adjoin. {"rooms": {area_id: {"x", "y", "w", "h"}},
+# "links": [{"a": area_id, "b": area_id, "kind": "door" | "open" | "stairs",
+# "sensor": binary_sensor (a door; none = a fictitious door)}]}.
+# A link works both ways and is information only (it switches nothing).
+SETTING_LAYOUT = "layout"
+LINK_KINDS = ("door", "open", "stairs")
+
+
+@callback
+def room_neighbours(hass: HomeAssistant, area_id: str) -> list[dict[str, str]]:
+    """The rooms this one adjoins: [{"area_id", "kind"}] (from the layout)."""
+    layout = hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_LAYOUT) or {}
+    out: list[dict[str, str]] = []
+    for link in layout.get("links", []) or []:
+        if not isinstance(link, dict):
+            continue
+        a, b = link.get("a"), link.get("b")
+        kind = link.get("kind") if link.get("kind") in LINK_KINDS else "door"
+        other = b if a == area_id else a if b == area_id else None
+        if other and other != area_id and all(o["area_id"] != other for o in out):
+            item = {"area_id": other, "kind": kind}
+            if kind == "door" and isinstance(link.get("sensor"), str) and link["sensor"]:
+                item["sensor"] = link["sensor"]  # else a fictitious door (no sensor)
+            out.append(item)
+    return out
+
+
 @callback
 def all_dim_rooms(hass: HomeAssistant) -> list[str]:
     """Rooms "Alles dim" acts on: configured rooms with lamps that are not hidden."""
