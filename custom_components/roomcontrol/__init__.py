@@ -26,6 +26,7 @@ from .announce import async_announce
 from .texts import default_texts
 from .vacuums import VacuumManager
 from .control import FullControl, rc_call
+from .covers_known import CoverMemory
 from .entity_ids import async_prefix_entity_ids
 from .rooms import all_dim_rooms
 from .const import (
@@ -42,7 +43,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.LIGHT, Platform.COVER, Platform.FAN, Platform.SWITCH, Platform.BUTTON, Platform.LOCK, Platform.NOTIFY]
+PLATFORMS = [Platform.LIGHT, Platform.COVER, Platform.SENSOR, Platform.FAN, Platform.SWITCH, Platform.BUTTON, Platform.LOCK, Platform.NOTIFY]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
@@ -205,6 +206,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     learn = LearnStore(hass)
     await learn.async_load()
     _data(hass)["learn"] = learn
+    cover_memory = CoverMemory(hass)
+    await cover_memory.async_load()
+    cover_memory.start()
+    _data(hass)["cover_memory"] = cover_memory  # before the platforms: cover/sensor read it
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     clocks.start()
     locks.start()
@@ -267,6 +272,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _data(hass)["loaded"] = False
         if (full_control := _data(hass).pop("full_control", None)) is not None:
             full_control.stop()
+        if (cover_memory := _data(hass).pop("cover_memory", None)) is not None:
+            cover_memory.stop()
         if (clocks := _data(hass).pop("clocks", None)) is not None:
             clocks.stop()
         if (vacuums := _data(hass).pop("vacuums", None)) is not None:

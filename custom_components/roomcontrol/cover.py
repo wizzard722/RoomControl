@@ -30,7 +30,8 @@ from .const import (
     SIGNAL_CONFIG_UPDATED,
 )
 from .control import rc_call
-from .rooms import cover_state, managed_areas, stored_room
+from .covers_known import CLOSED, SIGNAL_COVERS_KNOWN, known_covers
+from .rooms import managed_areas, stored_room
 
 ALL = "all"  # group id of the "all curtains of the room" cover
 
@@ -131,14 +132,12 @@ class RoomCover(CoverEntity):
 
         states = [s for c in self._members if (s := self.hass.states.get(c)) is not None]
         self._attr_available = bool(states)
-        # Reversed curtains: only their open/close commands are swapped (see cover_state).
-        logical = [(cover_state(self.hass, s), s) for s in states]
-        known = [st for st, _ in logical if st in ("open", "closed", "opening", "closing")]
-        self._attr_is_opening = any(st == "opening" for st in known)
-        self._attr_is_closing = any(st == "closing" for st in known)
-        self._attr_is_closed = bool(known) and all(st == "closed" for st in known) if known else None
-        positions = [p for s in states if isinstance(p := s.attributes.get("current_position"), (int, float))]
-        self._attr_current_cover_position = round(sum(positions) / len(positions)) if positions else None
+        # The state RoomControl knows (see covers_known), not the curtains' own.
+        known = known_covers(self.hass, self._members)
+        self._attr_is_opening = False
+        self._attr_is_closing = False
+        self._attr_is_closed = known["state"] == CLOSED if known else None
+        self._attr_current_cover_position = known["position"] if known else None
         features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
         if states and all(
             int(s.attributes.get("supported_features", 0)) & CoverEntityFeature.SET_POSITION for s in states
@@ -156,6 +155,7 @@ class RoomCover(CoverEntity):
     async def async_added_to_hass(self) -> None:
         self._refresh()
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._refresh))
+        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_COVERS_KNOWN, self._refresh))
 
     async def async_will_remove_from_hass(self) -> None:
         if self._unsub:

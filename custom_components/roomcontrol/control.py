@@ -34,6 +34,7 @@ from .const import (
     FULL_CONTROL_MAX_REVERTS,
     SIGNAL_CONFIG_UPDATED,
 )
+from .covers_known import CLOSED, known_cover
 from .rooms import cover_state, inverted_covers, managed_areas, swap_cover
 
 _LOGGER = logging.getLogger(__name__)
@@ -108,6 +109,11 @@ def _from_state(hass: HomeAssistant, state: State) -> dict[str, Any]:
     """What to keep when RoomControl has not commanded the entity yet."""
     if state.domain == "light":
         return {"on": state.state == "on", "brightness": state.attributes.get("brightness"), "at": None}
+    known = known_cover(hass, state.entity_id)
+    if known and known["source"] == "roomcontrol":
+        if isinstance(known["position"], (int, float)):
+            return {"position": int(known["position"]), "at": None}
+        return {"cover": "closed" if known["state"] == CLOSED else "open", "at": None}
     position = state.attributes.get("current_position")
     if isinstance(position, (int, float)):
         return {"position": int(position), "at": None}
@@ -121,6 +127,17 @@ def _matches(hass: HomeAssistant, state: State, wanted: dict[str, Any]) -> bool:
         want, have = wanted.get("brightness"), state.attributes.get("brightness")
         if wanted.get("on") and isinstance(want, (int, float)) and isinstance(have, (int, float)):
             return abs(want - have) <= BRIGHTNESS_TOLERANCE
+        return True
+    # Curtains: the state RoomControl knows (every open/close/position command
+    # in Home Assistant), not the curtain's own state, which is often wrong.
+    known = known_cover(hass, state.entity_id)
+    if known and known["source"] == "roomcontrol":
+        if "position" in wanted:
+            return known["position"] is None or abs(known["position"] - wanted["position"]) <= POSITION_TOLERANCE
+        if wanted.get("cover") == "open":
+            return known["state"] != CLOSED
+        if wanted.get("cover") == "closed":
+            return known["state"] == CLOSED
         return True
     if "position" in wanted:
         have = state.attributes.get("current_position")

@@ -26,5 +26,17 @@
         }
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "covers_state": {
+        "name": "Gordijnen status",
+        "state": {
+          "open": "Open",
+          "closed": "Dicht",
+          "partly_open": "Deels open"
+        }
+      }
+    }
   }
 }
