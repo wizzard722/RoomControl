@@ -30,7 +30,7 @@ from .const import (
     SIGNAL_CONFIG_UPDATED,
 )
 from .control import rc_call
-from .rooms import inverted_covers, managed_areas, stored_room, swap_cover
+from .rooms import cover_state, managed_areas, stored_room
 
 ALL = "all"  # group id of the "all curtains of the room" cover
 
@@ -131,19 +131,13 @@ class RoomCover(CoverEntity):
 
         states = [s for c in self._members if (s := self.hass.states.get(c)) is not None]
         self._attr_available = bool(states)
-        # Reversed curtains: their reported state is the other way round.
-        reversed_ = inverted_covers(self.hass)
-        logical = [
-            (swap_cover(s.state) if s.entity_id in reversed_ else s.state, s) for s in states
-        ]
+        # Reversed curtains: only their open/close commands are swapped (see cover_state).
+        logical = [(cover_state(self.hass, s), s) for s in states]
         known = [st for st, _ in logical if st in ("open", "closed", "opening", "closing")]
         self._attr_is_opening = any(st == "opening" for st in known)
         self._attr_is_closing = any(st == "closing" for st in known)
         self._attr_is_closed = bool(known) and all(st == "closed" for st in known) if known else None
-        positions = [
-            100 - p if s.entity_id in reversed_ else p
-            for s in states if isinstance(p := s.attributes.get("current_position"), (int, float))
-        ]
+        positions = [p for s in states if isinstance(p := s.attributes.get("current_position"), (int, float))]
         self._attr_current_cover_position = round(sum(positions) / len(positions)) if positions else None
         features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE | CoverEntityFeature.STOP
         if states and all(

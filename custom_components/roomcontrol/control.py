@@ -34,7 +34,7 @@ from .const import (
     FULL_CONTROL_MAX_REVERTS,
     SIGNAL_CONFIG_UPDATED,
 )
-from .rooms import inverted_covers, managed_areas, swap_cover
+from .rooms import cover_state, inverted_covers, managed_areas, swap_cover
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,43 +84,37 @@ async def rc_call(
 ) -> None:
     """A light/cover service call by RoomControl (remembered for full control).
 
-    Curtains marked as reversed get the opposite command (open ↔ close,
-    position p → 100 - p). What is remembered is the command the curtain
-    really got, so full control compares like with like (invert=False: the
-    call is already in the curtain's own terms, e.g. a full-control restore)."""
-    if domain == "cover" and invert and service in ("open_cover", "close_cover", "set_cover_position"):
+    Curtains marked as reversed get the opposite open/close command; a
+    position is sent as it is (the curtain's position is the right way
+    round). What is remembered is what RoomControl wanted (open, closed or a
+    position), so full control compares it with the curtain's real state
+    (invert=False: send the commands exactly as given)."""
+    record(hass, domain, service, data)
+    if domain == "cover" and invert and service in ("open_cover", "close_cover"):
         reversed_ = inverted_covers(hass)
         ids = _ids(data)
         flip = [e for e in ids if e in reversed_]
         if flip:
             keep = [e for e in ids if e not in reversed_]
             rest = {k: v for k, v in data.items() if k != ATTR_ENTITY_ID}
-            calls: list[tuple[str, dict[str, Any]]] = []
             if keep:
-                calls.append((service, {**rest, ATTR_ENTITY_ID: keep}))
-            if service == "set_cover_position" and isinstance(rest.get("position"), (int, float)):
-                calls.append((service, {**rest, "position": 100 - int(rest["position"]), ATTR_ENTITY_ID: flip}))
-            else:
-                calls.append((swap_cover(service), {**rest, ATTR_ENTITY_ID: flip}))
-            for svc, svc_data in calls:
-                record(hass, domain, svc, svc_data)
-                await hass.services.async_call(domain, svc, svc_data, blocking=blocking)
+                await hass.services.async_call(domain, service, {**rest, ATTR_ENTITY_ID: keep}, blocking=blocking)
+            await hass.services.async_call(domain, swap_cover(service), {**rest, ATTR_ENTITY_ID: flip}, blocking=blocking)
             return
-    record(hass, domain, service, data)
     await hass.services.async_call(domain, service, data, blocking=blocking)
 
 
-def _from_state(state: State) -> dict[str, Any]:
+def _from_state(hass: HomeAssistant, state: State) -> dict[str, Any]:
     """What to keep when RoomControl has not commanded the entity yet."""
     if state.domain == "light":
         return {"on": state.state == "on", "brightness": state.attributes.get("brightness"), "at": None}
     position = state.attributes.get("current_position")
     if isinstance(position, (int, float)):
         return {"position": int(position), "at": None}
-    return {"cover": "open" if state.state in ("open", "opening") else "closed", "at": None}
+    return {"cover": "open" if cover_state(hass, state) in ("open", "opening") else "closed", "at": None}
 
 
-def _matches(state: State, wanted: dict[str, Any]) -> bool:
+def _matches(hass: HomeAssistant, state: State, wanted: dict[str, Any]) -> bool:
     if state.domain == "light":
         if (state.state == "on") != bool(wanted.get("on")):
             return False
@@ -134,9 +128,9 @@ def _matches(state: State, wanted: dict[str, Any]) -> bool:
             return abs(have - wanted["position"]) <= POSITION_TOLERANCE and state.state not in ("opening", "closing")
         return True
     if wanted.get("cover") == "open":
-        return state.state in ("open", "opening")
+        return cover_state(hass, state) in ("open", "opening")
     if wanted.get("cover") == "closed":
-        return state.state in ("closed", "closing")
+        return cover_state(hass, state) in ("closed", "closing")
     return True
 
 
@@ -242,14 +236,14 @@ class FullControl:
             want = None
         if want is None:
             if old is None or old.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-                wanted[entity_id] = _from_state(new)  # first known state: keep that
+                wanted[entity_id] = _from_state(self.hass, new)  # first known state: keep that
                 return
-            want = wanted[entity_id] = _from_state(old)
+            want = wanted[entity_id] = _from_state(self.hass, old)
         self._check(entity_id, new, want, now)
 
     @callback
     def _check(self, entity_id: str, state: State, want: dict[str, Any], now: datetime) -> None:
-        if _matches(state, want):
+        if _matches(self.hass, state, want):
             return
         if want.get("at"):
             left = self._grace(entity_id) - (now - want["at"]).total_seconds()
@@ -290,4 +284,5 @@ class FullControl:
             return
         self._reverts[entity_id] = [*recent, now]
         _LOGGER.debug("Full control: %s changed from outside, back to %s", entity_id, want)
-        self.hass.async_create_task(rc_call(self.hass, *call, invert=False))
+        # `want` is what was meant (open/closed): reversed curtains get it swapped again.
+        self.hass.async_create_task(rc_call(self.hass, *call))

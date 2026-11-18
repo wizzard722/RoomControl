@@ -301,6 +301,19 @@ def inverted_covers(hass: HomeAssistant) -> set[str]:
     return out
 
 
+@callback
+def cover_state(hass: HomeAssistant, state: Any) -> str:
+    """The curtain's state as it really is. "Reversed" only swaps the open and
+    close commands; a curtain that reports a position reports its state the
+    right way round. Without a position its reported state follows the
+    (swapped) commands, so that one is swapped back."""
+    if state.entity_id in inverted_covers(hass) and not isinstance(
+        state.attributes.get("current_position"), (int, float)
+    ):
+        return swap_cover(state.state)
+    return state.state
+
+
 def swap_cover(value: str) -> str:
     """open_cover ↔ close_cover, open ↔ closed, opening ↔ closing; others unchanged."""
     return _COVER_SWAP.get(value, value)
