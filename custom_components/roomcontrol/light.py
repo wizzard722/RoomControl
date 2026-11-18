@@ -48,6 +48,7 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 
+from .entity_ids import with_roomcontrol_ids
 from .const import (
     CONF_COVERS_CLOSE_AT,
     CONF_COVERS_OPEN_AT,
@@ -248,6 +249,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
+    async_add_entities = with_roomcontrol_ids(hass, "light", async_add_entities)
     """Create a room light (and device) for every managed room, keep that in
     sync, and remove the devices of areas RoomControl does not manage."""
     area_reg = ar.async_get(hass)
@@ -361,9 +363,11 @@ def _group_entity_id(hass: HomeAssistant, ent_reg: er.EntityRegistry, entity: La
             break
     object_id = _group_object_id(hass, entity.area_id, name)
     wanted = f"light.{object_id}"
+    # Suggested ID: used for a new bundle, and stored in the registry so Home
+    # Assistant's "recreate entity ID" gives this ID too.
+    entity.entity_id = wanted
     current = ent_reg.async_get_entity_id("light", DOMAIN, entity.unique_id)
     if current is None:
-        entity.entity_id = wanted  # suggested ID for the registry
         return
     if current == wanted or current.startswith(f"light.{DOMAIN}_"):
         return

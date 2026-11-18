@@ -16,6 +16,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .clocks import SIGNAL_CLOCKS_UPDATED, clock_key, room_clocks
+from .entity_ids import with_roomcontrol_ids
 from .const import DOMAIN, SIGNAL_CONFIG_UPDATED
 from .rooms import managed_areas
 
@@ -34,6 +35,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Keep a stop button per alarm clock (and remove old snooze buttons)."""
+    async_add_entities = with_roomcontrol_ids(hass, "button", async_add_entities)
     entities: dict[tuple[str, str], ClockButton] = {}
 
     @callback

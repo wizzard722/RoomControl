@@ -13,6 +13,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
+from .entity_ids import with_roomcontrol_ids
 from .const import CONF_FANS_NAME, DEFAULT_FANS_NAME, DOMAIN, SIGNAL_CONFIG_UPDATED
 from .rooms import managed_areas, room_fans, stored_room
 
@@ -27,6 +28,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Keep one fan entity per room that has fans."""
+    async_add_entities = with_roomcontrol_ids(hass, "fan", async_add_entities)
     entities: dict[str, RoomFan] = {}
 
     @callback

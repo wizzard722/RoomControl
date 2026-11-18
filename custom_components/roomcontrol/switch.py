@@ -16,6 +16,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .clocks import SIGNAL_CLOCKS_UPDATED, clock_key, room_clocks
+from .entity_ids import with_roomcontrol_ids
 from .const import (
     DOMAIN,
     GENERAL_DEVICE,
@@ -41,6 +42,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Keep one Dim switch per room that has lamps."""
+    async_add_entities = with_roomcontrol_ids(hass, "switch", async_add_entities)
     entities: dict[str, RoomDimSwitch] = {}
 
     @callback

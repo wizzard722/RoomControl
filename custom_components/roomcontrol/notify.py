@@ -17,6 +17,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .announce import announce_rooms, async_announce
+from .entity_ids import with_roomcontrol_ids
 from .const import DOMAIN, GENERAL_DEVICE, SIGNAL_CONFIG_UPDATED
 
 
@@ -29,6 +30,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
+    async_add_entities = with_roomcontrol_ids(hass, "notify", async_add_entities)
     async_add_entities([AnnounceNotify(None)])
     rooms: dict[str, AnnounceNotify] = {}
 

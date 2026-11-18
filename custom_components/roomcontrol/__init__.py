@@ -13,7 +13,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
 
 from .clocks import ClockManager
@@ -25,6 +26,7 @@ from .announce import async_announce
 from .texts import default_texts
 from .vacuums import VacuumManager
 from .control import FullControl, rc_call
+from .entity_ids import async_prefix_entity_ids
 from .const import (
     CONF_AREA_ID,
     DEFAULT_SETTINGS,
@@ -214,7 +216,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     doorbells = DoorbellManager(hass)
     _data(hass)["doorbells"] = doorbells
     doorbells.start()
+    _setup_entity_id_prefix(hass, entry)
     return True
+
+
+@callback
+def _setup_entity_id_prefix(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """All entities get <domain>.roomcontrol_<...>: now (shortly after the
+    platforms added them) and after every config change (new entities)."""
+    pending: list[Any] = []
+
+    @callback
+    def _run(_now: Any = None) -> None:
+        pending.clear()
+        async_prefix_entity_ids(hass, entry.entry_id)
+
+    @callback
+    def _soon(*_: Any) -> None:
+        if not pending:
+            pending.append(async_call_later(hass, 2, _run))
+
+    @callback
+    def _cancel() -> None:
+        for unsub in pending:
+            unsub()
+        pending.clear()
+
+    _soon()
+    entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_CONFIG_UPDATED, _soon))
+    entry.async_on_unload(_cancel)
 
 
 def _bundle_version() -> str:
