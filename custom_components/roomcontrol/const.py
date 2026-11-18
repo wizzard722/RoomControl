@@ -120,6 +120,9 @@ KELVIN_COLOR_MODES = {"color_temp", "hs", "xy", "rgb", "rgbw", "rgbww"}
 # Room option: one or more motion sensors (any on = motion). The single
 # `motion_sensor` key is the older format and is still read.
 CONF_MOTION_SENSORS = "motion_sensors"
+# Per motion sensor a time window {"start": "HH:MM", "end": "HH:MM"} in which it
+# may switch the lights on; no window = always. A window may run past midnight.
+CONF_MOTION_WINDOWS = "motion_windows"
 # Room option: linked rooms (area_ids). Links work both ways and chain: the
 # rooms form a group that shares motion (any sensor in the group = motion).
 CONF_LINKED_ROOMS = "linked_rooms"

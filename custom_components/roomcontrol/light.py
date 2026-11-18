@@ -158,6 +158,8 @@ from .rooms import (
     fan_group,
     household_persons,
     room_fan_steps,
+    motion_window,
+    in_window,
     room_fans,
     linked_group,
     managed_areas,
@@ -1160,7 +1162,7 @@ class RoomControlLight(LightEntity):
                 self._on_by_motion = by_motion and any(is_on(e) for e in now & members)
 
         added = (now - prev) & members
-        if added and self._any_motion():
+        if added and self._any_motion(switching=True):
             on = [e for e in self._members if e in added and self._motion_ok(e) and not is_on(e)]
             if on:
                 self._on_by_motion = True
@@ -1959,11 +1961,20 @@ class RoomControlLight(LightEntity):
         """Own sensors plus those of linked rooms: motion anywhere in the group counts."""
         return group_motion_sensors(self.hass, self._area_id)
 
-    def _any_motion(self) -> bool:
+    def _any_motion(self, switching: bool = False) -> bool:
+        """Motion on any sensor of the group. switching: only sensors inside their
+        time window count (outside it a sensor does not switch lights on, but its
+        motion still keeps lights that are on from going off)."""
         return any(
             (s := self.hass.states.get(e)) is not None and s.state in MOTION_ON_STATES
+            and (not switching or self._sensor_in_window(e))
             for e in self._motion_sensors()
         )
+
+    def _sensor_in_window(self, sensor: str) -> bool:
+        """The sensor is inside its time window (or has none) right now."""
+        now = dt_util.now()
+        return in_window(motion_window(self.hass, sensor), now.hour * 60 + now.minute)
 
     @callback
     def _on_motion_change(self, event: Event) -> None:
@@ -1975,6 +1986,8 @@ class RoomControlLight(LightEntity):
             self._own_motion_seen(new.state in MOTION_ON_STATES)
         if new.state in MOTION_ON_STATES:
             reason = self._motion_block_reason()
+            if reason is None and not self._sensor_in_window(new.entity_id):
+                reason = "outside_window"  # this sensor does not switch lights on now
             if reason is None:
                 self._on_by_motion = True
                 off = [
@@ -2815,7 +2828,7 @@ class RoomControlLight(LightEntity):
         not_allowed = [e for e in on if e not in self.lamps_allowed([e])]
         if not_allowed and not motion_keeps:
             self._auto_off("manual control ended: lights not allowed now", lamps=not_allowed)
-        elif not self.is_on and self._any_motion() and self._is_dark() and presence_allows(self.hass, room):
+        elif not self.is_on and self._any_motion(switching=True) and self._is_dark() and presence_allows(self.hass, room):
             self._on_by_motion = True
             self._auto_on("manual control ended: motion", by_motion=True, lamps=self._motion_lamps())
         elif self.is_on and motion_keeps:

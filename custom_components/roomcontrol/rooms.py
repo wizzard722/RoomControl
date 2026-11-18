@@ -5,6 +5,7 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
 
+from .slots import hm_minutes
 from .const import (
     CONF_COVERS,
     CONF_COVERS_INVERTED,
@@ -20,6 +21,7 @@ from .const import (
     DEFAULT_LUX_MODE,
     CONF_MOTION_SENSOR,
     CONF_MOTION_SENSORS,
+    CONF_MOTION_WINDOWS,
     DAYLIGHT_HIGH_ELEVATION,
     DAYLIGHT_LOW_ELEVATION,
     DAYLIGHT_MAX_KELVIN,
@@ -222,6 +224,27 @@ def linked_group(hass: HomeAssistant, area_id: str, key: str = CONF_LINKED_ROOMS
                 group.add(nxt)
                 todo.append(nxt)
     return sorted(group)
+
+
+@callback
+def motion_window(hass: HomeAssistant, sensor: str) -> tuple[int, int] | None:
+    """(start, end) in minutes after midnight of the sensor's time window, set on
+    the room the sensor belongs to; None = no window (always)."""
+    for room in hass.data.get(DOMAIN, {}).get("rooms", []):
+        window = (room.get(CONF_MOTION_WINDOWS) or {}).get(sensor)
+        if isinstance(window, dict) and sensor in room_motion_sensors(room):
+            start, end = hm_minutes(window.get("start")), hm_minutes(window.get("end"))
+            if start is not None and end is not None and start != end:
+                return start, end
+    return None
+
+
+def in_window(window: tuple[int, int] | None, minutes: int) -> bool:
+    """minutes (after midnight) inside the window; a window may cross midnight."""
+    if window is None:
+        return True
+    start, end = window
+    return start <= minutes < end if start < end else minutes >= start or minutes < end
 
 
 @callback
