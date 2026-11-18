@@ -8,6 +8,7 @@ A room can have several alarm clocks (`alarm_clocks` in the room config):
      "music": bool, "media_player": entity_id,
      "media": {"media_content_id", "media_content_type"},
      "volume_start": % (first step), "volume_end": % (last step),
+     "music_repeat": bool (repeat the music while the clock goes off),
      "stop_music": bool (default yes), "stop_light": bool (default no),
      "covers_open": bool (opens all of the room's curtains),
      "covers_steps": "same" | "own", "covers_snoozes": int,
@@ -38,6 +39,7 @@ from datetime import datetime, timedelta
 import logging
 from typing import Any
 
+from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
@@ -102,6 +104,8 @@ class ClockState:
         self.unsub_auto_stop: CALLBACK_TYPE | None = None
         self.unsub_covers: CALLBACK_TYPE | None = None
         self.music_on = False
+        # The player's repeat mode before the clock set it (restored at stop).
+        self.repeat_before: str | None = None
 
     def cancel(self, *names: str) -> None:
         for name in names or ("unsub_next", "unsub_snooze", "unsub_auto_stop", "unsub_covers"):
@@ -394,6 +398,29 @@ class ClockManager:
             _LOGGER.warning("Alarm clock %s: could not start music on %s", key, player, exc_info=True)
             return
         state.music_on = True
+        if clock.get("music_repeat"):
+            await self._repeat(key, player, "all")
+
+    def _can_repeat(self, player: str) -> bool:
+        st = self.hass.states.get(player)
+        return st is not None and bool(int(st.attributes.get("supported_features", 0)) & MediaPlayerEntityFeature.REPEAT_SET)
+
+    async def _repeat(self, key: str, player: str, mode: str) -> None:
+        """Repeat on (after play_media: some players reset it for new media),
+        remembering the player's own mode; or back to that mode."""
+        if not self._can_repeat(player):
+            _LOGGER.debug("Alarm clock %s: %s can't repeat", key, player)
+            return
+        state = self.states[key]
+        if mode == "all" and state.repeat_before is None:
+            st = self.hass.states.get(player)
+            state.repeat_before = (st.attributes.get("repeat") if st else None) or "off"
+        try:
+            await self.hass.services.async_call(
+                "media_player", "repeat_set", {ATTR_ENTITY_ID: player, "repeat": mode}, blocking=True
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Alarm clock %s: could not set repeat on %s", key, player)
 
     async def _set_volume(self, key: str, clock: dict[str, Any], step: int) -> None:
         """Next step: the music gets louder with the light."""
@@ -417,6 +444,10 @@ class ClockManager:
                 )
             except Exception:  # noqa: BLE001
                 _LOGGER.debug("Alarm clock %s: could not stop %s", key, player)
+        if (before := state.repeat_before) is not None:
+            state.repeat_before = None
+            if player := self._player(key, clock):
+                await self._repeat(key, player, before)
 
     # ── snooze / stop ──────────────────────────────────────────────────────
 
