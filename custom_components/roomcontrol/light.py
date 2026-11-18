@@ -571,6 +571,8 @@ class RoomControlLight(LightEntity):
         # time slots with a Dim time. Remembered brightness per dimmed lamp,
         # restored when no source dims it any more.
         self._dim_room = False
+        # Lamps of alarm clocks going off at the last check (Dim paused for them)
+        self._clock_prev: set[str] = set()
         self._dim_saved: dict[str, int] = {}
         # Smart options. Last no-motion off (adaptive grace period).
         self._idle_off_at: datetime | None = None
@@ -2773,7 +2775,23 @@ class RoomControlLight(LightEntity):
         lamps = set(self._dim_slots)
         if self._dim_room:
             lamps |= {e for e in self._members if self._bopt(e, "dim", True)}
-        return lamps & set(self._members)
+        # An alarm clock going off (or snoozing) sets its bundles' brightness
+        # itself: Dim is paused for them until the clock is over.
+        return (lamps & set(self._members)) - self._clock_lamps()
+
+    def _clock_lamps(self) -> set[str]:
+        clocks = self.hass.data.get(DOMAIN, {}).get("clocks") if self.hass else None
+        return clocks.lamps_ringing(self._area_id) if clocks is not None else set()
+
+    @callback
+    def _on_clocks_updated(self, *_: Any) -> None:
+        """A clock started, snoozed or ended: lamps whose clock is over and that
+        should be on Dim (and are on) go to the Dim level now."""
+        ringing = self._clock_lamps()
+        ended, self._clock_prev = self._clock_prev - ringing, ringing
+        if ended and (back := ended & self._dimmed_lamps()):
+            self.hass.async_create_task(self._async_apply_dim(set(), back))
+        self.refresh_state()
 
     def _lamp_dimmed(self, entity_id: str) -> bool:
         return entity_id in self._dimmed_lamps()
@@ -2853,7 +2871,7 @@ class RoomControlLight(LightEntity):
             async_dispatcher_connect(self.hass, SIGNAL_SMOKE, self.refresh_state)
         )
         self.async_on_remove(
-            async_dispatcher_connect(self.hass, SIGNAL_CLOCKS_UPDATED, self.refresh_state)
+            async_dispatcher_connect(self.hass, SIGNAL_CLOCKS_UPDATED, self._on_clocks_updated)
         )
         self.async_on_remove(
             async_dispatcher_connect(self.hass, SIGNAL_VACUUM_UPDATED, self._on_vacuum_updated)
