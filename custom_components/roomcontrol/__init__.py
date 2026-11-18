@@ -106,6 +106,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_smoke_clear)
     websocket_api.async_register_command(hass, ws_restore_auto)
     websocket_api.async_register_command(hass, ws_announce)
+    websocket_api.async_register_command(hass, ws_test_text)
 
     async def _announce_service(call: ServiceCall) -> ServiceResponse:
         areas = call.data.get("areas")
@@ -476,6 +477,34 @@ async def ws_announce(
     """Panel test message: speak it on the speakers that take part now."""
     players = await async_announce(hass, msg["message"], msg.get("areas"))
     connection.send_result(msg["id"], {"players": players})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/test_text",
+        vol.Required("message"): str,
+        vol.Required("channel"): vol.In(["spoken", "notify"]),
+        vol.Optional("kind", default="announce"): str,
+    }
+)
+@websocket_api.async_response
+async def ws_test_text(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Panel "Teksten": try a text the way it really goes out — spoken on the
+    speakers (with the volume of `kind`), or as a Home Assistant notification."""
+    if msg["channel"] == "spoken":
+        players = await async_announce(hass, msg["message"], kind=msg["kind"])
+        connection.send_result(msg["id"], {"players": players})
+        return
+    from homeassistant.components import persistent_notification
+
+    persistent_notification.async_create(
+        hass, msg["message"], title="RoomControl (test)", notification_id=f"{DOMAIN}_text_test"
+    )
+    connection.send_result(msg["id"], {"sent": True})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/smoke_clear"})
