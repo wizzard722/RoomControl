@@ -45,9 +45,6 @@ _LOGGER = logging.getLogger(__name__)
 
 CONF_VACUUMS = "vacuums"
 CONF_VACUUM_PLANS = "vacuum_plans"
-# Room option: cleaning moments on (default) or off — the "Stofzuiger" switch
-# on the room's device in Home Assistant, and the switch in the panel.
-CONF_VACUUM_ENABLED = "vacuum_enabled"
 SETTING_VACUUM_PERSONS = "vacuum_persons"
 SIGNAL_VACUUM_UPDATED = f"{DOMAIN}_vacuum_updated"
 
@@ -204,10 +201,6 @@ class VacuumManager:
         self._schedule_next(key, plan, state)  # next time, whatever happens now
         if not plan.get("enabled", True):
             return
-        if not room.get(CONF_VACUUM_ENABLED, True):
-            state.last_note = "switched_off"
-            _LOGGER.debug("Vacuum %s: switched off for this room, not starting", key)
-            return
         if (why := self.blocked(plan)) is not None:
             until = self._retry_until(plan)
             if until is not None:
@@ -327,7 +320,7 @@ class VacuumManager:
             if state.waiting_until is None:
                 continue
             found = self.find(key)
-            if found is None or not found[1].get(CONF_VACUUM_ENABLED, True):
+            if found is None:
                 state.waiting_until = None
                 continue
             if state.waiting_until < now:
@@ -357,19 +350,6 @@ class VacuumManager:
 
     def rooms_with_vacuum(self) -> list[str]:
         return [r["area_id"] for r in self._rooms() if self.vacuum(r)]
-
-    def enabled(self, area_id: str) -> bool:
-        room = next((r for r in self._rooms() if r.get("area_id") == area_id), None)
-        return bool((room or {}).get(CONF_VACUUM_ENABLED, True))
-
-    async def set_enabled(self, area_id: str, enabled: bool) -> None:
-        from . import _async_save  # here: avoids an import cycle
-
-        rooms = [
-            {**r, CONF_VACUUM_ENABLED: enabled} if r.get("area_id") == area_id else r
-            for r in self._rooms()
-        ]
-        await _async_save(self.hass, rooms=rooms)
 
     # ── for the panel ──────────────────────────────────────────────────────
 

@@ -29,7 +29,6 @@ from .const import (
 from .rooms import managed_areas, room_lights, stored_room
 from .announce import CONF_ANNOUNCE_OFF, announce_rooms
 from .const import CONF_MEDIA_PLAYERS
-from .vacuums import SIGNAL_VACUUM_UPDATED
 
 
 def _unique_id(area_id: str) -> str:
@@ -87,27 +86,12 @@ async def async_setup_entry(
     _sync_clocks()
     entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_CONFIG_UPDATED, _sync_clocks))
 
-    # One "Stofzuiger" switch per room with a vacuum: cleaning moments on/off.
-    vacuums: dict[str, VacuumSwitch] = {}
-
-    @callback
-    def _sync_vacuums(*_: Any) -> None:
-        areas = managed_areas(hass)
-        manager = hass.data.get(DOMAIN, {}).get("vacuums")
-        wanted = {a for a in (manager.rooms_with_vacuum() if manager else []) if a in areas}
-        new = [VacuumSwitch(a) for a in wanted - vacuums.keys()]
-        for entity in new:
-            vacuums[entity.area_id] = entity
-        if new:
-            async_add_entities(new)
-        ent_reg = er.async_get(hass)
-        for area_id in list(vacuums.keys() - wanted):
-            del vacuums[area_id]
-            if entity_id := ent_reg.async_get_entity_id("switch", DOMAIN, _vacuum_unique_id(area_id)):
-                ent_reg.async_remove(entity_id)
-
-    _sync_vacuums()
-    entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_CONFIG_UPDATED, _sync_vacuums))
+    # The former "Stofzuigschema" switches (cleaning moments on/off per room)
+    # are gone: each moment has its own on/off. Remove leftover entities.
+    ent_reg = er.async_get(hass)
+    for entity in list(er.async_entries_for_config_entry(ent_reg, entry.entry_id)):
+        if entity.domain == "switch" and entity.unique_id.startswith(f"{DOMAIN}_") and entity.unique_id.endswith("_vacuum"):
+            ent_reg.async_remove(entity.entity_id)
 
     # Per lock: "op slot als niemand thuis" and "sluittijden" (Configuratie).
     locks: dict[tuple[str, str, str], LockOptionSwitch] = {}
@@ -295,58 +279,6 @@ class ClockSwitch(SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         if manager := self._manager():
             await manager.set_enabled(self.key, False)
-
-
-# ── vacuum on/off per room ─────────────────────────────────────────────────
-
-
-def _vacuum_unique_id(area_id: str) -> str:
-    return f"{DOMAIN}_{area_id}_vacuum"
-
-
-class VacuumSwitch(SwitchEntity):
-    """The room's cleaning schedule (its moments) on or off; off: the vacuum
-    doesn't start by itself ("Nu zuigen" still works)."""
-
-    _attr_has_entity_name = True
-    _attr_should_poll = False
-    _attr_icon = "mdi:calendar-clock"
-    _attr_name = "Stofzuigschema"
-    _attr_entity_category = EntityCategory.CONFIG  # "Configuratie" on the device page
-
-    def __init__(self, area_id: str) -> None:
-        self.area_id = area_id
-        self._attr_unique_id = _vacuum_unique_id(area_id)
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """On the room's device."""
-        return DeviceInfo(identifiers={(DOMAIN, self.area_id)})
-
-    def _manager(self) -> Any:
-        return self.hass.data.get(DOMAIN, {}).get("vacuums")
-
-    @property
-    def is_on(self) -> bool:
-        manager = self._manager()
-        return manager.enabled(self.area_id) if manager else False
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        manager = self._manager()
-        return {"vacuumed_at": manager.last_clean.get(self.area_id) if manager else None}
-
-    async def async_added_to_hass(self) -> None:
-        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self.async_write_ha_state))
-        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_VACUUM_UPDATED, self.async_write_ha_state))
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        if manager := self._manager():
-            await manager.set_enabled(self.area_id, True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        if manager := self._manager():
-            await manager.set_enabled(self.area_id, False)
 
 
 # ── "Omroepen" per room ─────────────────────────────────────────────────────
