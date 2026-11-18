@@ -27,6 +27,7 @@ from .texts import default_texts
 from .vacuums import VacuumManager
 from .control import FullControl, rc_call
 from .entity_ids import async_prefix_entity_ids
+from .rooms import all_dim_rooms
 from .const import (
     CONF_AREA_ID,
     DEFAULT_SETTINGS,
@@ -361,11 +362,8 @@ async def ws_set_dim(
     if "area_id" in msg:
         targets = [entities[msg["area_id"]]] if msg["area_id"] in entities else []
     else:
-        configured = {
-            r["area_id"] for r in _data(hass)["rooms"]
-            if r.get("lights") and not r.get("hidden")
-        }
-        targets = [e for a, e in entities.items() if a in configured]
+        configured = set(all_dim_rooms(hass))
+        targets = [e for a, e in entities.items() if a in configured and e.follows_dim]
     for entity in targets:
         await entity.async_set_dim(msg["dim"])
     connection.send_result(msg["id"], {"rooms": [e._area_id for e in targets]})

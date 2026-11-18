@@ -977,6 +977,7 @@ class RoomControlLight(LightEntity):
             "presence_allows": presence_allows(self.hass, self._room),
             "daylight_kelvin": self._kelvin(),
             "dimmed": self._dim_room,
+            "follows_dim": self.follows_dim,
             "dimmed_lamps": sorted(self._dimmed_lamps()),
             "roomcontrol_area": self._area_id,
             "alarm_last_off": self._alarm_last_off.isoformat() if self._alarm_last_off else None,
@@ -2801,6 +2802,12 @@ class RoomControlLight(LightEntity):
                 await rc_call(self.hass,
                     "light", "turn_on", {ATTR_ENTITY_ID: e, ATTR_BRIGHTNESS: brightness}, blocking=True
                 )
+
+    @property
+    def follows_dim(self) -> bool:
+        """At least one lamp takes part in Dim (bundle option "Doet mee met Dim");
+        "Alles dim" leaves rooms without one alone."""
+        return any(self._bopt(e, "dim", True) for e in self._members)
 
     async def async_set_dim(self, dim: bool, by_alarm: bool = False) -> None:
         """Room 1% mode on (lamps that are on go to 1%, off stays off) or off.

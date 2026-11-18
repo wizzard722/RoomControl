@@ -13,7 +13,8 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_change
+from homeassistant.util import dt as dt_util
 
 from .clocks import SIGNAL_CLOCKS_UPDATED, clock_key, room_clocks
 from .entity_ids import with_roomcontrol_ids
@@ -27,7 +28,8 @@ from .const import (
     SIGNAL_LATE_HOME,
     SIGNAL_VACATION,
 )
-from .rooms import managed_areas, room_lights, stored_room
+from .rooms import all_dim_rooms, in_window, managed_areas, room_lights, stored_room
+from .slots import hm_minutes
 from .announce import CONF_ANNOUNCE_OFF, announce_rooms
 from .const import CONF_MEDIA_PLAYERS
 
@@ -140,6 +142,9 @@ async def async_setup_entry(
     # One "Vakantie" switch for the whole house, on the General device.
     async_add_entities([VacationSwitch()])
 
+    # One "Alles dim" switch for the whole house, on the General device.
+    async_add_entities([AllDimSwitch()])
+
     # One "Later thuis" switch per chosen person, on the General device.
     late: dict[str, LateHomeSwitch] = {}
 
@@ -216,6 +221,127 @@ class RoomDimSwitch(SwitchEntity):
         if (light := self._room_light()) is not None:
             await light.async_set_dim(False)
         self._refresh()
+
+
+SETTING_ALL_DIM_WINDOW = "all_dim_window"  # {"start": "HH:MM", "end": "HH:MM"} or absent
+
+
+def all_dim_window(hass: HomeAssistant) -> tuple[int, int] | None:
+    """The time window (minutes after midnight) in which "Alles dim" is on by itself."""
+    window = hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_ALL_DIM_WINDOW)
+    if not isinstance(window, dict):
+        return None
+    start, end = hm_minutes(window.get("start")), hm_minutes(window.get("end"))
+    return (start, end) if start is not None and end is not None and start != end else None
+
+
+class AllDimSwitch(SwitchEntity):
+    """All rooms (with lamps, not hidden) in 1% mode at once — the "Alles dim"
+    button of the panel. On when every one of those rooms is dimmed.
+
+    With a time window (general settings) it switches on by itself when the
+    window starts and off when it ends; in between it can still be switched
+    by hand."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_icon = "mdi:brightness-4"
+    _attr_name = "Alles dim"
+    _attr_unique_id = f"{DOMAIN}_all_dim"
+
+    def __init__(self) -> None:
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, GENERAL_DEVICE)}, name="Generiek", manufacturer="RoomControl"
+        )
+        self._watching: list[str] = []
+        self._unsub: CALLBACK_TYPE | None = None
+        self._window: tuple[int, int] | None = None
+        self._window_unsubs: list[CALLBACK_TYPE] = []
+        self._in_window: bool | None = None
+
+    def _room_lights(self) -> list[Any]:
+        entities = self.hass.data.get(DOMAIN, {}).get("entities", {})
+        return [e for a in all_dim_rooms(self.hass) if (e := entities.get(a)) is not None and e.follows_dim]
+
+    @callback
+    def _refresh(self, *_: Any) -> None:
+        lights = self._room_lights()
+        # Follow the room lights: their state changes when the 1% mode changes.
+        watch = sorted(e.entity_id for e in lights if e.entity_id)
+        if watch != self._watching:
+            if self._unsub:
+                self._unsub()
+            self._watching = watch
+            self._unsub = async_track_state_change_event(self.hass, watch, self._refresh) if watch else None
+        self._attr_available = bool(lights)
+        self._attr_is_on = bool(lights) and all(e.dimmed for e in lights)
+        window = all_dim_window(self.hass)
+        self._attr_extra_state_attributes = {
+            "dimmed_rooms": sorted(e._area_id for e in lights if e.dimmed),
+            "window": (
+                {"start": "%02d:%02d" % divmod(window[0], 60), "end": "%02d:%02d" % divmod(window[1], 60)}
+                if window else None
+            ),
+        }
+        if self.entity_id:
+            self.async_write_ha_state()
+
+    @callback
+    def _on_config(self, *_: Any) -> None:
+        self._refresh()
+        self._setup_window()
+
+    @callback
+    def _setup_window(self) -> None:
+        """(Re)plan the window's start and end; act now if it just began or ended."""
+        window = all_dim_window(self.hass)
+        if window != self._window:
+            for unsub in self._window_unsubs:
+                unsub()
+            self._window_unsubs = []
+            self._window = window
+            for minutes in window or ():
+                hour, minute = divmod(minutes, 60)
+                self._window_unsubs.append(
+                    async_track_time_change(self.hass, self._window_tick, hour=hour, minute=minute, second=0)
+                )
+        self._window_tick()
+
+    @callback
+    def _window_tick(self, _now: Any = None) -> None:
+        """Only a change counts: the window starts → all dim, it ends → all back.
+        In between the user may switch it by hand."""
+        now = dt_util.now()
+        inside = self._window is not None and in_window(self._window, now.hour * 60 + now.minute)
+        previous, self._in_window = self._in_window, inside
+        if inside and not previous:
+            self.hass.async_create_task(self._set(True))
+        elif previous and not inside:
+            self.hass.async_create_task(self._set(False))
+
+    async def async_added_to_hass(self) -> None:
+        self._refresh()
+        self._setup_window()
+        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._on_config))
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._unsub:
+            self._unsub()
+            self._unsub = None
+        for unsub in self._window_unsubs:
+            unsub()
+        self._window_unsubs = []
+
+    async def _set(self, dim: bool) -> None:
+        for light in self._room_lights():
+            await light.async_set_dim(dim)
+        self._refresh()
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._set(False)
 
 
 def _clock_unique_id(key: str) -> str:

@@ -302,6 +302,15 @@ def inverted_covers(hass: HomeAssistant) -> set[str]:
 
 
 @callback
+def all_dim_rooms(hass: HomeAssistant) -> list[str]:
+    """Rooms "Alles dim" acts on: configured rooms with lamps that are not hidden."""
+    return [
+        r["area_id"] for r in hass.data.get(DOMAIN, {}).get("rooms", [])
+        if r.get("area_id") and r.get("lights") and not r.get("hidden")
+    ]
+
+
+@callback
 def cover_state(hass: HomeAssistant, state: Any) -> str:
     """The curtain's state as it really is. "Reversed" only swaps the open and
     close commands; a curtain that reports a position reports its state the
