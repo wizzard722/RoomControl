@@ -556,6 +556,7 @@ class RoomControlLight(LightEntity):
         self._on_by_motion = False
         # Lamps whose bundle reacted to motion at the last config (None: not read yet)
         self._prev_motion_lamps: set[str] | None = None
+        self._prev_dim_lamps: set[str] | None = None
         self._cancel_motion_off: CALLBACK_TYPE | None = None
         # End of the running grace period (no motion, lights still on), UTC
         self._grace_until: datetime | None = None
@@ -1093,8 +1094,28 @@ class RoomControlLight(LightEntity):
     def _on_config_updated(self) -> None:
         self._subscribe()
         self._apply_motion_config_change()
+        self._apply_dim_config_change()
         self._check_idle()
         self.async_write_ha_state()
+
+    def _dim_bundle_lamps(self) -> set[str]:
+        """Lamps whose bundle takes part in Dim ("Doet mee met Dim", default yes)."""
+        return set(self._lamps_where("dim", True))
+
+    @callback
+    def _apply_dim_config_change(self) -> None:
+        """A bundle's "Doet mee met Dim" was switched in the panel while the room
+        is on Dim: switched on → its lamps that are on go to the Dim level;
+        switched off → they get their brightness from before back."""
+        now = self._dim_bundle_lamps()
+        prev, self._prev_dim_lamps = self._prev_dim_lamps, now
+        if prev is None or now == prev or not self._dim_room:
+            return
+        dimmed = self._dimmed_lamps()  # minus alarm clock lamps, plus time-slot Dim
+        entering = (now - prev) & dimmed
+        leaving = (prev - now) - dimmed
+        if entering or leaving:
+            self.hass.async_create_task(self._async_apply_dim(leaving, entering))
 
     @callback
     def _apply_motion_config_change(self) -> None:
@@ -2854,6 +2875,7 @@ class RoomControlLight(LightEntity):
         self.hass.data[DOMAIN].setdefault("entities", {})[self._area_id] = self
         self._subscribe()
         self._prev_motion_lamps = set(self._motion_lamps())
+        self._prev_dim_lamps = self._dim_bundle_lamps()
         self._check_idle()  # e.g. lights already on without motion at startup
         self.async_on_remove(
             async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._on_config_updated)
