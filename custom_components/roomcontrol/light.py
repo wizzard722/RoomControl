@@ -46,11 +46,14 @@ from homeassistant.util.color import color_temperature_to_rgb
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
+    async_track_time_change,
     async_track_time_interval,
 )
 
 from .const import (
     CONF_COVERS_CLOSE_AT,
+    CONF_COVERS_OPEN_AT,
+    CONF_COVERS_OPEN_TIME,
     DIM_LEVEL_DEFAULT,
     SETTING_DIM_LEVEL,
     DUSK_ELEVATION_DEFAULT,
@@ -530,6 +533,7 @@ class RoomControlLight(LightEntity):
         # Curtains that follow schedule/dusk: last wanted state (True = open)
         self._covers_open: bool | None = None
         self._covers_init = False
+        self._cancel_cover_time: CALLBACK_TYPE | None = None
         # Lux control: periodic check and when we last adjusted
         self._cancel_lux_interval: CALLBACK_TYPE | None = None
         # Schedule on + sun down: check every minute that the bundles are on.
@@ -669,6 +673,7 @@ class RoomControlLight(LightEntity):
         # A config change (or startup) only remembers what the curtains should
         # be; they move at the next real change of schedule or daylight.
         self._covers_init = False
+        self._setup_cover_time()
         self._evaluate_covers()
         self._update_schedule_dim()
         self._evaluate_schedule()
@@ -1780,12 +1785,67 @@ class RoomControlLight(LightEntity):
         counts (closed at dusk, never opened automatically).
         """
         room = self._room
-        # Closed when it is dark — or already at schemer (room option).
-        phase = self._phase()
-        closed_time = phase == "dark" or (phase == "dusk" and room.get(CONF_COVERS_CLOSE_AT) == "dusk")
-        if active_schedule(self.hass, room) is None:
-            return False if closed_time else None
+        has_schedule = active_schedule(self.hass, room) is not None
+        closed_time = self._covers_closed_time()
+        if not has_schedule:
+            if closed_time:
+                return False
+            # No schedule: only open automatically when "open at" is chosen.
+            return True if self._covers_open_at() is not None else None
         return schedule_allows(self.hass, room) and not closed_time
+
+    def _covers_open_at(self) -> tuple[str, int | None] | None:
+        """("light", None), ("time", minutes after midnight) or None (not chosen)."""
+        room = self._room
+        open_at = room.get(CONF_COVERS_OPEN_AT)
+        if open_at == "light":
+            return "light", None
+        if open_at == "time" and (minutes := hm_minutes(room.get(CONF_COVERS_OPEN_TIME))) is not None:
+            return "time", minutes
+        return None
+
+    def _covers_closed_time(self) -> bool:
+        """Is it a time for closed curtains? Evening: from dark — or schemer (room
+        option "close at"). Morning: until "open at" (sunrise via the Sun
+        integration, or a fixed time); not chosen: until it is light."""
+        open_at = self._covers_open_at()
+        if open_at is not None and open_at[0] == "time":
+            now = dt_util.now()
+            if now.hour * 60 + now.minute < open_at[1]:
+                return True  # not yet the opening time
+            if self._sun_rising():
+                return False  # morning, opening time passed: open (even if still dark)
+        elif open_at is not None and self._sun_rising():
+            return self._sun_down()  # morning: closed until sunrise
+        phase = self._phase()
+        if phase == "dusk":
+            return self._room.get(CONF_COVERS_CLOSE_AT) == "dusk"
+        return phase == "dark"
+
+    def _sun_rising(self) -> bool:
+        """Morning (the sun is rising, per the Sun integration; else before noon)."""
+        state = self.hass.states.get(self._sun_entity())
+        rising = state.attributes.get("rising") if state is not None else None
+        if isinstance(rising, bool):
+            return rising
+        return dt_util.now().hour < 12
+
+    @callback
+    def _setup_cover_time(self) -> None:
+        """A fixed opening time: evaluate the curtains at that minute."""
+        if self._cancel_cover_time:
+            self._cancel_cover_time()
+            self._cancel_cover_time = None
+        open_at = self._covers_open_at()
+        if open_at is None or open_at[0] != "time" or not self._following_covers():
+            return
+
+        @callback
+        def _at_time(_now: Any) -> None:
+            self._evaluate_covers()
+
+        hour, minute = divmod(open_at[1], 60)
+        self._cancel_cover_time = async_track_time_change(self.hass, _at_time, hour=hour, minute=minute, second=1)
 
     @callback
     def _evaluate_covers(self) -> None:
@@ -3024,6 +3084,9 @@ class RoomControlLight(LightEntity):
         if self._cancel_smart_tick:
             self._cancel_smart_tick()
             self._cancel_smart_tick = None
+        if self._cancel_cover_time:
+            self._cancel_cover_time()
+            self._cancel_cover_time = None
         for cancel in self._bright_pending.values():
             cancel()
         self._bright_pending.clear()

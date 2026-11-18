@@ -66,6 +66,11 @@ SETTING_DIM_LEVEL = "dim_level"
 DIM_LEVEL_DEFAULT = 1
 # Room option: following curtains close at "dark" (default) or already at "dusk".
 CONF_COVERS_CLOSE_AT = "covers_close_at"
+# When following curtains open in the morning: "light" (sunrise, per the Sun
+# integration) or "time" (CONF_COVERS_OPEN_TIME, "HH:MM"); unset = as before
+# (schedule rooms: when it is light enough; others: never automatically).
+CONF_COVERS_OPEN_AT = "covers_open_at"
+CONF_COVERS_OPEN_TIME = "covers_open_time"
 # Persons that get a "Later thuis" (home later) switch on the General device.
 SETTING_LATE_HOME_PERSONS = "late_home_persons"
 # Room option: while a "Later thuis" switch is on, the room's bundles don't go off.
