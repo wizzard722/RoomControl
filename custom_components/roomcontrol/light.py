@@ -1354,6 +1354,100 @@ class RoomControlLight(LightEntity):
         """The debug log, newest first."""
         return list(reversed(self._debug))
 
+    def upcoming(self, hours: int = 24) -> list[dict[str, Any]]:
+        """What RoomControl expects to do in this room in the next `hours`
+        (panel "Straks"): time slots starting/ending (and their Dim time),
+        curtains opening/closing, All dim, alarm clocks and the grace period.
+        [{"at": iso, "kind": ..., "names": [...]}], soonest first."""
+        now = dt_util.now()
+        until = now + timedelta(hours=hours)
+        events: list[tuple[datetime, str, list[str]]] = []
+        sun = self.hass.states.get(self._sun_entity())
+
+        def sun_at(attr: str) -> datetime | None:
+            value = sun.attributes.get(attr) if sun is not None else None
+            parsed = dt_util.parse_datetime(value) if isinstance(value, str) else None
+            return dt_util.as_local(parsed) if parsed else None
+
+        def at_time(hm: Any, day: datetime) -> datetime | None:
+            minutes = hm_minutes(hm)
+            if minutes is None:
+                return None
+            return day.replace(hour=minutes // 60, minute=minutes % 60, second=0, microsecond=0)
+
+        def add(when: datetime | None, kind: str, names: list[str]) -> None:
+            if when is not None and now <= when <= until:
+                events.append((when, kind, names))
+
+        # Time slots of bundles with own times.
+        groups = self._room.get(CONF_GROUPS, []) or []
+        for index, group in enumerate(groups):
+            lamps = [e for e in group.get("lights", []) or [] if e in self._members]
+            if not lamps or not self._bopt(lamps[0], "own_times", False):
+                continue
+            name = (group.get("name") or "").strip() or f"Bundel {index + 1}"
+            for slot in self._mode_slots(lamps[0]):
+                days = {d for d in slot.get("days", []) or [] if isinstance(d, int)}
+                start, end = slot.get("start") or {}, slot.get("end") or {}
+                for offset in (-1, 0, 1):
+                    day = now + timedelta(days=offset)
+                    if day.weekday() not in days:
+                        continue
+                    if start.get("type", "time") == "time":
+                        begin = at_time(start.get("time"), day)
+                    else:
+                        begin = sun_at("next_dusk" if start.get("type") == "dusk" else "next_setting") if offset == 0 else None
+                    add(begin, "slot_on", [name])
+                    if end.get("type") == "sunrise":
+                        add(sun_at("next_rising") if offset in (0, -1) else None, "slot_off", [name])
+                    else:
+                        stop = at_time(end.get("time"), day)
+                        if stop is not None and begin is not None and stop <= begin:
+                            stop += timedelta(days=1)
+                        add(stop, "slot_off", [name])
+                    if slot.get("dim_at"):
+                        dim = at_time(slot["dim_at"], day)
+                        if dim is not None and begin is not None and dim < begin:
+                            dim += timedelta(days=1)
+                        add(dim, "slot_dim", [name])
+        # Curtains that follow dark/light.
+        if self._following_covers():
+            open_at = self._covers_open_at()
+            if open_at is not None and open_at[0] == "time":
+                for offset in (0, 1):
+                    add(at_time("%02d:%02d" % divmod(open_at[1], 60), now + timedelta(days=offset)), "covers_open", [])
+            elif open_at is not None:
+                add(sun_at("next_rising"), "covers_open", [])
+            close_at = self._room.get(CONF_COVERS_CLOSE_AT)
+            add(sun_at("next_dusk" if close_at == "dusk" else "next_setting"), "covers_close", [])
+        # All dim (general settings), when this room takes part.
+        window = self._settings().get("all_dim_window")
+        if isinstance(window, dict) and self.follows_dim and self._members:
+            for offset in (0, 1):
+                day = now + timedelta(days=offset)
+                add(at_time(window.get("start"), day), "all_dim_on", [])
+                add(at_time(window.get("end"), day), "all_dim_off", [])
+        # Alarm clocks of this room.
+        clocks = self.hass.data.get(DOMAIN, {}).get("clocks")
+        if clocks is not None:
+            for key, state in getattr(clocks, "states", {}).items():
+                if key.startswith(f"{self._area_id}:") and state.next is not None:
+                    found = clocks.find(key)
+                    name = (found[2].get("name") or found[2].get("time") or "") if found else ""
+                    add(dt_util.as_local(state.next), "clock", [name] if name else [])
+        # The running grace period.
+        if self._grace_until is not None:
+            add(dt_util.as_local(self._grace_until), "grace_off", self._bundle_names(self._idle_lamps()))
+        events.sort(key=lambda e: e[0])
+        seen: set[tuple[str, str, tuple[str, ...]]] = set()
+        out = []
+        for when, kind, names in events:
+            mark = (when.isoformat(timespec="minutes"), kind, tuple(names))
+            if mark not in seen:
+                seen.add(mark)
+                out.append({"at": when.isoformat(), "kind": kind, "names": names})
+        return out[:8]
+
     def debug_now(self) -> dict[str, Any]:
         """What RoomControl sees right now and, per bundle, what it wants."""
         room = self._room

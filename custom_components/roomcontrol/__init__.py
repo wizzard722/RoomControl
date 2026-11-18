@@ -558,6 +558,7 @@ def ws_get_debug(
     connection.send_result(msg["id"], {
         "entries": entity.debug_log() if entity is not None else [],
         "now": entity.debug_now() if entity is not None else None,
+        "upcoming": entity.upcoming() if entity is not None else [],
     })
 
 
