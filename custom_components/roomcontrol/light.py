@@ -1,14 +1,12 @@
 """Light platform: one group-like light entity per Home Assistant area.
 
 Each room light also runs the room's rules:
-- schedules: outside the active schedule nothing is turned on, and the
-  lights go off when the schedule ends;
-- motion (any of the room's or linked rooms' sensors) turns the lights on
-  (if dark enough and someone is home), also outside the schedule; they go
-  off after the room's grace period (0-10 min, default 5) without motion,
-  when motion turned them on, or always during an active schedule;
-- dusk turns the lights on when the sun sets (or when the schedule starts
-  after sunset);
+- time slots (tijdvakken) per bundle: the bundle goes on when a slot starts
+  and off when it ends;
+- motion (any of the room's or linked rooms' sensors, each within its own
+  time window) turns the lights on (if dark enough and someone is home); they
+  go off after the room's grace period (0-10 min, default 5) without motion,
+  when motion turned them on;
 - alarm: lights go off when the alarm goes from disarmed to armed_home;
 - smart options (per room, see learn.py): a grace period that learns, media
   and "the last motion was here" keeping the lights on, a learned standard
@@ -114,8 +112,6 @@ from .const import (
     CONF_FOLLOW_DAYLIGHT,
     DAYLIGHT_UPDATE_INTERVAL,
     SETTING_ALARM_ENTITY,
-    CONF_SCHEDULE_SELECTOR,
-    CONF_SCHEDULES,
     CONF_SUN_ENTITY,
     CONF_TARGET_LUX,
     CONF_TARGET_LUX_ENABLED,
@@ -146,11 +142,9 @@ from .vacuums import SIGNAL_VACUUM_UPDATED
 from .slots import hm_minutes, slot_part
 from .devices import split_identifier
 from .rooms import (
-    active_schedule,
     daylight_kelvin,
     supports_kelvin,
     presence_allows,
-    room_allows,
     room_lights,
     room_locks,
     room_motion_sensors,
@@ -167,7 +161,6 @@ from .rooms import (
     linked_group,
     managed_areas,
     room_persons,
-    schedule_allows,
     stored_room,
 )
 
@@ -191,13 +184,6 @@ def _reads_zero(data: dict[str, Any]) -> bool:
     if ATTR_BRIGHTNESS in data:
         return float(data[ATTR_BRIGHTNESS]) <= ZERO_BRIGHTNESS
     return False
-
-
-def _truthy(value: Any) -> bool:
-    """Schedule block data: true / "true" / "yes" / "on" / 1 count as yes."""
-    if isinstance(value, str):
-        return value.strip().lower() in ("true", "yes", "on", "1", "ja")
-    return value is True or value == 1
 
 
 def _lamp_modes(hass: HomeAssistant, entity_id: str) -> set[str]:
@@ -399,7 +385,7 @@ class LampGroupLight(LightEntity):
     """A lamp group from the panel, as a light on the room's device.
 
     Switching and dimming go through the room light, so fixed levels, the
-    daylight colour and the room's rules (schedule, presence, manual control)
+    daylight colour and the room's rules (time slots, presence, manual control)
     apply exactly as for the room itself.
     """
 
@@ -485,7 +471,7 @@ class LampGroupLight(LightEntity):
             return
         lamps = room.lamps_allowed(self._lamps)
         if self._lamps and not lamps:
-            raise HomeAssistantError(f"{self.name}: lights are blocked (outside schedule or nobody home)")
+            raise HomeAssistantError(f"{self.name}: lights are blocked (nobody home)")
         data = {ATTR_BRIGHTNESS: kwargs[ATTR_BRIGHTNESS]} if ATTR_BRIGHTNESS in kwargs else {}
         await room.async_call_lamps("turn_on", lamps, **data, **_colour_request(kwargs))
 
@@ -529,14 +515,13 @@ class RoomControlLight(LightEntity):
         # key -> (tracked entity ids, unsubscribe)
         self._tracks: dict[str, tuple[tuple[str, ...], CALLBACK_TYPE]] = {}
         self._allowed: bool | None = None
-        self._in_schedule: bool | None = None
-        # Curtains that follow schedule/dusk: last wanted state (True = open)
+        # Curtains that follow dark/light: last wanted state (True = open)
         self._covers_open: bool | None = None
         self._covers_init = False
         self._cancel_cover_time: CALLBACK_TYPE | None = None
         # Lux control: periodic check and when we last adjusted
         self._cancel_lux_interval: CALLBACK_TYPE | None = None
-        # Schedule on + sun down: check every minute that the bundles are on.
+        # Time slot running + sun down: check every minute that the bundles are on.
         self._cancel_evening_check: CALLBACK_TYPE | None = None
         self._evening_last_fix: datetime | None = None
         self._lux_last_adjust: datetime | None = None
@@ -556,8 +541,8 @@ class RoomControlLight(LightEntity):
         # Lamps in Dim because their time slot's Dim time has come
         self._dim_slots: set[str] = set()
         self._dim_option_seen: tuple[bool, ...] | None = None
-        # (schedule on, sun down, someone home) at the last evaluation
-        self._conditions: tuple[bool, bool, bool] | None = None
+        # (sun phase, someone home) at the last evaluation
+        self._conditions: tuple[str, bool] | None = None
         # Debug log: why bundles did or did not go on/off (newest last).
         self._debug: deque[dict[str, Any]] = deque(maxlen=80)
         # "Later thuis": an off was held back; do it once the person is home.
@@ -579,10 +564,9 @@ class RoomControlLight(LightEntity):
         self._last_kelvins: dict[str, int] = {}
         # 1% dim: brightness per lamp before dimming (None = was off)
         # 1% mode, per lamp. Sources: the room button / alarm (all lamps) and
-        # the active schedule's data (dim / dim_<group>). Remembered brightness
-        # per dimmed lamp, restored when no source dims it any more.
+        # time slots with a Dim time. Remembered brightness per dimmed lamp,
+        # restored when no source dims it any more.
         self._dim_room = False
-        self._dim_sched: set[str] = set()
         self._dim_saved: dict[str, int] = {}
         # Smart options. Last no-motion off (adaptive grace period).
         self._idle_off_at: datetime | None = None
@@ -648,15 +632,7 @@ class RoomControlLight(LightEntity):
             self._dim_option_seen = dim_wanted
             self._reconcile_alarm_dim()
 
-        self._track(
-            "schedule",
-            [
-                room.get(CONF_SCHEDULE_SELECTOR, ""),
-                *room.get(CONF_SCHEDULES, []),
-                *room_persons(self.hass, room),
-            ],
-            self._on_schedule_change,
-        )
+        self._track("presence", room_persons(self.hass, room), self._on_presence_change)
         self._track("motion", self._motion_sensors(), self._on_motion_change)
         self._track("media", self._media_players() if room.get(CONF_MEDIA_HOLD) else [], self._on_media_change)
         self._setup_smart_tick()
@@ -671,12 +647,11 @@ class RoomControlLight(LightEntity):
         self._fan_update(write=False)
         self._recompute()
         # A config change (or startup) only remembers what the curtains should
-        # be; they move at the next real change of schedule or daylight.
+        # be; they move at the next real change of daylight or opening time.
         self._covers_init = False
         self._setup_cover_time()
         self._evaluate_covers()
-        self._update_schedule_dim()
-        self._evaluate_schedule()
+        self._evaluate_conditions()
 
     # ── follow daylight ────────────────────────────────────────────────────
 
@@ -706,15 +681,8 @@ class RoomControlLight(LightEntity):
         """Lamps that go on with motion (bundle "on_motion", default yes)."""
         return self._lamps_where("on_motion", True)
 
-    def _schedule_lamps(self) -> list[str]:
-        """Lamps that follow the room's schedule (bundle "follow_schedule",
-        default yes) — not those of bundles with their own times."""
-        own = set(self._own_lamps())
-        return [e for e in self._lamps_where("follow_schedule", True) if e not in own]
-
     # ── own times per bundle ───────────────────────────────────────────────
-    # A bundle with "own_times" has its own time slots instead of the room's
-    # schedule: [{"days": [0..6] (Monday = 0), "start": {"type": "time",
+    # A bundle with "own_times" has its own time slots: [{"days": [0..6] (Monday = 0), "start": {"type": "time",
     # "time": "HH:MM"} | {"type": "dusk"} | {"type": "dark"}, "end": {"type":
     # "time", "time": "HH:MM"} | {"type": "sunrise"}, "dim_at": "HH:MM" (optional:
     # Dim from then until the end)}]. A slot that ends
@@ -770,7 +738,7 @@ class RoomControlLight(LightEntity):
         self.hass.async_create_task(self._async_apply_dim(before, after))
 
     def _dim_pct(self, lamp: str) -> int:
-        """Dim level of a lamp (Dim button, alarm, schedule): the general
+        """Dim level of a lamp (Dim button, alarm, time slot): the general
         setting (default 1%)."""
         value = self._settings().get(SETTING_DIM_LEVEL, DIM_LEVEL_DEFAULT)
         return int(min(100, max(1, value))) if isinstance(value, (int, float)) and value > 0 else DIM_LEVEL_DEFAULT
@@ -801,10 +769,8 @@ class RoomControlLight(LightEntity):
         return [e for e in self._own_lamps() if self._own_slot_now(e) is not None]
 
     def _dusk_bundle(self, lamp: str) -> bool:
-        """On from schemer: the room-schedule setting, or a running own slot
-        that starts at schemer (both get the schemer level / lux control)."""
-        if self._bopt(lamp, "on_from", "schedule") == "dusk" and not self._bopt(lamp, "own_times", False):
-            return True
+        """A running own slot that starts at schemer (it gets the schemer level /
+        lux control)."""
         slot = self._own_slot_now(lamp)
         return slot is not None and (slot.get("start") or {}).get("type") == "dusk"
 
@@ -813,8 +779,7 @@ class RoomControlLight(LightEntity):
         """Slots start or end: their lamps go on (at their level) or off
         (unless someone is moving and motion may keep them on)."""
         active = set(self._own_active())
-        # First check (startup / config loaded): like the room's schedule, the
-        # lamps take the state their slots ask for right away.
+        # First check (startup / config loaded): the lamps take the state their slots ask for right away.
         previous, self._own_prev = (self._own_prev or set()), active
         if self._manual or self._alarm_mode() == "home":
             return False
@@ -840,31 +805,14 @@ class RoomControlLight(LightEntity):
             self._regulate_lux(force=True)
         return acted
 
-    def _dusk_lamps(self) -> list[str]:
-        """No longer used: during the schedule, sun down means the lamps burn at
-        their level (see _evening_lamps); outside it only motion switches on."""
-        return []
-
-    def _room_allows(self) -> bool:
-        """Someone linked is home, and the schedule allows light or it is dark
-        for lamps that go on at dusk."""
-        room = self._room
-        dusk = bool(self._dusk_lamps()) and self._sun_down()
-        return presence_allows(self.hass, room) and (schedule_allows(self.hass, room) or dusk)
-
     def lamps_allowed(self, lamps: list[str]) -> list[str]:
-        """Of `lamps`, those that may be switched on now (by hand or automatically).
-
-        Lamps that do not follow the schedule may always go on (if someone is
-        home); during manual control everything may.
-        """
+        """Of `lamps`, those that may be switched on now (by hand or automatically):
+        all of them when someone is home; during manual control always."""
         if self._manual:
             return list(lamps)
         if not presence_allows(self.hass, self._room):
             return []
-        sched = set(self._schedule_lamps())
-        ok = self._room_allows()
-        return [e for e in lamps if e not in sched or ok]
+        return list(lamps)
 
     def _follows_daylight(self) -> bool:
         return bool(self._daylight_lamps())
@@ -1022,8 +970,6 @@ class RoomControlLight(LightEntity):
         self._attr_max_color_temp_kelvin = colour["max_kelvin"]
         self._attr_extra_state_attributes = {
             ATTR_ENTITY_ID: list(self._members),
-            "active_schedule": active_schedule(self.hass, self._room),
-            "schedule_allows": schedule_allows(self.hass, self._room),
             "presence_allows": presence_allows(self.hass, self._room),
             "daylight_kelvin": self._kelvin(),
             "dimmed": self._dim_room,
@@ -1104,9 +1050,9 @@ class RoomControlLight(LightEntity):
                 self.hass.async_create_task(self._async_adjust(new.entity_id, kelvin, pct))
         if (
             new is not None and new.state != STATE_ON and old is not None and old.state == STATE_ON
-            and new.entity_id in self._evening_lamps() and self._keep_evening_on("schedule, sun down: back on")
+            and new.entity_id in self._evening_lamps() and self._keep_evening_on("time slot, sun down: back on")
         ):
-            pass  # schedule on + sun down: this bundle stays on
+            pass  # time slot running + sun down: this bundle stays on
         if new is not None and new.state != STATE_ON:
             self._hand_set.discard(new.entity_id)  # off: RoomControl may set it again next time
         if (
@@ -1146,7 +1092,7 @@ class RoomControlLight(LightEntity):
     @callback
     def _apply_motion_config_change(self) -> None:
         """A bundle's "on_motion" was switched in the panel:
-        - switched off: its lamps that are on go off (unless the schedule or
+        - switched off: its lamps that are on go off (unless a time slot or
           lux control keeps them on now — that would only switch them on again);
         - switched on: if there is motion now, its lamps go on, as motion would."""
         now = set(self._motion_lamps())
@@ -1206,17 +1152,6 @@ class RoomControlLight(LightEntity):
             return "dusk"
         return "light"
 
-    def _phase_ok(self, lamp: str, phase: str | None = None) -> bool:
-        """May this lamp burn now for the schedule? Bundles "on from schemer"
-        or "on from donker" wait for that phase; others: the whole schedule."""
-        on_from = self._bopt(lamp, "on_from", "schedule")
-        phase = phase or self._phase()
-        if on_from == "dusk":
-            return phase in ("dusk", "dark")
-        if on_from == "dark":
-            return phase == "dark"
-        return True
-
     def _dusk_progress(self) -> float:
         """How far schemer is: 0 when it starts, 1 when the sun sets."""
         state = self.hass.states.get(self._sun_entity())
@@ -1272,27 +1207,19 @@ class RoomControlLight(LightEntity):
                 out[e] = self._normal_pct(e)
         return out
 
-    # ── what the schedule, the sun and the alarm ask for ───────────────────
+    # ── what the time slots, the sun and the alarm ask for ─────────────────
     #
-    # Schedule on:
+    # A bundle's time slot running:
     #   sun up, target lux on → lux control: lamps on/brighter/dimmer/off until
-    #                            the target lux; motion does nothing
-    #   sun up, no target lux → motion switches on below "dark from", off after
-    #                            the grace period
-    #   sun down              → lamps burn at their bundle's level; no lux
-    #                            control, no motion
-    # Schedule off (or none): only motion switches on — when the sun is down,
-    #   or with the sun up when the room is darker than "dark from"; off after
-    #   the grace period. When the schedule ends: off.
+    #                            the target lux
+    #   otherwise             → lamps burn at their bundle's level
+    # No slot running: only motion switches on — when the sun is down, or with
+    #   the sun up when the room is darker than "dark from"; off after the
+    #   grace period. When a slot ends: off (unless motion keeps them on).
     # Alarm: armed home → off (unless there is motion), motion → on at Dim, off
     #   after the grace period; or (room option "no_motion") off, motion does
-    #   nothing, the alarm clock / by hand still switch on; armed away → off, except bundles marked to keep
-    #   following the schedule.
-
-    def _schedule_on(self) -> bool:
-        schedule = active_schedule(self.hass, self._room)
-        state = self.hass.states.get(schedule) if schedule else None
-        return state is not None and state.state == "on"
+    #   nothing, the alarm clock / by hand still switch on; armed away → off,
+    #   except bundles marked to keep following their time slots.
 
     def _alarm_mode(self) -> str:
         """'home', 'away' or 'normal' (disarmed / other / no alarm panel)."""
@@ -1305,29 +1232,23 @@ class RoomControlLight(LightEntity):
 
     def _alarm_blocked(self) -> set[str]:
         """Lamps that must stay off for the alarm: armed away, unless the room
-        ignores armed away (then it keeps following its schedule)."""
+        ignores armed away (then it keeps following its time slots)."""
         if self._alarm_mode() != "away" or self._room.get(CONF_AWAY_FOLLOW_SCHEDULE):
             return set()
         return {e for e in self._members if not self._bopt(e, CONF_AWAY_FOLLOW_SCHEDULE, False)}
 
     def _evening_lamps(self) -> list[str]:
-        """Schedule on: the lamps that follow the schedule burn at their level
-        (the schedule wins over motion). During the day, bundles with lux
-        control are left to the target lux instead (see _lux_lamps_now)."""
+        """Bundles whose time slot runs burn at their level (the slot wins over
+        motion). During the day, bundles with lux control are left to the
+        target lux instead (see _lux_lamps_now)."""
         if self._alarm_mode() == "home":
             return []
         blocked = self._alarm_blocked()
         lux = set(self._lux_lamps_now())
-        phase = self._phase()
-        room = [
-            e for e in self._schedule_lamps()
-            if self._schedule_on() and e not in blocked and e not in lux and self._phase_ok(e, phase)
-        ]
-        own = [e for e in self._own_active() if e not in blocked and e not in lux]
-        return room + own
+        return [e for e in self._own_active() if e not in blocked and e not in lux]
 
     def _lux_lamps_now(self) -> list[str]:
-        """Schedule on, sun up, target lux on: lamps lux control drives now."""
+        """Time slot running, sun up, target lux on: lamps lux control drives now."""
         room = self._room
         if (
             self._alarm_mode() == "home" or self._sun_down()
@@ -1335,9 +1256,8 @@ class RoomControlLight(LightEntity):
         ):
             return []
         blocked = self._alarm_blocked()
-        # Room-schedule lamps while it runs, plus own-times lamps whose slot runs.
-        sched = set(self._schedule_lamps()) if self._schedule_on() else set()
-        sched |= set(self._own_active())
+        # Lamps of bundles whose time slot runs.
+        sched = set(self._own_active())
         if not sched:
             return []
         clocks = self.hass.data.get(DOMAIN, {}).get("clocks")
@@ -1351,7 +1271,6 @@ class RoomControlLight(LightEntity):
         return [
             e for e in self._members
             if e in lamps and e in sched and e not in blocked and e not in waking
-            and (self._bopt(e, "own_times", False) or self._phase_ok(e, phase))
         ]
 
     def _motion_ok(self, lamp: str) -> bool:
@@ -1362,8 +1281,8 @@ class RoomControlLight(LightEntity):
         if lamp in self._alarm_blocked():
             return False
         if lamp in self._evening_lamps() or lamp in self._lux_lamps_now():
-            return False  # the schedule decides these now (it wins over motion)
-        # Schedule off (or a bundle that doesn't follow it): motion switches on —
+            return False  # a time slot decides these now (it wins over motion)
+        # No slot running: motion switches on —
         # with the sun up only when the room is darker than "dark from" (no lux
         # sensor or no threshold: always).
         return self._sun_down() or self._is_dark()
@@ -1409,7 +1328,6 @@ class RoomControlLight(LightEntity):
         evening = set(self._evening_lamps())
         lux_now = set(self._lux_lamps_now())
         blocked = self._alarm_blocked()
-        sched = set(self._schedule_lamps())
         lux_ctrl = set(self._lux_control_lamps())
         motion_lamps = set(self._motion_lamps())
         is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
@@ -1426,27 +1344,22 @@ class RoomControlLight(LightEntity):
             elif self._alarm_mode() == "home":
                 wants = "motion_1pct"
             elif first in evening:
-                wants = "on_schedule"
+                wants = "on_slot"
             elif first in lux_now:
                 wants = "lux"
             elif first in motion_lamps and self._motion_ok(first):
                 wants = "motion"
-            elif first in sched and not self._schedule_on():
-                wants = "off_schedule" if not self._sun_down() else "motion"
             else:
                 wants = "nothing"
             bundles.append({
                 "name": (group.get("name") or "").strip() or f"Bundel {index + 1}",
                 "on": any(is_on(e) for e in lamps),
-                "follows_schedule": first in sched,
                 "lux_control": first in lux_ctrl,
                 "on_motion": first in motion_lamps,
                 "wants": wants,
             })
         lux = room_lux(self.hass, room) if room_lux_sensors(room) else None
         return {
-            "schedule": active_schedule(self.hass, room),
-            "schedule_on": self._schedule_on(),
             "sun_entity": self._sun_entity(),
             "sun_state": sun.state if sun else None,
             "sun_down": self._sun_down(),
@@ -1506,14 +1419,14 @@ class RoomControlLight(LightEntity):
         lamps = [e for e in lamps if e not in blocked]
         if blocked & set(wanted):
             self._dbg("blocked", reason, sorted(blocked & set(wanted)), why="armed_away")
-        # Motion only needs someone home; it works outside the schedule too.
+        # Motion only needs someone home.
         if by_motion:
             lamps = lamps if presence_allows(self.hass, self._room) else []
         else:
             lamps = self.lamps_allowed(lamps)
         if not lamps:
             if wanted and not (blocked and set(wanted) <= blocked):
-                why = "nobody_home" if not presence_allows(self.hass, self._room) else "schedule"
+                why = "nobody_home"
                 self._dbg("blocked", reason, wanted, why=why)
             return
         if self._hand_set:
@@ -1547,7 +1460,7 @@ class RoomControlLight(LightEntity):
                     if (st := self.hass.states.get(e)) is not None and st.state not in (STATE_ON, "unavailable", "unknown")
                 ]
                 if off:
-                    # Straight to the lamps: presence, schedule and alarm don't stop this.
+                    # Straight to the lamps: presence and alarm don't stop this.
                     self._dbg("on", "late home", off)
                     self._late_pending = True
                     self.hass.async_create_task(self._async_call("turn_on", lamps=off))
@@ -1583,8 +1496,8 @@ class RoomControlLight(LightEntity):
         self.hass.async_create_task(self._async_call("turn_off", lamps=lamps))
 
     @callback
-    def _keep_evening_on(self, reason: str = "schedule, sun down") -> bool:
-        """Schedule on and sun down: the bundles that follow the schedule are
+    def _keep_evening_on(self, reason: str = "time slot, sun down") -> bool:
+        """Time slot running and sun down: its bundles are
         always on — motion, the target lux etc. don't matter then. A bundle
         that is off (switched off by hand, a wall switch, …) goes on again.
         Not during manual control, armed home/away or with nobody home."""
@@ -1624,7 +1537,7 @@ class RoomControlLight(LightEntity):
 
     @callback
     def _setup_evening_check(self) -> None:
-        wanted = (bool(self._schedule_lamps()) and bool(self._room.get(CONF_SCHEDULES))) or bool(self._own_lamps())
+        wanted = bool(self._own_lamps())
         if wanted and self._cancel_evening_check is None:
             self._cancel_evening_check = async_track_time_interval(
                 self.hass, self._evening_tick, timedelta(seconds=60)
@@ -1634,21 +1547,19 @@ class RoomControlLight(LightEntity):
             self._cancel_evening_check = None
 
     @callback
-    def _evaluate_schedule(self) -> bool:
-        """Act on changes of schedule, sun and presence. At startup the room
-        takes the state the schedule asks for right away (schedule on + sun
-        down: the bundles on; schedule on + sun up: lux control starts)."""
+    def _evaluate_conditions(self) -> bool:
+        """Act on changes of sun phase and presence. At startup the room takes
+        the state its running time slots ask for right away (sun down: the
+        bundles on; sun up: lux control starts)."""
         room = self._room
         present = presence_allows(self.hass, room)
-        key = (self._schedule_on(), self._phase(), present)
+        key = (self._phase(), present)
         previous, self._conditions = self._conditions, key
-        self._allowed = self._room_allows()
+        self._allowed = present
         if self._manual:
             return False
         if previous is None:
-            sched_on, phase, _ = key
-            self._dbg("info", "conditions", schedule="on" if sched_on else "off",
-                      sun=phase, home="yes" if present else "no")
+            self._dbg("info", "conditions", sun=key[0], home="yes" if present else "no")
             if self._alarm_mode() == "home" or not present:
                 return False
             if self._phase() != "light" and self._keep_evening_on():
@@ -1656,58 +1567,23 @@ class RoomControlLight(LightEntity):
             lamps = self._evening_lamps()
             is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
             if lamps and not any(is_on(e) for e in lamps):
-                self._auto_on("schedule", lamps=lamps, levels=self._phase_levels(lamps))
+                self._auto_on("time slot", lamps=lamps, levels=self._phase_levels(lamps))
                 return True
             if self._lux_lamps_now():
                 self._regulate_lux(force=True)
             return False
-        was_on, was_phase, was_present = previous
-        sched_on, phase, _ = key
-        sun_down = phase == "dark"
+        _was_phase, was_present = previous
         if previous != key:
-            self._dbg("info", "conditions", schedule="on" if sched_on else "off",
-                      sun=phase, home="yes" if present else "no")
-        acted = False
+            self._dbg("info", "conditions", sun=key[0], home="yes" if present else "no")
         if was_present and not present:
             self._auto_off("nobody home")
             return True
-        if self._alarm_mode() == "home":
-            return False  # armed home: only motion counts
-        if was_on and not sched_on:
-            # Schedule ended: off, unless someone is moving and motion may keep it on.
-            lamps = self._schedule_lamps()
-            if self._any_motion() and (sun_down or self._is_dark()):
-                self._on_by_motion = True
-            else:
-                self._auto_off("schedule ended", lamps=lamps)
-                acted = True
-        elif sched_on and (not was_on or phase != was_phase):
-            # Schedule starts, or licht/schemer/donker changes during it: the
-            # lamps that follow the schedule (and whose phase it is) burn at
-            # their level (the schedule wins over motion); during the day
-            # bundles with lux control follow the target lux.
-            if lamps := self._evening_lamps():
-                self._on_by_motion = False
-                reason = {"dark": "schedule, dark", "dusk": "schedule, dusk"}.get(phase, "schedule")
-                self._auto_on(reason, lamps=lamps, levels=self._phase_levels(lamps))
-                acted = True
-            # Bundles on from schemer/donker whose phase is over (it got light): off.
-            is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
-            if done := [
-                e for e in self._schedule_lamps()
-                if self._bopt(e, "on_from", "schedule") != "schedule" and not self._phase_ok(e, phase) and is_on(e)
-            ]:
-                self._auto_off("light again", lamps=done)
-                acted = True
-            if self._lux_lamps_now():
-                self._regulate_lux(force=True)
-        return acted
+        return False
 
     @callback
-    def _on_schedule_change(self, _event: Event) -> None:
-        self._update_schedule_dim()
+    def _on_presence_change(self, _event: Event) -> None:
         self._evaluate_covers()
-        self._evaluate_schedule()
+        self._evaluate_conditions()
         self._recompute()
         self._check_idle()
         self.async_write_ha_state()
@@ -1765,7 +1641,7 @@ class RoomControlLight(LightEntity):
     # ── curtains ───────────────────────────────────────────────────────────
 
     def _following_covers(self) -> list[str]:
-        """Curtains that follow the schedule and dusk: all of them (room option),
+        """Curtains that follow dark/light: all of them (room option),
         or those in an older curtain group that follows."""
         room = self._room
         if room.get(CONF_COVERS_FOLLOW):
@@ -1780,19 +1656,14 @@ class RoomControlLight(LightEntity):
     def _covers_wanted_open(self) -> bool | None:
         """True = open, False = closed, None = no opinion (stay as they are).
 
-        Open while the active schedule is on and the sun is up; closed when the
-        schedule is off or it is dark. Without an active schedule only darkness
-        counts (closed at dusk, never opened automatically).
+        Closed in the evening per "close at" (dusk/dark); opened in the morning
+        per "open at" (sunrise or a fixed time); without "open at" never opened
+        automatically.
         """
-        room = self._room
-        has_schedule = active_schedule(self.hass, room) is not None
-        closed_time = self._covers_closed_time()
-        if not has_schedule:
-            if closed_time:
-                return False
-            # No schedule: only open automatically when "open at" is chosen.
-            return True if self._covers_open_at() is not None else None
-        return schedule_allows(self.hass, room) and not closed_time
+        if self._covers_closed_time():
+            return False
+        # Only opened automatically when "open at" is chosen.
+        return True if self._covers_open_at() is not None else None
 
     def _covers_open_at(self) -> tuple[str, int | None] | None:
         """("light", None), ("time", minutes after midnight) or None (not chosen)."""
@@ -2631,7 +2502,7 @@ class RoomControlLight(LightEntity):
             if self._alarm_mode() == "away":
                 return "armed_away"
             if self._evening_lamps():
-                return "schedule"
+                return "slot"
             if self._lux_lamps_now():
                 return "lux_control"
             return "too_bright"  # sun up and lighter than "dark from"
@@ -2639,19 +2510,11 @@ class RoomControlLight(LightEntity):
             return "already_on"
         return None
 
-    def _schedule_needs_motion(self) -> bool:
-        """With motion sensors and an active schedule, light needs motion to stay on."""
-        return bool(self._motion_sensors()) and (
-            active_schedule(self.hass, self._room) is not None
-            and schedule_allows(self.hass, self._room)
-        )
-
     @callback
     def _check_idle(self) -> None:
         """Start the no-motion timer when lights are on without motion; else stop it.
 
-        Applies to lights motion switched on, and during an active schedule to
-        any light in the room (however it was switched on).
+        Applies to lights motion (or the door) switched on.
         """
         hold = self._last_motion_hold_left()
         idle_lamps = bool(self._idle_lamps())
@@ -2677,8 +2540,7 @@ class RoomControlLight(LightEntity):
 
     def _idle_lamps(self) -> list[str]:
         """Lamps that are on and should go off after the grace period without motion:
-        those motion or the door switched on, those following an active schedule
-        that needs motion, and (armed home, motion only) all of them."""
+        those motion or the door switched on, and (armed home, motion only) all of them."""
         on = [e for e in self._members if (st := self.hass.states.get(e)) is not None and st.state == STATE_ON]
         if not on:
             return []
@@ -2686,12 +2548,10 @@ class RoomControlLight(LightEntity):
             return []  # armed home, not on motion: what is on (clock, by hand) stays on
         if self._alarm_mode() == "home":
             return on  # armed home: everything follows motion
-        held = set(self._evening_lamps()) | set(self._lux_lamps_now())  # the schedule holds these
+        held = set(self._evening_lamps()) | set(self._lux_lamps_now())  # a time slot holds these
         lamps: set[str] = set()
         if self._on_by_motion:
             lamps |= set(self._motion_lamps()) | set(self._door_lamps())
-        if self._schedule_needs_motion() and not self._sun_down():
-            lamps |= set(self._schedule_lamps())
         return [e for e in on if e in lamps and e not in held]
 
     def _fan_run_on(self) -> int:
@@ -2731,7 +2591,7 @@ class RoomControlLight(LightEntity):
     def _on_sun_change(self, event: Event) -> None:
         self._evaluate_covers()
         own = self._evaluate_own_times()  # slots that start at schemer/donker or end at sunrise
-        if not self._evaluate_schedule() and not own:
+        if not self._evaluate_conditions() and not own:
             self._dusk_ramp()  # schemer: a bit brighter as the sun sinks
         if self._late_home_holds():
             self._on_late_home()  # sunset while someone comes home later: bundles on
@@ -2769,9 +2629,9 @@ class RoomControlLight(LightEntity):
                         self._alarm_last_off = dt_util.utcnow()
                     self._auto_off("alarm armed away", lamps=lamps)
             elif previous in (ALARM_ARMED_HOME, ALARM_ARMED_AWAY):
-                # Back to normal: if the schedule wants light now, give it.
+                # Back to normal: if a time slot wants light now, give it.
                 if lamps := self._evening_lamps():
-                    self._auto_on("alarm off, schedule, sun down", lamps=lamps)
+                    self._auto_on("alarm off, time slot, sun down", lamps=lamps)
                 elif self._lux_lamps_now():
                     self._regulate_lux(force=True)
         # Dim at armed home.
@@ -2788,7 +2648,7 @@ class RoomControlLight(LightEntity):
         return state.state if state is not None else None
 
     def _armed_home_motion_only(self) -> bool:
-        """Armed home: nothing but motion switches the lamps on (dusk, schedule,
+        """Armed home: nothing but motion switches the lamps on (dusk, time slots,
         door, lux control don't); in "no_motion" mode motion doesn't either."""
         return self._alarm_mode() == "home"
 
@@ -2905,7 +2765,7 @@ class RoomControlLight(LightEntity):
         return self._dim_room
 
     def _dimmed_lamps(self) -> set[str]:
-        lamps = set(self._dim_sched) | set(self._dim_slots)
+        lamps = set(self._dim_slots)
         if self._dim_room:
             lamps |= {e for e in self._members if self._bopt(e, "dim", True)}
         return lamps & set(self._members)
@@ -2960,52 +2820,6 @@ class RoomControlLight(LightEntity):
         """A lamp in 1% mode: remember what it would have burned at."""
         if self._lamp_dimmed(entity_id):
             self._dim_saved[entity_id] = int(min(255, max(1, brightness)))
-
-    # ── 1% from the schedule's data (dim / dim_light1 / dim_<group name>) ──
-
-    def _schedule_dim_lamps(self) -> set[str]:
-        """Lamps the active schedule block asks to dim.
-
-        The schedule helper's block data shows up in its attributes while the
-        block is active: `dim: true` dims the whole room, `dim_light1: true`
-        lamp group 1 (`dim_light2` group 2, ...) and `dim_<group name>: true`
-        the group with that name (lowercase, spaces as _).
-        """
-        room = self._room
-        schedule = active_schedule(self.hass, room)
-        state = self.hass.states.get(schedule) if schedule else None
-        if state is None or state.state != "on":
-            return set()
-        groups = room.get(CONF_GROUPS, []) or []
-        lamps: set[str] = set()
-        for key, value in state.attributes.items():
-            if not _truthy(value) or not str(key).startswith("dim"):
-                continue
-            key = str(key).lower()
-            if key == "dim":
-                lamps |= {e for e in self._members if self._bopt(e, "dim", True)}
-                continue
-            if not key.startswith("dim_"):
-                continue
-            name = key[4:]
-            for index, group in enumerate(groups):
-                if name in (f"light{index + 1}", slugify(group.get("name") or "")):
-                    lamps |= set(group.get("lights", []))
-        return lamps & set(self._members)
-
-    @callback
-    def _update_schedule_dim(self) -> None:
-        if self._manual:
-            return
-        wanted = self._schedule_dim_lamps()
-        if wanted == self._dim_sched:
-            return
-        before = self._dimmed_lamps()
-        self._dim_sched = wanted
-        after = self._dimmed_lamps()
-        self.hass.async_create_task(self._async_apply_dim(before, after))
-        self._recompute()
-        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         self.hass.data[DOMAIN].setdefault("entities", {})[self._area_id] = self
@@ -3162,7 +2976,7 @@ class RoomControlLight(LightEntity):
         lamps = self.lamps_allowed(list(self._members))
         if self._members and not lamps:
             raise HomeAssistantError(
-                f"{self.name or self.entity_id}: lights are blocked (outside schedule or nobody home)"
+                f"{self.name or self.entity_id}: lights are blocked (nobody home)"
             )
         data = {ATTR_BRIGHTNESS: kwargs[ATTR_BRIGHTNESS]} if ATTR_BRIGHTNESS in kwargs else {}
         await self._async_call("turn_on", lamps=lamps, **data, **_colour_request(kwargs))

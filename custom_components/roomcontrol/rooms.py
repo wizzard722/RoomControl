@@ -28,8 +28,6 @@ from .const import (
     DAYLIGHT_MIN_KELVIN,
     KELVIN_COLOR_MODES,
     CONF_PERSONS,
-    CONF_SCHEDULE_SELECTOR,
-    CONF_SCHEDULES,
     DOMAIN,
     SETTING_PERSONS,
 )
@@ -88,45 +86,6 @@ def room_lights(hass: HomeAssistant, area_id: str) -> list[str]:
 
 
 @callback
-def active_schedule(hass: HomeAssistant, room: dict[str, Any] | None) -> str | None:
-    """The schedule.* entity that currently limits this room, or None.
-
-    No schedules → None. No input_number → the first schedule. Otherwise the
-    input_number value picks it (1 = first). 0, out of range, or a missing or
-    non-numeric input_number → None (no limit, lights stay usable).
-    """
-    schedules = [s for s in (room or {}).get(CONF_SCHEDULES, []) if s]
-    if not schedules:
-        return None
-    selector = (room or {}).get(CONF_SCHEDULE_SELECTOR)
-    if not selector:
-        return schedules[0]
-    state = hass.states.get(selector)
-    try:
-        index = int(float(state.state)) if state else 0
-    except ValueError:
-        return None
-    if 1 <= index <= len(schedules):
-        return schedules[index - 1]
-    return None
-
-
-@callback
-def schedule_allows(hass: HomeAssistant, room: dict[str, Any] | None) -> bool:
-    """True when lights may be on: no active schedule, or it is 'on' now.
-
-    A schedule entity that is missing or unavailable blocks nothing.
-    """
-    schedule = active_schedule(hass, room)
-    if schedule is None:
-        return True
-    state = hass.states.get(schedule)
-    if state is None or state.state not in ("on", "off"):
-        return True
-    return state.state == "on"
-
-
-@callback
 def room_persons(hass: HomeAssistant, room: dict[str, Any] | None) -> list[str]:
     """Persons linked to the room that are enabled in the global settings."""
     enabled = set(hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_PERSONS, []))
@@ -140,26 +99,6 @@ def presence_allows(hass: HomeAssistant, room: dict[str, Any] | None) -> bool:
     if not persons:
         return True
     return any((st := hass.states.get(p)) is not None and st.state == "home" for p in persons)
-
-
-@callback
-def dusk_override(hass: HomeAssistant, room: dict[str, Any] | None) -> bool:
-    """"Turn on at dusk" is set and the sun is down: light is wanted, schedule or not."""
-    room = room or {}
-    if not room.get("turn_on_at_dusk"):
-        return False
-    sun = hass.states.get(room.get("sun_entity") or "sun.sun")
-    return sun is not None and sun.state == "below_horizon"
-
-
-@callback
-def room_allows(hass: HomeAssistant, room: dict[str, Any] | None) -> bool:
-    """Lights may be on: someone linked is home, and either the schedule
-    allows it or it is dusk with "turn on at dusk" set (dusk overrides an off
-    schedule)."""
-    return presence_allows(hass, room) and (
-        schedule_allows(hass, room) or dusk_override(hass, room)
-    )
 
 
 @callback

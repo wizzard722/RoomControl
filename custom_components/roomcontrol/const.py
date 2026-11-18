@@ -22,7 +22,7 @@ SIGNAL_CONFIG_UPDATED = f"{DOMAIN}_config_updated"
 # Room option: turn the room's lights off when the alarm goes
 # from disarmed to armed_home.
 CONF_OFF_ON_ARMED_HOME = "turn_off_on_armed_home"
-# Room option: while the alarm is armed_home (and the schedule allows light),
+# Room option: while the alarm is armed_home,
 # lights react to motion only: they go off after the grace period without
 # motion (however they were switched on) and dusk/door switch nothing on.
 CONF_ARMED_HOME_MOTION_ONLY = "armed_home_motion_only"
@@ -35,11 +35,6 @@ CONF_ARMED_HOME_MODE = "armed_home_mode"
 ARMED_HOME_MOTION = "motion"
 ARMED_HOME_NO_MOTION = "no_motion"
 CONF_ALARM_ENTITY = "alarm_entity"
-
-# Room options: schedules (schedule.* helpers, in order) and the input_number
-# whose value picks the active one (1 = first; 0/out of range = no limit).
-CONF_SCHEDULES = "schedules"
-CONF_SCHEDULE_SELECTOR = "schedule_selector"
 
 # Room option: person.* entities; lights are only allowed while at least one
 # of them is home (only persons enabled in the global settings count).
@@ -68,7 +63,7 @@ DIM_LEVEL_DEFAULT = 1
 CONF_COVERS_CLOSE_AT = "covers_close_at"
 # When following curtains open in the morning: "light" (sunrise, per the Sun
 # integration) or "time" (CONF_COVERS_OPEN_TIME, "HH:MM"); unset = as before
-# (schedule rooms: when it is light enough; others: never automatically).
+# (never automatically).
 CONF_COVERS_OPEN_AT = "covers_open_at"
 CONF_COVERS_OPEN_TIME = "covers_open_time"
 # Persons that get a "Later thuis" (home later) switch on the General device.
@@ -162,11 +157,11 @@ LUX_CONTROL_DEADBAND = 0.10  # within ±10% of the target: leave it
 LUX_CONTROL_MAX_STEP = 0.25  # change brightness by at most 25% per step
 LUX_CONTROL_START_PCT = 30  # lamps switched on by lux control start here
 LUX_CONTROL_MIN_BRIGHTNESS = 8  # of 255 (~3%): lower than this the lamps go off
-# Room option: ignore armed_away here — the room keeps following its schedule
-# (and goes off when the schedule ends). Older rooms may have it per bundle.
+# Room option: ignore armed_away here — the room keeps following its time
+# slots (and goes off when a slot ends). Older rooms may have it per bundle.
 CONF_AWAY_FOLLOW_SCHEDULE = "away_follow_schedule"
 # Room option: the room's media players (media_player.*), shown in the panel.
-# For now they don't change any rule (lamps, schedule, alarm).
+# For now they don't change any rule (lamps, time slots, alarm).
 CONF_MEDIA_PLAYERS = "media_players"
 
 # Smart room options (all off unless switched on in the panel).
@@ -205,8 +200,7 @@ CONF_DOOR_TURN_ON = "door_turn_on"
 CONF_DOOR_GROUPS = "door_groups"
 # Room option: curtains/blinds (cover.*) and named curtain groups
 # [{"id", "name", "covers": [entity_id], "follow": bool}]. A group with
-# "follow" opens when the room's schedule starts (sun up) and closes when it
-# ends, or earlier at dusk. Without an active schedule: closes at dusk only.
+# "follow" closes at dusk/dark and opens per "open at" (see below).
 CONF_COVERS = "covers"
 # Room option: locks, [{"entity_id", "slots": [lock times: {"name", "days",
 # "time": "HH:MM", "holiday", "enabled": bool (default yes)}, see locks.py], "slots_enabled": bool (default yes), "away_lock": bool, "away_minutes": int,
@@ -215,7 +209,7 @@ CONF_COVERS = "covers"
 CONF_LOCKS = "locks"
 LOCK_AWAY_MINUTES_DEFAULT = 5
 CONF_COVER_GROUPS = "cover_groups"  # older rooms; the panel no longer makes these
-# Room option: all of the room's curtains follow the schedule and dusk.
+# Room option: all of the room's curtains follow dark/light.
 CONF_COVERS_FOLLOW = "covers_follow"
 # Room option: curtains that run the wrong way round (open = closed), as a
 # list of cover entity ids. RoomControl swaps open/close (and position
