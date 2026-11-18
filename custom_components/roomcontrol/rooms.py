@@ -166,15 +166,32 @@ def linked_group(hass: HomeAssistant, area_id: str, key: str = CONF_LINKED_ROOMS
 
 
 @callback
-def motion_window(hass: HomeAssistant, sensor: str) -> tuple[int, int] | None:
-    """(start, end) in minutes after midnight of the sensor's time window, set on
-    the room the sensor belongs to; None = no window (always)."""
+def motion_slots(hass: HomeAssistant, sensor: str) -> list[dict[str, Any]] | None:
+    """The time slots in which the sensor switches lights on (the same slots as
+    light bundles), set on the room the sensor belongs to; None = always. An
+    older single window {"start", "end"} counts as one slot on every day."""
     for room in hass.data.get(DOMAIN, {}).get("rooms", []):
-        window = (room.get(CONF_MOTION_WINDOWS) or {}).get(sensor)
-        if isinstance(window, dict) and sensor in room_motion_sensors(room):
-            start, end = hm_minutes(window.get("start")), hm_minutes(window.get("end"))
+        value = (room.get(CONF_MOTION_WINDOWS) or {}).get(sensor)
+        if sensor not in room_motion_sensors(room):
+            continue
+        if isinstance(value, list):
+            slots = [s for s in value if isinstance(s, dict)]
+            return slots or None
+        if isinstance(value, dict):
+            start, end = hm_minutes(value.get("start")), hm_minutes(value.get("end"))
             if start is not None and end is not None and start != end:
-                return start, end
+                return [{"days": [0, 1, 2, 3, 4, 5, 6], "start": {"type": "time", "time": value["start"]},
+                         "end": {"type": "time", "time": value["end"]}}]
+    return None
+
+
+def motion_window(hass: HomeAssistant, sensor: str) -> tuple[int, int] | None:
+    """(start, end) of an older single time window (kept for compatibility)."""
+    slots = motion_slots(hass, sensor)
+    if slots and len(slots) == 1 and (slots[0].get("start") or {}).get("type") == "time":
+        start, end = hm_minutes(slots[0]["start"].get("time")), hm_minutes((slots[0].get("end") or {}).get("time"))
+        if start is not None and end is not None and len(slots[0].get("days") or []) == 7:
+            return start, end
     return None
 
 

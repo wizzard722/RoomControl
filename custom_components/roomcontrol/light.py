@@ -157,8 +157,7 @@ from .rooms import (
     household_persons,
     room_fan_steps,
     room_neighbours,
-    motion_window,
-    in_window,
+    motion_slots,
     room_fans,
     linked_group,
     managed_areas,
@@ -2041,9 +2040,14 @@ class RoomControlLight(LightEntity):
         )
 
     def _sensor_in_window(self, sensor: str) -> bool:
-        """The sensor is inside its time window (or has none) right now."""
-        now = dt_util.now()
-        return in_window(motion_window(self.hass, sensor), now.hour * 60 + now.minute)
+        """One of the sensor's time slots runs now (or it has none: always).
+        Vacation slots count in vacation mode, as for light bundles."""
+        slots = motion_slots(self.hass, sensor)
+        if slots is None:
+            return True
+        slots = mode_slots(slots, bool(self.hass.data.get(DOMAIN, {}).get("vacation")))
+        now, phase = dt_util.as_local(dt_util.now()), self._phase()
+        return any(self._slot_part(slot, now, phase) is not None for slot in slots)
 
     @callback
     def _on_motion_change(self, event: Event) -> None:

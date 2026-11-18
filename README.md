@@ -54,7 +54,7 @@ RoomControl works with the areas and floors you already have in Home Assistant. 
 
 ### Motion and presence
 
-- Several motion sensors per room, each with its **own time window** if needed.
+- Several motion sensors per room. Each sensor can have its own **time slots**, with the same editor as light bundles (days, time / dusk / dark, until a time or sunrise, Normal or Vacation). Outside its slots a sensor doesn't switch lights on, but its motion keeps lights that are on from going off.
 - **Linked rooms.** Motion in one room keeps a linked room (for example hall and landing) active.
 - **Persons.** Link persons to a room. **Home later** keeps a room's lights on until a person who is still away comes home.
 

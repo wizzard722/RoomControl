@@ -46,6 +46,17 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - An older single All dim window is read as one daily slot.
 - **Coming up** on a room's overview also shows when All dim starts and ends.
 
+#### Motion sensors: time slots
+- Each motion sensor uses the same time-slot editor as light bundles instead of a single "from–until" window. Each slot has:
+  - days;
+  - a start: a time, dusk or dark;
+  - an end: a time or sunrise;
+  - Normal or Vacation mode.
+
+  Several slots are allowed.
+- Outside its slots a sensor doesn't switch the lights on, but its motion still keeps lights that are on from going off. A sensor without slots always switches the lights on.
+- An older single window is read as one daily slot.
+
 #### Room page and settings
 - **Overview tab** on every room page (the first and default tab):
   - status chips;
