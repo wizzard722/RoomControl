@@ -1,5 +1,26 @@
 # Release notes
 
+## 1.18.0b5 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### New since 1.18.0b4
+
+#### The alarm's state is applied at startup
+Until now RoomControl only reacted when the alarm *changed* state. Now it also checks the alarm's state once Home Assistant has started, and applies it everywhere. An alarm panel that only becomes available after the start is handled the same way.
+- **Rooms**:
+  - **Armed Home**: the lights go off unless someone is moving, and the room goes to Dim (when it is set to).
+  - **Armed Away**: the lamps that must stay off go off.
+- **All dim**:
+  - All dim now comes back after a restart as it was before. Rooms don't keep their Dim over a restart, so All dim dims them again.
+  - Time slots that started or ended while Home Assistant was down are taken into account.
+  - With **Follows the alarm**: when the alarm was disarmed while Home Assistant was down, All dim goes off.
+- **Vacation** (follows the alarm):
+  - **Armed Vacation** at startup switches Vacation on.
+  - Any other alarm state switches it off again, but only when it was the alarm that switched it on. A Vacation you switched on yourself stays on.
+
+---
+
 ## 1.18.0b4 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).

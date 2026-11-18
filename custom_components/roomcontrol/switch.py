@@ -15,11 +15,13 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dis
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
 from .clocks import SIGNAL_CLOCKS_UPDATED, clock_key, room_clocks
 from .entity_ids import with_roomcontrol_ids
 from .const import (
+    ALARM_TRANSITIONAL,
     ALARM_DISARMED,
     DOMAIN,
     DUSK_ELEVATION_DEFAULT,
@@ -270,7 +272,7 @@ def all_dim_active(hass: HomeAssistant) -> bool:
     return any(slot_part(slot, now, phase, sun_down) is not None for slot in slots)
 
 
-class AllDimSwitch(SwitchEntity):
+class AllDimSwitch(RestoreEntity, SwitchEntity):
     """All rooms (with lamps, not hidden) in 1% mode at once — the "Alles dim"
     button of the panel. On when every one of those rooms is dimmed.
 
@@ -316,6 +318,7 @@ class AllDimSwitch(SwitchEntity):
             "dimmed_rooms": sorted(e._area_id for e in lights if e.dimmed),
             "time_slots": len(all_dim_slots(self.hass)),
             "time_slot_active": bool(self._in_window),
+            "alarm_state": getattr(self, "_last_alarm", None),
         }
         if self.entity_id:
             self.async_write_ha_state()
@@ -339,14 +342,51 @@ class AllDimSwitch(SwitchEntity):
         if alarm:
             self._alarm_unsub = async_track_state_change_event(self.hass, [alarm], self._on_alarm)
 
+    def _alarm_now(self) -> str | None:
+        """The alarm panel's settled state now (None: no panel, or not settled)."""
+        alarm = self.hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_ALARM_ENTITY)
+        st = self.hass.states.get(alarm) if alarm else None
+        return st.state if st is not None and st.state not in ALARM_TRANSITIONAL else None
+
     @callback
     def _on_alarm(self, event: Any) -> None:
-        """The alarm goes to disarmed (from any other settled state): all back."""
-        new, old = event.data.get("new_state"), event.data.get("old_state")
-        if new is None or new.state != ALARM_DISARMED or old is None or old.state == ALARM_DISARMED:
+        """The alarm goes to disarmed (from any other settled state): all back.
+        The last settled state is remembered (also across a restart), so an
+        alarm that only becomes available after a restart is judged right."""
+        new = event.data.get("new_state")
+        if new is None or new.state in ALARM_TRANSITIONAL:
             return
-        if any(e.dimmed for e in self._room_lights()):
+        previous, self._last_alarm = self._last_alarm, new.state
+        self._refresh()
+        if new.state == ALARM_DISARMED and previous not in (None, ALARM_DISARMED) and getattr(self, "_started", True):
+            if any(e.dimmed for e in self._room_lights()):
+                self.hass.async_create_task(self._set(False))
+
+    @callback
+    def _startup(self, _hass: Any = None) -> None:
+        """Home Assistant has started: put All dim back as it was before the
+        restart (rooms don't keep their Dim), then apply what changed while
+        RoomControl was down: a time slot that started or ended, and (follows
+        the alarm) an alarm that was disarmed in the meantime."""
+        inside = all_dim_active(self.hass)
+        want = self._restored_on if self._restored_on is not None else inside
+        if self._restored_inside is not None and self._restored_inside != inside:
+            want = inside
+        settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
+        alarm = self._alarm_now()
+        if settings.get(SETTING_ALL_DIM_FOLLOWS_ALARM) and alarm == ALARM_DISARMED and self._last_alarm not in (None, ALARM_DISARMED):
+            want = False
+        if alarm is not None:
+            self._last_alarm = alarm
+        self._in_window = inside
+        lights = self._room_lights()
+        if want and not all(e.dimmed for e in lights):
+            self.hass.async_create_task(self._set(True))
+        elif not want and any(e.dimmed for e in lights):
             self.hass.async_create_task(self._set(False))
+        else:
+            self._refresh()
+        self._started = True
 
     @callback
     def _setup_window(self) -> None:
@@ -364,6 +404,8 @@ class AllDimSwitch(SwitchEntity):
     def _window_tick(self, _now: Any = None) -> None:
         """Only a change counts: a slot starts → all dim, the last one ends → all back.
         In between the user may switch it by hand."""
+        if not getattr(self, "_started", True):
+            return  # until Home Assistant has started: _startup decides
         inside = all_dim_active(self.hass)
         previous, self._in_window = self._in_window, inside
         if inside and not previous:
@@ -374,10 +416,20 @@ class AllDimSwitch(SwitchEntity):
             self._refresh()
 
     async def async_added_to_hass(self) -> None:
+        last = await self.async_get_last_state()
+        self._restored_on = last.state == "on" if last is not None and last.state in ("on", "off") else None
+        self._restored_inside = last.attributes.get("time_slot_active") if last is not None else None
+        self._last_alarm = last.attributes.get("alarm_state") if last is not None else None
+        self._started = False
         self._refresh()
-        self._setup_window()
         self._setup_alarm()
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._on_config))
+        self.async_on_remove(async_at_started(self.hass, self._startup_then_window))
+
+    @callback
+    def _startup_then_window(self, _hass: Any = None) -> None:
+        self._startup()
+        self._setup_window()
 
     async def async_will_remove_from_hass(self) -> None:
         if self._unsub:
@@ -539,7 +591,6 @@ class VacationSwitch(RestoreEntity, SwitchEntity):
     _attr_icon = "mdi:palm-tree"
     _attr_name = "Vakantie"
     _attr_unique_id = f"{DOMAIN}_vacation"
-    _attr_extra_state_attributes = {"roomcontrol_vacation": True}
 
     def __init__(self) -> None:
         self._attr_device_info = DeviceInfo(
@@ -550,14 +601,21 @@ class VacationSwitch(RestoreEntity, SwitchEntity):
     def is_on(self) -> bool:
         return bool(self.hass.data.get(DOMAIN, {}).get("vacation"))
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        # by_alarm: switched on because the alarm went to Armed Vacation.
+        return {"roomcontrol_vacation": True, "by_alarm": bool(getattr(self, "_by_alarm", False))}
+
     async def async_added_to_hass(self) -> None:
         last = await self.async_get_last_state()
+        self._by_alarm = bool(last is not None and last.state == "on" and last.attributes.get("by_alarm"))
         if last is not None and last.state == "on":
-            self._set(True)
+            self._set(True, self._by_alarm)
         self._unsub_alarm: CALLBACK_TYPE | None = None
         self._watch_alarm()
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._watch_alarm))
         self.async_on_remove(self._stop_watching)
+        self.async_on_remove(async_at_started(self.hass, self._apply_alarm_now))
 
     # Follow the alarm (setting): Armed Vacation → vacation on, leaving it → off.
 
@@ -577,24 +635,44 @@ class VacationSwitch(RestoreEntity, SwitchEntity):
         if not alarm or not self._settings().get(SETTING_VACATION_FOLLOWS_ALARM):
             return
         self._unsub_alarm = async_track_state_change_event(self.hass, [alarm], self._on_alarm)
+        if self.hass.is_running:
+            self._apply_alarm_now()  # e.g. the option was just switched on
+
+    @callback
+    def _apply_alarm_now(self, _hass: Any = None) -> None:
+        """Apply the alarm's current state (at startup, when the option is
+        switched on, or when the alarm panel only now becomes available):
+        Armed Vacation → on; otherwise off, if it was the alarm that put it on."""
+        alarm = self._settings().get(SETTING_ALARM_ENTITY)
+        if not alarm or not self._settings().get(SETTING_VACATION_FOLLOWS_ALARM):
+            return
         st = self.hass.states.get(alarm)
-        if st is not None and st.state == "armed_vacation" and not self.is_on:
-            self._set(True)  # already armed for vacation when the option was switched on
+        if st is None or st.state in ALARM_TRANSITIONAL:
+            return  # not known yet: _on_alarm applies it when it is
+        if st.state == "armed_vacation" and not self.is_on:
+            self._set(True, True)
+        elif st.state != "armed_vacation" and self.is_on and self._by_alarm:
+            self._set(False)
 
     @callback
     def _on_alarm(self, event: Any) -> None:
         new, old = event.data.get("new_state"), event.data.get("old_state")
-        if new is None or new.state in ("arming", "pending", "unavailable", "unknown"):
+        if new is None or new.state in ALARM_TRANSITIONAL:
+            return
+        if old is None or old.state in ("unavailable", "unknown"):
+            self._apply_alarm_now()  # the alarm panel only now became available
             return
         if new.state == "armed_vacation" and not self.is_on:
-            self._set(True)
-        elif new.state != "armed_vacation" and old is not None and old.state == "armed_vacation" and self.is_on:
+            self._set(True, True)
+        elif new.state != "armed_vacation" and old.state == "armed_vacation" and self.is_on:
             self._set(False)
 
     @callback
-    def _set(self, on: bool) -> None:
+    def _set(self, on: bool, by_alarm: bool = False) -> None:
+        self._by_alarm = on and by_alarm
         self.hass.data.setdefault(DOMAIN, {})["vacation"] = on
-        self.async_write_ha_state()
+        if self.entity_id:
+            self.async_write_ha_state()
         async_dispatcher_send(self.hass, SIGNAL_VACATION)
 
     async def async_turn_on(self, **kwargs: Any) -> None:

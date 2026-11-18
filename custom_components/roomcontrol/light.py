@@ -41,6 +41,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dis
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util, slugify
 from homeassistant.util.color import color_temperature_to_rgb
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
@@ -540,6 +541,7 @@ class RoomControlLight(LightEntity):
         self._alarm_last_off: datetime | None = None
         # 1% mode switched on by the alarm (so leaving armed home restores it)
         self._dim_by_alarm = False
+        self._alarm_started = False
         # Lamps of bundles with own times whose slot was running (None: not checked yet)
         self._own_prev: set[str] | None = None
         # Lamps in Dim because their time slot's Dim time has come
@@ -2753,6 +2755,14 @@ class RoomControlLight(LightEntity):
         if new is None:
             return  # arming/pending/unavailable: wait for the settled state
         previous, self._alarm_settled = self._alarm_settled, new
+        if previous is None and self._alarm_started:
+            # The alarm panel only now became available: apply its state.
+            self._apply_alarm_state(new)
+            self._reconcile_alarm_dim()
+            self._recompute()
+            self._check_idle()
+            self.async_write_ha_state()
+            return
         entered = previous is not None and previous != new
         if entered and not self._manual:
             if new == ALARM_ARMED_HOME:
@@ -2783,6 +2793,40 @@ class RoomControlLight(LightEntity):
         self._recompute()
         self._check_idle()
         self.async_write_ha_state()
+
+    @callback
+    def _alarm_startup(self, _hass: Any = None) -> None:
+        """Home Assistant has started: check the alarm's state and apply it, as
+        if it had just gone there (armed home: lamps off unless someone is
+        moving, Dim; armed away: the blocked lamps off)."""
+        self._alarm_started = True
+        alarm = self._alarm_entity() if self._members else None
+        state = self._settled(self.hass.states.get(alarm)) if alarm else None
+        self._alarm_settled = state
+        if state is None:
+            return  # unknown yet: _on_alarm_change applies it when it is known
+        self._apply_alarm_state(state)
+        self._reconcile_alarm_dim()
+        self._recompute()
+        self._check_idle()
+        self.async_write_ha_state()
+
+    @callback
+    def _apply_alarm_state(self, state: str) -> None:
+        """What an armed state means for the lamps that are on now."""
+        if self._manual:
+            return
+        if state == ALARM_ARMED_HOME:
+            if self.is_on and not (self._any_motion() and not self._armed_home_no_motion()):
+                self._alarm_last_off = dt_util.utcnow()
+                self._auto_off("alarm armed home (startup)")
+            elif self._any_motion() and not self._armed_home_no_motion():
+                self._on_by_motion = True
+        elif state == ALARM_ARMED_AWAY:
+            on = {e for e in self._members if (st := self.hass.states.get(e)) is not None and st.state == STATE_ON}
+            if lamps := sorted(self._alarm_blocked() & on):
+                self._alarm_last_off = dt_util.utcnow()
+                self._auto_off("alarm armed away (startup)", lamps=lamps)
 
     def _alarm_state(self) -> str | None:
         alarm = self._alarm_entity()
@@ -2991,6 +3035,7 @@ class RoomControlLight(LightEntity):
         self._prev_motion_lamps = set(self._motion_lamps())
         self._prev_dim_lamps = self._dim_bundle_lamps()
         self._check_idle()  # e.g. lights already on without motion at startup
+        self.async_on_remove(async_at_started(self.hass, self._alarm_startup))
         self.async_on_remove(
             async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._on_config_updated)
         )
