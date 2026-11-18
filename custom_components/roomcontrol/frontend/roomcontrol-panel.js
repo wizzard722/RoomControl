@@ -6536,7 +6536,7 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
     `}_linkList(){let e=this._config?.rooms??[];return[...tt(e,`linked_rooms`).map(e=>({kind:`motion`,group:e})),...tt(e,`fan_shared_rooms`).map(e=>({kind:`fan`,group:e}))].map((e,t)=>({...e,n:t+1}))}_renderOverview(e){let t=this.hass.language,n=this._settings.persons,r=new Map(e.map(e=>[e.area_id,ut(this.hass,e,n)])),i=e.filter(e=>r.get(e.area_id)?.status===`active`),a=e.filter(e=>!i.includes(e)),o=this._config?.rooms??[],s=e=>this.hass.areas?.[e]?.name??o.find(t=>t.area_id===e)?.name??e,c=e=>i.some(t=>t.area_id===e),l=e=>{let n=r.get(e.area_id)?.avg_brightness;return typeof n==`number`?`${Math.round(n/255*100)}%`:V(`card.on`,t)},u=this._linkList(),d=this._ovStacked&&u.length>0,f=F`
       <div class="ov-group" data-ov="active">
         <div class="ov-head">
-          <span class="ov-dot active"></span>
+          <span class="ov-dot ${i.length>0?`active`:``}"></span>
           <span class="ov-label">${V(`status.active`,t)}</span>
           <span class="ov-count">${i.length}</span>
         </div>
