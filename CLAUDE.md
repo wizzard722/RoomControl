@@ -38,13 +38,21 @@ The user approved this layout; new screens and settings follow it.
    - use singular/plural summaries (`…_one` keys).
    Implemented as `_grp()` + a summary function in `vr-room-detail`
    (`_grpSum`) and `vr-settings` (`_gsum`), styles `.grp*`.
-4. **Situation cards** for paired things (e.g. texts: speakers and Home
+4. **Time slots (tijdvakken)** always use the light-bundle slot editor
+   (`_renderSlots` in `vr-room-detail`, `_renderDimSlots` in `vr-settings`):
+   a list of slots, each collapsed to "name · days · start–end" and opened
+   to edit name, day chips (ma–zo), start (time / schemer / donker), end
+   (time / zonsopkomst), Normaal/Vakantie and a remove button; "+ Tijdvak"
+   adds one; several slots are allowed. Data format and logic are shared
+   (`slots.py`: `slot_part`, `mode_slots`); a slot ending before it starts
+   (or at sunrise) runs into the next day.
+5. **Situation cards** for paired things (e.g. texts: speakers and Home
    Assistant notification side by side), collapsed with a summary, with a
    live preview and test buttons.
-5. **Overview pages**: status chips, quick-control tiles (tap = switch),
+6. **Overview pages**: status chips, quick-control tiles (tap = switch),
    action buttons (Dim · Overnemen · Alles uit), a visual (floor plan),
    then "Straks" (upcoming) and "Wat er gebeurde" (recent, with reason).
-6. **Look**: Home Assistant CSS variables with fallbacks, light cards on a
+7. **Look**: Home Assistant CSS variables with fallbacks, light cards on a
    grey ground, 12 px radii, amber for "on", blue for motion/selection, red
    for alarm. Touch targets ≥ 44 px, real `<button>`s with
    `aria-expanded`/`aria-pressed`, labels on inputs.

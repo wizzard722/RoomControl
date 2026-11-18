@@ -140,7 +140,7 @@ from .smoke import SIGNAL_SMOKE, smoke_active
 from .clocks import SIGNAL_CLOCKS_UPDATED
 from .texts import text
 from .vacuums import SIGNAL_VACUUM_UPDATED
-from .slots import hm_minutes, slot_part
+from .slots import hm_minutes, mode_slots, slot_part
 from .devices import split_identifier
 from .rooms import (
     daylight_kelvin,
@@ -1379,14 +1379,8 @@ class RoomControlLight(LightEntity):
             if when is not None and now <= when <= until:
                 events.append((when, kind, names))
 
-        # Time slots of bundles with own times.
-        groups = self._room.get(CONF_GROUPS, []) or []
-        for index, group in enumerate(groups):
-            lamps = [e for e in group.get("lights", []) or [] if e in self._members]
-            if not lamps or not self._bopt(lamps[0], "own_times", False):
-                continue
-            name = (group.get("name") or "").strip() or f"Lichtbundel {index + 1}"
-            for slot in self._mode_slots(lamps[0]):
+        def slot_events(slots: list[dict[str, Any]], on: str, off: str, dim: str | None, names: list[str]) -> None:
+            for slot in slots:
                 days = {d for d in slot.get("days", []) or [] if isinstance(d, int)}
                 start, end = slot.get("start") or {}, slot.get("end") or {}
                 for offset in (-1, 0, 1):
@@ -1397,19 +1391,28 @@ class RoomControlLight(LightEntity):
                         begin = at_time(start.get("time"), day)
                     else:
                         begin = sun_at("next_dusk" if start.get("type") == "dusk" else "next_setting") if offset == 0 else None
-                    add(begin, "slot_on", [name])
+                    add(begin, on, names)
                     if end.get("type") == "sunrise":
-                        add(sun_at("next_rising") if offset in (0, -1) else None, "slot_off", [name])
+                        add(sun_at("next_rising") if offset in (0, -1) else None, off, names)
                     else:
                         stop = at_time(end.get("time"), day)
                         if stop is not None and begin is not None and stop <= begin:
                             stop += timedelta(days=1)
-                        add(stop, "slot_off", [name])
-                    if slot.get("dim_at"):
-                        dim = at_time(slot["dim_at"], day)
-                        if dim is not None and begin is not None and dim < begin:
-                            dim += timedelta(days=1)
-                        add(dim, "slot_dim", [name])
+                        add(stop, off, names)
+                    if dim and slot.get("dim_at"):
+                        moment = at_time(slot["dim_at"], day)
+                        if moment is not None and begin is not None and moment < begin:
+                            moment += timedelta(days=1)
+                        add(moment, dim, names)
+
+        # Time slots of light bundles with own times.
+        groups = self._room.get(CONF_GROUPS, []) or []
+        for index, group in enumerate(groups):
+            lamps = [e for e in group.get("lights", []) or [] if e in self._members]
+            if not lamps or not self._bopt(lamps[0], "own_times", False):
+                continue
+            name = (group.get("name") or "").strip() or f"Lichtbundel {index + 1}"
+            slot_events(self._mode_slots(lamps[0]), "slot_on", "slot_off", "slot_dim", [name])
         # Curtains that follow dark/light.
         if self._following_covers():
             open_at = self._covers_open_at()
@@ -1421,12 +1424,11 @@ class RoomControlLight(LightEntity):
             close_at = self._room.get(CONF_COVERS_CLOSE_AT)
             add(sun_at("next_dusk" if close_at == "dusk" else "next_setting"), "covers_close", [])
         # All dim (general settings), when this room takes part.
-        window = self._settings().get("all_dim_window")
-        if isinstance(window, dict) and self.follows_dim and self._members:
-            for offset in (0, 1):
-                day = now + timedelta(days=offset)
-                add(at_time(window.get("start"), day), "all_dim_on", [])
-                add(at_time(window.get("end"), day), "all_dim_off", [])
+        if self.follows_dim and self._members:
+            from .switch import all_dim_slots  # here: avoids an import cycle
+
+            vacation = bool(self.hass.data.get(DOMAIN, {}).get("vacation"))
+            slot_events(mode_slots(all_dim_slots(self.hass), vacation), "all_dim_on", "all_dim_off", None, [])
         # Alarm clocks of this room.
         clocks = self.hass.data.get(DOMAIN, {}).get("clocks")
         if clocks is not None:

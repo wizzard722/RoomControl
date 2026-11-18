@@ -1,6 +1,7 @@
 """Switch platform: a "Dim" switch on every room device (the room's 1% mode)."""
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
@@ -13,7 +14,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_change
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .clocks import SIGNAL_CLOCKS_UPDATED, clock_key, room_clocks
@@ -21,6 +22,9 @@ from .entity_ids import with_roomcontrol_ids
 from .const import (
     ALARM_DISARMED,
     DOMAIN,
+    DUSK_ELEVATION_DEFAULT,
+    SETTING_DUSK_ELEVATION,
+    SETTING_SUN_ENTITY,
     GENERAL_DEVICE,
     SETTING_ALARM_ENTITY,
     SETTING_LATE_HOME_PERSONS,
@@ -29,8 +33,8 @@ from .const import (
     SIGNAL_LATE_HOME,
     SIGNAL_VACATION,
 )
-from .rooms import all_dim_rooms, in_window, managed_areas, room_lights, stored_room
-from .slots import hm_minutes
+from .rooms import all_dim_rooms, managed_areas, room_lights, stored_room
+from .slots import hm_minutes, mode_slots, slot_part
 from .announce import CONF_ANNOUNCE_OFF, announce_rooms
 from .const import CONF_MEDIA_PLAYERS
 
@@ -224,17 +228,46 @@ class RoomDimSwitch(SwitchEntity):
         self._refresh()
 
 
-SETTING_ALL_DIM_WINDOW = "all_dim_window"  # {"start": "HH:MM", "end": "HH:MM"} or absent
+SETTING_ALL_DIM_SLOTS = "all_dim_slots"  # time slots, same format as a light bundle's
+SETTING_ALL_DIM_WINDOW = "all_dim_window"  # older: one {"start", "end"} window, every day
 SETTING_ALL_DIM_FOLLOWS_ALARM = "all_dim_follows_alarm"  # disarmed → all back
 
 
-def all_dim_window(hass: HomeAssistant) -> tuple[int, int] | None:
-    """The time window (minutes after midnight) in which "Alles dim" is on by itself."""
-    window = hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_ALL_DIM_WINDOW)
-    if not isinstance(window, dict):
-        return None
-    start, end = hm_minutes(window.get("start")), hm_minutes(window.get("end"))
-    return (start, end) if start is not None and end is not None and start != end else None
+def all_dim_slots(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """The time slots in which "Alles dim" is on by itself (an older single
+    window counts as one slot on every day)."""
+    settings = hass.data.get(DOMAIN, {}).get("settings", {})
+    slots = settings.get(SETTING_ALL_DIM_SLOTS)
+    if isinstance(slots, list):
+        return [x for x in slots if isinstance(x, dict)]
+    window = settings.get(SETTING_ALL_DIM_WINDOW)
+    if isinstance(window, dict) and hm_minutes(window.get("start")) is not None and hm_minutes(window.get("end")) is not None:
+        return [{"days": [0, 1, 2, 3, 4, 5, 6], "start": {"type": "time", "time": window["start"]},
+                 "end": {"type": "time", "time": window["end"]}}]
+    return []
+
+
+def _sun_phase(hass: HomeAssistant) -> tuple[str, bool]:
+    """("light" | "dusk" | "dark", sun down) from the sun entity of the settings."""
+    settings = hass.data.get(DOMAIN, {}).get("settings", {})
+    sun = hass.states.get(settings.get(SETTING_SUN_ENTITY) or "sun.sun")
+    if sun is not None and sun.state == "below_horizon":
+        return "dark", True
+    elevation = sun.attributes.get("elevation") if sun is not None else None
+    limit = settings.get(SETTING_DUSK_ELEVATION, DUSK_ELEVATION_DEFAULT)
+    if isinstance(elevation, (int, float)) and isinstance(limit, (int, float)) and elevation < limit:
+        return "dusk", False
+    return "light", False
+
+
+def all_dim_active(hass: HomeAssistant) -> bool:
+    """One of the All dim time slots runs now (vacation slots in vacation mode)."""
+    slots = mode_slots(all_dim_slots(hass), bool(hass.data.get(DOMAIN, {}).get("vacation")))
+    if not slots:
+        return False
+    phase, sun_down = _sun_phase(hass)
+    now = dt_util.now()
+    return any(slot_part(slot, now, phase, sun_down) is not None for slot in slots)
 
 
 class AllDimSwitch(SwitchEntity):
@@ -279,13 +312,10 @@ class AllDimSwitch(SwitchEntity):
             self._unsub = async_track_state_change_event(self.hass, watch, self._refresh) if watch else None
         self._attr_available = bool(lights)
         self._attr_is_on = bool(lights) and all(e.dimmed for e in lights)
-        window = all_dim_window(self.hass)
         self._attr_extra_state_attributes = {
             "dimmed_rooms": sorted(e._area_id for e in lights if e.dimmed),
-            "window": (
-                {"start": "%02d:%02d" % divmod(window[0], 60), "end": "%02d:%02d" % divmod(window[1], 60)}
-                if window else None
-            ),
+            "time_slots": len(all_dim_slots(self.hass)),
+            "time_slot_active": bool(self._in_window),
         }
         if self.entity_id:
             self.async_write_ha_state()
@@ -320,31 +350,28 @@ class AllDimSwitch(SwitchEntity):
 
     @callback
     def _setup_window(self) -> None:
-        """(Re)plan the window's start and end; act now if it just began or ended."""
-        window = all_dim_window(self.hass)
-        if window != self._window:
+        """Check the time slots every minute (and now); act when one starts or ends."""
+        wanted = bool(all_dim_slots(self.hass))
+        if wanted and not self._window_unsubs:
+            self._window_unsubs.append(async_track_time_interval(self.hass, self._window_tick, timedelta(minutes=1)))
+        elif not wanted and self._window_unsubs:
             for unsub in self._window_unsubs:
                 unsub()
             self._window_unsubs = []
-            self._window = window
-            for minutes in window or ():
-                hour, minute = divmod(minutes, 60)
-                self._window_unsubs.append(
-                    async_track_time_change(self.hass, self._window_tick, hour=hour, minute=minute, second=0)
-                )
         self._window_tick()
 
     @callback
     def _window_tick(self, _now: Any = None) -> None:
-        """Only a change counts: the window starts → all dim, it ends → all back.
+        """Only a change counts: a slot starts → all dim, the last one ends → all back.
         In between the user may switch it by hand."""
-        now = dt_util.now()
-        inside = self._window is not None and in_window(self._window, now.hour * 60 + now.minute)
+        inside = all_dim_active(self.hass)
         previous, self._in_window = self._in_window, inside
         if inside and not previous:
             self.hass.async_create_task(self._set(True))
         elif previous and not inside:
             self.hass.async_create_task(self._set(False))
+        elif self.entity_id:
+            self._refresh()
 
     async def async_added_to_hass(self) -> None:
         self._refresh()
