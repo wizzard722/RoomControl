@@ -304,7 +304,9 @@ def inverted_covers(hass: HomeAssistant) -> set[str]:
 # General setting "layout" (panel → Indeling): where each room is drawn per
 # floor and how rooms adjoin. {"rooms": {area_id: {"x", "y", "w", "h"}},
 # "links": [{"a": area_id, "b": area_id, "kind": "door" | "open" | "stairs",
-# "sensor": binary_sensor (a door; none = a fictitious door)}]}.
+# "sensor": binary_sensor (a door; none = a fictitious door)}],
+# "landings": [area_id] (rooms with a landing; consecutive floors get stairs),
+# "items": {entity_id: {"rx", "ry"}} (lamp/sensor place in its room, 0..1)}.
 # A link works both ways and is information only (it switches nothing).
 SETTING_LAYOUT = "layout"
 LINK_KINDS = ("door", "open", "stairs")
@@ -326,7 +328,33 @@ def room_neighbours(hass: HomeAssistant, area_id: str) -> list[dict[str, str]]:
             if kind == "door" and isinstance(link.get("sensor"), str) and link["sensor"]:
                 item["sensor"] = link["sensor"]  # else a fictitious door (no sensor)
             out.append(item)
+    # Landings ("overloop"): those of consecutive floors are joined by stairs.
+    for other in _landing_neighbours(hass, layout.get("landings") or [], area_id):
+        if all(o["area_id"] != other for o in out):
+            out.append({"area_id": other, "kind": "stairs"})
     return out
+
+
+def _landing_neighbours(hass: HomeAssistant, landings: list[str], area_id: str) -> list[str]:
+    """Landings on the floor directly above and below, when area_id is a landing."""
+    if area_id not in landings:
+        return []
+    from homeassistant.helpers import area_registry as ar, floor_registry as fr
+
+    areas, floors = ar.async_get(hass), fr.async_get(hass)
+    ordered = sorted(
+        floors.async_list_floors(), key=lambda f: (f.level if f.level is not None else 0, f.name)
+    )
+    index = {f.floor_id: i for i, f in enumerate(ordered)}
+
+    def floor_index(area: str) -> int | None:
+        entry = areas.async_get_area(area)
+        return index.get(entry.floor_id) if entry and entry.floor_id else None
+
+    mine = floor_index(area_id)
+    if mine is None:
+        return []
+    return [a for a in landings if a != area_id and (fi := floor_index(a)) is not None and abs(fi - mine) == 1]
 
 
 @callback
