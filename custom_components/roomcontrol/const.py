@@ -5,7 +5,7 @@ DOMAIN = "roomcontrol"
 TITLE = "RoomControl"
 # Must match manifest.json "version" and the panel's EXPECTED_BACKEND_VERSION;
 # the panel warns when they differ (e.g. HA not restarted after an update).
-VERSION = "1.17.1"
+VERSION = "1.18.0b1"
 
 # Only used by version-1 config entries (one entry per area), for migration.
 CONF_AREA_ID = "area_id"

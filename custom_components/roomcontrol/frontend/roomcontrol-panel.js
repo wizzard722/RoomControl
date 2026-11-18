@@ -7660,7 +7660,7 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
         ${this.narrow?F`<ha-menu-button class="menu-btn" .hass=${this.hass} .narrow=${this.narrow}></ha-menu-button>`:L}
         <h1>
           ${V(`panel.title`,e)}
-          <span class="version" title=${V(`panel.version`,e)}>v${this._config?.version??`1.17.1`}</span>
+          <span class="version" title=${V(`panel.version`,e)}>v${this._config?.version??`1.18.0b1`}</span>
         </h1>
         ${s.length>0?F`
           <button
