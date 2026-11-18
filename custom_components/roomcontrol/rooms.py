@@ -306,7 +306,10 @@ def inverted_covers(hass: HomeAssistant) -> set[str]:
 # "links": [{"a": area_id, "b": area_id, "kind": "door" | "open" | "stairs",
 # "sensor": binary_sensor (a door; none = a fictitious door)}],
 # "landings": [area_id] (rooms with a landing; consecutive floors get stairs),
-# "items": {entity_id: {"rx", "ry"}} (lamp/sensor place in its room, 0..1)}.
+# "items": {entity_id: {"rx", "ry"}} (lamp/sensor place in its room, 0..1),
+# "extra": {id: {"name", "floor"}} (rooms drawn only in the panel, not in Home
+# Assistant), "stairs": {area_id: {"rx", "ry", "w", "h", "rot"}} (the stairs
+# drawn in a landing)}. A room's "points" (optional) is its outline.
 # A link works both ways and is information only (it switches nothing).
 SETTING_LAYOUT = "layout"
 LINK_KINDS = ("door", "open", "stairs")
@@ -317,12 +320,15 @@ def room_neighbours(hass: HomeAssistant, area_id: str) -> list[dict[str, str]]:
     """The rooms this one adjoins: [{"area_id", "kind"}] (from the layout)."""
     layout = hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_LAYOUT) or {}
     out: list[dict[str, str]] = []
+    extra = layout.get("extra") or {}
     for link in layout.get("links", []) or []:
         if not isinstance(link, dict):
             continue
         a, b = link.get("a"), link.get("b")
         kind = link.get("kind") if link.get("kind") in LINK_KINDS else "door"
         other = b if a == area_id else a if b == area_id else None
+        if other in extra:
+            continue  # a room drawn only in the panel, not a Home Assistant area
         if other and other != area_id and all(o["area_id"] != other for o in out):
             item = {"area_id": other, "kind": kind}
             if kind == "door" and isinstance(link.get("sensor"), str) and link["sensor"]:
