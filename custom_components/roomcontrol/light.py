@@ -134,6 +134,7 @@ from .const import (
     SIGNAL_CONFIG_UPDATED,
 )
 from .control import rc_call
+from .fan_activity import FanActivity, FanKey, fan_activities, fan_key
 from .learn import LearnStore
 from .smoke import SIGNAL_SMOKE, smoke_active
 from .clocks import SIGNAL_CLOCKS_UPDATED
@@ -533,12 +534,9 @@ class RoomControlLight(LightEntity):
         self._cancel_evening_check: CALLBACK_TYPE | None = None
         self._evening_last_fix: datetime | None = None
         self._lux_last_adjust: datetime | None = None
-        # Fan: activity start (UTC), applied speed, step timers, end timer
-        self._activity_since: datetime | None = None
-        self._fan_pct: int | None = None
-        self._fan_step_unsubs: list[CALLBACK_TYPE] = []
-        self._cancel_fan_end: CALLBACK_TYPE | None = None
-        self._fan_off_at: datetime | None = None
+        # Fan: the activity is shared by all rooms using the same fans (see
+        # fan_activity.py); this is the key of the fans this room last drove.
+        self._fan_key: FanKey | None = None
         # Fan by temperature: speed wanted now (None = temperature not in range)
         self._fan_temp_pct: int | None = None
         # Last non-transitional alarm state, so disarmed → arming → armed_home counts.
@@ -663,10 +661,8 @@ class RoomControlLight(LightEntity):
         self._setup_lux_control()
         self._setup_evening_check()
         self._setup_fan_temp()
-        if self._activity_since is not None and (
-            not self._room.get(CONF_FAN_MOTION, True) or not self._fans() or not self._fan_steps()
-        ):
-            self._fan_stop_activity()  # activity control switched off in the panel
+        # Fans, steps or activity control changed in the panel: re-evaluate.
+        self._fan_update(write=False)
         self._recompute()
         # A config change (or startup) only remembers what the curtains should
         # be; they move at the next real change of schedule or daylight.
@@ -1030,9 +1026,7 @@ class RoomControlLight(LightEntity):
             "armed_home_motion_only": self._armed_home_motion_only(),
             "armed_home_no_motion": self._armed_home_no_motion(),
             **self._vacuum_attrs(),
-            "activity_since": self._activity_since.isoformat() if self._activity_since else None,
-            "fan_percentage": self._fan_pct,
-            "fan_off_at": self._fan_off_at.isoformat() if self._fan_off_at else None,
+            **self._fan_activity_attrs(),
             "fan_temp_active": self._fan_temp_pct is not None,
             "fan_nobody_home": bool(self._fans()) and not anyone_home(self.hass),
             "fixed_levels": self._fixed_levels(),
@@ -2312,61 +2306,135 @@ class RoomControlLight(LightEntity):
             for e in room_motion_sensors(self._room)
         )
 
+    @property
+    def _activity_since(self) -> datetime | None:
+        act = self._fan_activity()
+        return act.since if act else None
+
+    def _fan_activity(self) -> FanActivity | None:
+        """The running activity of this room's (possibly shared) fans."""
+        key = fan_key(self._fans())
+        return fan_activities(self.hass).get(key) if key else None
+
+    def _fan_activity_attrs(self) -> dict[str, Any]:
+        act = self._fan_activity()
+        return {
+            "activity_since": act.since.isoformat() if act else None,
+            "fan_percentage": act.pct if act else None,
+            "fan_off_at": act.off_at.isoformat() if act and act.off_at else None,
+            "fan_step": act.step if act else None,
+            "fan_step_count": len(act.steps) if act else len(self._fan_steps()),
+        }
+
+    def _fan_rooms(self) -> list[RoomControlLight]:
+        """Room entities sharing (some of) this room's fans, this one included."""
+        fans = set(self._fans())
+        entities = self.hass.data.get(DOMAIN, {}).get("entities", {})
+        rooms = [
+            e for a in fan_group(self.hass, self._area_id)
+            if (e := entities.get(a)) is not None and set(e._fans()) & fans
+        ]
+        return rooms if self in rooms else [self, *rooms]
+
+    def _fan_motion_enabled(self) -> bool:
+        """This room drives the fan by activity (motion)."""
+        return bool(self._fans()) and bool(self._fan_steps()) and bool(self._room.get(CONF_FAN_MOTION, True))
+
     @callback
-    def _fan_update(self) -> None:
-        """Start/continue activity on motion; end it after the run-on time without motion."""
-        if (
-            not self._fans() or not self._fan_steps() or not self._room.get(CONF_FAN_MOTION, True)
-            or not anyone_home(self.hass)  # nobody home: the fan stays off
-        ):
-            self._fan_stop_activity()
+    def _fan_notify(self) -> None:
+        """Show the (shared) activity on every room using these fans."""
+        for room in self._fan_rooms():
+            if room.entity_id:
+                room.async_write_ha_state()
+
+    @callback
+    def _fan_update(self, write: bool = True) -> None:
+        """Start/continue the shared activity while any room using these fans has
+        motion; when none has, start the run-on time, after which the fans go off."""
+        key = fan_key(self._fans())
+        if self._fan_key is not None and self._fan_key != key:
+            # The room's fans changed: end what ran on the old ones.
+            self._fan_end_activity(self._fan_key)
+        self._fan_key = key
+        rooms = self._fan_rooms() if key else []
+        if not key or not anyone_home(self.hass) or not any(r._fan_motion_enabled() for r in rooms):
+            self._fan_stop_activity()  # nobody home / no activity control: fan stays off
             return
-        if self._own_motion():
-            if self._cancel_fan_end:
-                self._cancel_fan_end()
-                self._cancel_fan_end = None
-                self._fan_off_at = None
-                self.async_write_ha_state()
-            if self._activity_since is None:
-                self._activity_since = dt_util.utcnow()
-                for minutes, pct in self._fan_steps():
-                    # Must be a @callback so HA runs it in the event loop.
-                    @callback
-                    def _fire(_now: Any, p: int = pct) -> None:
-                        self._fan_step(p)
+        acts = fan_activities(self.hass)
+        act = acts.get(key)
+        motion = any(r._fan_motion_enabled() and r._own_motion() for r in rooms)
+        if motion:
+            if act is None:
+                steps = next((st for r in rooms if r._fan_motion_enabled() and (st := r._fan_steps())), [])
+                act = acts[key] = FanActivity(since=dt_util.utcnow(), steps=steps)
+                _LOGGER.debug("%s: fan activity started for %s", self.entity_id, key)
+            elif not act.cancel_end and act.stepping:
+                return  # already running, nothing changes
+            act.cancel_end_timer()
+            if not act.stepping:
+                self._fan_schedule_steps(key, act)
+        elif act is not None and act.cancel_end is None:
+            # No motion in any of the rooms: no more steps, run on, then off.
+            act.cancel_steps()
+            run_on = max((r._fan_run_on() for r in rooms if r._fan_motion_enabled()), default=0)
+            act.off_at = dt_util.utcnow() + timedelta(seconds=run_on)
 
-                    self._fan_step_unsubs.append(async_call_later(self.hass, minutes * 60, _fire))
-                self._recompute()
-                self.async_write_ha_state()
-        elif self._activity_since is not None and self._cancel_fan_end is None:
-            run_on = self._fan_run_on()
-            self._fan_off_at = dt_util.utcnow() + timedelta(seconds=run_on)
-            self._cancel_fan_end = async_call_later(self.hass, run_on, self._fan_end)
-            self.async_write_ha_state()
+            @callback
+            def _end(_now: Any, k: FanKey = key) -> None:
+                self._fan_end(k)
+
+            act.cancel_end = async_call_later(self.hass, run_on, _end)
+            _LOGGER.debug("%s: no motion, fans %s off in %ss", self.entity_id, key, run_on)
+        else:
+            return
+        if write:
+            self._fan_notify()
 
     @callback
-    def _fan_step(self, pct: int) -> None:
+    def _fan_schedule_steps(self, key: FanKey, act: FanActivity) -> None:
+        """Plan the steps not reached yet, counted from the start of the activity."""
+        elapsed = (dt_util.utcnow() - act.since).total_seconds()
+        act.stepping = True
+        for index, (minutes, pct) in enumerate(act.steps):
+            if index < act.step:
+                continue
+
+            # Must be a @callback so HA runs it in the event loop.
+            @callback
+            def _fire(_now: Any, i: int = index, p: int = pct) -> None:
+                self._fan_step(key, i, p)
+
+            act.step_unsubs.append(async_call_later(self.hass, max(0.0, minutes * 60 - elapsed), _fire))
+
+    @callback
+    def _fan_step(self, key: FanKey, index: int, pct: int) -> None:
         """A step's time is reached: speed up (never down during activity)."""
-        if self._activity_since is None or self._manual:
+        act = fan_activities(self.hass).get(key)
+        if act is None or index < act.step:
             return
-        if self._fan_pct is not None and pct <= self._fan_pct:
-            return
-        self._fan_pct = pct
-        _LOGGER.debug("%s: fan step %s%%", self.entity_id, pct)
-        self._fan_apply()
-        self._recompute()
-        self.async_write_ha_state()
+        act.step = index + 1
+        if act.pct is None or pct > act.pct:
+            act.pct = pct
+        _LOGGER.debug("%s: fan step %s (%s%%)", self.entity_id, act.step, act.pct)
+        if not self._manual:
+            self._fan_apply()
+        self._fan_notify()
 
     @callback
-    def _fan_end(self, _now: Any = None) -> None:
-        """Activity over: fans off (if we switched them on)."""
-        self._cancel_fan_end = None
-        was_running = self._fan_pct is not None
-        self._fan_reset()
-        if was_running:
-            self._fan_apply()
-        self._recompute()
-        self.async_write_ha_state()
+    def _fan_end(self, key: FanKey) -> None:
+        """Run-on time over without motion: the activity ends, fans off."""
+        self._fan_end_activity(key)
+        self._fan_notify()
+
+    @callback
+    def _fan_end_activity(self, key: FanKey) -> None:
+        act = fan_activities(self.hass).pop(key, None)
+        if act is None:
+            return
+        act.cancel_all()
+        _LOGGER.debug("%s: fan activity ended for %s", self.entity_id, key)
+        if act.pct is not None:
+            self._fan_apply(list(key), force_off=True)
 
     # ── fan by temperature ─────────────────────────────────────────────────
 
@@ -2431,20 +2499,24 @@ class RoomControlLight(LightEntity):
             self.async_write_ha_state()
 
     @callback
-    def _fan_apply(self) -> None:
-        """Drive the (possibly shared) fans: highest speed of the rooms that are
-        active, off once no room sharing them is active any more."""
-        fans = self._fans()
+    def _fan_apply(self, fans: list[str] | None = None, force_off: bool = False) -> None:
+        """Drive the (possibly shared) fans: the highest speed of the shared
+        activity and the rooms' temperature control; off when none wants them.
+
+        force_off: the activity that switched them on has ended, so they go off
+        even if we do not remember setting them (e.g. set by another room).
+        """
+        fans = self._fans() if fans is None else fans
         if not fans or smoke_active(self.hass):
             return  # smoke: fans stay off
-        entities = self.hass.data.get(DOMAIN, {}).get("entities", {})
-        speeds = [
-            pct for a in fan_group(self.hass, self._area_id)
-            if (e := entities.get(a)) is not None and set(e._fans()) & set(fans)
-            for pct in (e._fan_pct, e._fan_temp_pct) if pct is not None
+        key = fan_key(fans)
+        act = fan_activities(self.hass).get(key)
+        speeds = [act.pct] if act is not None and act.pct is not None else []
+        speeds += [
+            r._fan_temp_pct for r in self._fan_rooms()
+            if r._fan_temp_pct is not None and set(r._fans()) & set(fans)
         ]
-        applied: dict[tuple[str, ...], int] = self.hass.data[DOMAIN].setdefault("fan_applied", {})
-        key = tuple(sorted(fans))
+        applied: dict[FanKey, int] = self.hass.data[DOMAIN].setdefault("fan_applied", {})
         if speeds:
             target = max(speeds)
             if applied.get(key) == target:
@@ -2453,30 +2525,20 @@ class RoomControlLight(LightEntity):
             _LOGGER.debug("%s: fans %s to %s%%", self.entity_id, fans, target)
             call = ("set_percentage", {ATTR_ENTITY_ID: fans, "percentage": target})
         else:
-            if applied.pop(key, None) is None or self._manual:
+            was_applied = applied.pop(key, None) is not None
+            if not force_off and (not was_applied or self._manual):
                 return
+            _LOGGER.debug("%s: fans %s off", self.entity_id, fans)
             call = ("turn_off", {ATTR_ENTITY_ID: fans})
         self.hass.async_create_task(self.hass.services.async_call("fan", call[0], call[1], blocking=True))
 
     @callback
     def _fan_stop_activity(self) -> None:
         """No (more) activity control: stop it, and the fans if it had started them."""
-        was_running = self._fan_pct is not None
-        self._fan_reset()
-        if was_running:
-            self._fan_apply()
-
-    @callback
-    def _fan_reset(self) -> None:
-        for unsub in self._fan_step_unsubs:
-            unsub()
-        self._fan_step_unsubs = []
-        if self._cancel_fan_end:
-            self._cancel_fan_end()
-            self._cancel_fan_end = None
-        self._fan_off_at = None
-        self._activity_since = None
-        self._fan_pct = None
+        key = fan_key(self._fans())
+        if key is not None and key in fan_activities(self.hass):
+            self._fan_end_activity(key)
+            self._fan_notify()
 
     def _motion_block_reason(self) -> str | None:
         """Why motion would not switch the lights on now (None = it would)."""
@@ -2952,7 +3014,12 @@ class RoomControlLight(LightEntity):
         for cancel in self._bright_pending.values():
             cancel()
         self._bright_pending.clear()
-        self._fan_reset()
+        # Last room using these fans gone (e.g. reload): drop the activity's timers.
+        if (key := fan_key(self._fans())) and not [r for r in self._fan_rooms() if r is not self]:
+            if (act := fan_activities(self.hass).pop(key, None)) is not None:
+                act.cancel_all()
+                if act.pct is not None and not self.hass.is_stopping:
+                    self._fan_apply(list(key), force_off=True)  # we switched them on
 
     # ── commands ───────────────────────────────────────────────────────────
 
