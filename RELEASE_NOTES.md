@@ -23,6 +23,7 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### Alarm: screen and status lamps removed
 - The **Screen** (NSPanel text) and **Status lamps** (WLED presets) are removed from the Alarm page, and RoomControl no longer drives them.
 - Per state there are now two cards side by side: **Speakers** and **Message**.
+- The **Rooms** tab is removed from the Alarm page; what the lamps do per alarm state stays in each room's settings (Safety).
 
 ---
 
