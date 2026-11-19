@@ -96,8 +96,11 @@ class AlarmAutomation:
         return st.state if st is not None else None
 
     def persons(self) -> list[str]:
+        """Who counts: the persons chosen here; else those of Presence; else
+        every person configured in Home Assistant."""
         own = [p for p in self.cfg().get("persons") or [] if p]
-        return own or [p for p in self.hass.data.get(DOMAIN, {}).get("settings", {}).get("persons", []) or [] if p]
+        presence = [p for p in self.hass.data.get(DOMAIN, {}).get("settings", {}).get("persons", []) or [] if p]
+        return own or presence or sorted(self.hass.states.async_entity_ids("person"))
 
     def anyone_home(self) -> bool:
         return any((st := self.hass.states.get(p)) is not None and st.state == "home" for p in self.persons())
@@ -121,11 +124,25 @@ class AlarmAutomation:
         unit = (st.attributes.get("unit_of_measurement") or "km").lower()
         return value / 1000 if unit == "m" else value * 1.609344 if unit in ("mi", "miles") else value
 
+    def auto_distance_sensor(self, person: str) -> str | None:
+        """The distance sensor Home Assistant's Proximity integration made for
+        this person (sensor.<zone>_<person>_distance), if there is one."""
+        name = person.split(".", 1)[1]
+        found = [
+            e for e in self.hass.states.async_entity_ids("sensor")
+            if e.endswith(f"_{name}_distance") or e == f"sensor.{name}_distance"
+        ]
+        return sorted(found)[0] if found else None
+
     def distance_sensors(self) -> dict[str, str]:
-        """Person → distance sensor (an older single sensor counts for everyone)."""
+        """Person → distance sensor: chosen here (an older single sensor counts
+        for everyone), else the person's Proximity sensor."""
         own = {p: s for p, s in (self.cfg().get("distance_sensors") or {}).items() if s}
         if not own and (legacy := self.cfg().get("distance_sensor")):
-            return {p: legacy for p in self.persons()}
+            own = {p: legacy for p in self.persons()}
+        for person in self.persons():
+            if person not in own and (auto := self.auto_distance_sensor(person)):
+                own[person] = auto
         return own
 
     def distances(self) -> dict[str, float | None]:
@@ -497,7 +514,8 @@ class AlarmAutomation:
             "all_away": self.all_away(),
             "persons": [
                 {"id": p, "name": self._name(p), "home": (s := self.hass.states.get(p)) is not None and s.state == "home",
-                 "km": round(km, 1) if (km := self.distances().get(p)) is not None else None}
+                 "km": round(km, 1) if (km := self.distances().get(p)) is not None else None,
+                 "sensor": self.distance_sensors().get(p), "auto_sensor": self.auto_distance_sensor(p)}
                 for p in self.persons()
             ],
             "rearm_pending": self._rearm_timer is not None,
