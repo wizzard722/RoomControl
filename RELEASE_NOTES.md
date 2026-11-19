@@ -40,6 +40,10 @@ Until now RoomControl kept its working state only in memory, so a restart of Hom
 - It now scales to the available width and stays centred.
 - On narrow screens the names of neighbouring rooms are a bit smaller and only break between words.
 
+#### General settings: Presence options stay inside the card
+- On a phone, the *Home later*, *Alarm clock* and *Vacuum* options next to each person stuck out of the Presence card, and pushed the person's name out of view.
+- They now move to their own line under the name when the card is too narrow. On wide screens nothing changes.
+
 ---
 
 ## 1.18.0b5 (beta)

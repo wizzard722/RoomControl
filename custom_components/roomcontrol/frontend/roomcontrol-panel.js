@@ -244,6 +244,28 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
         border-radius: var(--vr-radius-sm);
       }
 
+      .person-row {
+        flex-wrap: wrap;
+        row-gap: var(--vr-space-2);
+        padding-top: var(--vr-space-2);
+        padding-bottom: var(--vr-space-2);
+      }
+
+      .person-row .name {
+        flex: 1 1 96px;
+      }
+
+      /* Late home, alarm clock, vacuum: next to the name, or on their own line
+         (right-aligned) when the card is too narrow. */
+      .person-chips {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 6px;
+        margin-left: auto;
+        max-width: 100%;
+      }
+
       .late-chip {
         font: inherit;
         font-size: var(--vr-font-xs);
@@ -1341,7 +1363,7 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
         <p class="hint">${V(`settings.presence_hint`,e)}</p>
         <div class="list">
           ${t.length===0?F`<div class="empty">${V(`settings.no_persons`,e)}</div>`:t.map(t=>{let n=this.hass.states[t]?.state===`home`;return F`
-                  <label class="row">
+                  <label class="row person-row">
                     <input
                       type="checkbox"
                       .checked=${this.settings.persons.includes(t)}
@@ -1350,7 +1372,7 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
                     <vr-person-avatar .hass=${this.hass} .entityId=${t} .size=${36}></vr-person-avatar>
                     <span class="name">${this._name(t)}</span>
                     <span class="state">${V(n?`person.home`:`person.away`,e)}</span>
-                    ${this.settings.persons.includes(t)?F`
+                    ${this.settings.persons.includes(t)?F`<span class="person-chips">
                       <button
                         class="late-chip ${(this.settings.late_home_persons??[]).includes(t)?`on`:``}"
                         role="checkbox"
@@ -1380,7 +1402,7 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
                       >
                         <ha-icon icon=${this._vacuumPerson(t)?`mdi:checkbox-marked`:`mdi:checkbox-blank-outline`}></ha-icon>
                         ${V(`settings.vacuum_person_short`,e)}
-                      </button>`:L}
+                      </button></span>`:L}
                   </label>
                 `})}
         </div>
