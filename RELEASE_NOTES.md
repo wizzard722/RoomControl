@@ -21,6 +21,7 @@ A new page in the panel (shield button on the dashboard) brings everything the a
 - **Everyone away**: when all chosen persons have been away for a set time:
   - RoomControl first locks the chosen locks;
   - then it looks at the distance to home: beyond the limit (adjustable, default **100 km**) → **Armed Vacation**, closer → **Armed Home**. Both states can be chosen.
+  - Each person can have their own distance sensor (m, km or mi). The closest person decides. A person whose distance is not known (no sensor, or no value) counts as within the limit.
   - While everyone stays away, crossing the limit changes the state.
   - A message follows when the alarm is still off 5 minutes later.
   - Vacation mode can follow the alarm (Armed Vacation → Vacation).

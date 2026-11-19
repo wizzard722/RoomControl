@@ -71,6 +71,6 @@ look as above), then build the chosen one in the panel.
   version on top, and the text given for a GitHub release), even though
   the conversation is in Dutch. Every fix or feature that goes into a
   beta gets a line there.
-- Check new screens at phone width (≈360–390 px, with a viewport meta
-  in the test page): nothing may stick out of its card, rows wrap
-  instead.
+- **Always test every panel change at phone width** (360 px, with a
+  viewport meta in the test page) as well as wide: nothing may stick out
+  of its card, rows wrap instead. Report the phone-width result.

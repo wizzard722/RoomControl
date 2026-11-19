@@ -7,7 +7,8 @@ General setting "alarm" (panel → Alarm), with the house's alarm panel from
    armed_night | armed_vacation | disarmed, "only_away": bool}],
  "outside": "disarm" | "none",          # when the last slot ends
  "away_on": bool, "persons": [person ids] (empty: the household's persons),
- "away_delay": minutes, "distance_sensor": entity (m, km or mi),
+ "away_delay": minutes, "distance_sensors": {person: sensor (m, km or mi)}
+ (older: "distance_sensor", one sensor for everyone),
  "distance_km": 100, "far_state": "armed_vacation", "near_state": "armed_home",
  "locks": [lock ids] (locked first), "fail_notify": bool,
  "home_on": bool, "home_minutes": 10,   # someone comes home: disarm (re-arm a slot later)
@@ -108,8 +109,8 @@ class AlarmAutomation:
             for p in persons
         )
 
-    def distance_km(self) -> float | None:
-        sensor = self.cfg().get("distance_sensor")
+    def _sensor_km(self, sensor: str | None) -> float | None:
+        """A distance sensor's value in km (None: no sensor or no number)."""
         st = self.hass.states.get(sensor) if sensor else None
         try:
             value = float(st.state) if st is not None else None
@@ -119,6 +120,26 @@ class AlarmAutomation:
             return None
         unit = (st.attributes.get("unit_of_measurement") or "km").lower()
         return value / 1000 if unit == "m" else value * 1.609344 if unit in ("mi", "miles") else value
+
+    def distance_sensors(self) -> dict[str, str]:
+        """Person → distance sensor (an older single sensor counts for everyone)."""
+        own = {p: s for p, s in (self.cfg().get("distance_sensors") or {}).items() if s}
+        if not own and (legacy := self.cfg().get("distance_sensor")):
+            return {p: legacy for p in self.persons()}
+        return own
+
+    def distances(self) -> dict[str, float | None]:
+        """Each counted person's distance to home in km (None: not known)."""
+        sensors = self.distance_sensors()
+        return {p: self._sensor_km(sensors.get(p)) for p in self.persons()}
+
+    def distance_km(self) -> float | None:
+        """The distance that decides: the closest person. A person whose
+        distance is not known is taken to be within the limit (0 km)."""
+        values = self.distances()
+        if not values:
+            return None
+        return min(0.0 if v is None else v for v in values.values())
 
     def _name(self, entity_id: str) -> str:
         st = self.hass.states.get(entity_id)
@@ -147,7 +168,7 @@ class AlarmAutomation:
     @callback
     def _sync(self, *_: Any) -> None:
         cfg = self.cfg()
-        ids = [self.panel(), *self.persons(), cfg.get("distance_sensor"), *((cfg.get("lamps") or {}).get("motion") or [])]
+        ids = [self.panel(), *self.persons(), *self.distance_sensors().values(), *((cfg.get("lamps") or {}).get("motion") or [])]
         ids = tuple(sorted({i for i in ids if i}))
         if ids != self._tracked:
             if self._track:
@@ -176,7 +197,7 @@ class AlarmAutomation:
             self._check_away()
             self._tick()
             return
-        if entity_id == cfg.get("distance_sensor"):
+        if entity_id in self.distance_sensors().values():
             self._distance_changed()
             return
         if entity_id in ((cfg.get("lamps") or {}).get("motion") or []) and new.state in ("on", "detected"):
@@ -475,7 +496,8 @@ class AlarmAutomation:
             "away_target": self.away_target(),
             "all_away": self.all_away(),
             "persons": [
-                {"id": p, "name": self._name(p), "home": (s := self.hass.states.get(p)) is not None and s.state == "home"}
+                {"id": p, "name": self._name(p), "home": (s := self.hass.states.get(p)) is not None and s.state == "home",
+                 "km": round(km, 1) if (km := self.distances().get(p)) is not None else None}
                 for p in self.persons()
             ],
             "rearm_pending": self._rearm_timer is not None,
