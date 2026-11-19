@@ -20,6 +20,10 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - The volume of a state now applies to the siren's players as well.
 - Players chosen one by one in 1.18.0b7 keep working until you choose rooms.
 
+### Alarm: screen and status lamps removed
+- The **Screen** (NSPanel text) and **Status lamps** (WLED presets) are removed from the Alarm page, and RoomControl no longer drives them.
+- Per state there are now two cards side by side: **Speakers** and **Message**.
+
 ---
 
 ## 1.18.0b7 (beta)

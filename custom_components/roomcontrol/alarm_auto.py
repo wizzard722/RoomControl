@@ -14,11 +14,7 @@ General setting "alarm" (panel → Alarm), with the house's alarm panel from
  "home_on": bool, "home_minutes": 10,   # someone comes home: disarm (re-arm a slot later)
  "notify": "notify.mobile_app_x", "notify_skip": entity (on → no messages),
  "code": "1234" (optional, for panels that need one),
- "screen": {"title": text entity, "text": text entity},   # e.g. an NSPanel
- "lamps": {"lights": [...], "selects": [...], "presets": {state: option},
-           "motion": [sensors], "off_minutes": 10},       # status lamps (WLED)
- "states": {state: {"screen_title", "screen_text", "screen_clear": s,
-            "speak": text, "speak_rooms": [area ids], "volume": %, "volume_after": %,
+ "states": {state: {            "speak": text, "speak_rooms": [area ids], "volume": %, "volume_after": %,
             "repeat": s (0: once), "siren": url, "siren_rooms": [area ids],
             "stop": bool, "stop_rooms": [area ids], "notify": text}}}
 Speakers are the media players set per room (room → Media); no rooms chosen
@@ -64,7 +60,6 @@ SERVICE_FOR = {
     "armed_vacation": "alarm_arm_vacation",
     "disarmed": "alarm_disarm",
 }
-KEEP_LAMPS_ON = ("pending", "triggered")
 FAIL_AFTER = timedelta(minutes=5)
 
 
@@ -86,8 +81,6 @@ class AlarmAutomation:
         self._away_active = False
         self._rearm_timer: CALLBACK_TYPE | None = None
         self._fail_timer: CALLBACK_TYPE | None = None
-        self._screen_timer: CALLBACK_TYPE | None = None
-        self._lamps_timer: CALLBACK_TYPE | None = None
         self._loop: asyncio.Task | None = None
 
     # ── config ─────────────────────────────────────────────────────────────
@@ -191,7 +184,7 @@ class AlarmAutomation:
         for unsub in self._unsubs:
             unsub()
         self._unsubs = []
-        for name in ("_track", "_away_timer", "_rearm_timer", "_fail_timer", "_screen_timer", "_lamps_timer"):
+        for name in ("_track", "_away_timer", "_rearm_timer", "_fail_timer"):
             if (unsub := getattr(self, name)) is not None:
                 unsub()
                 setattr(self, name, None)
@@ -201,7 +194,7 @@ class AlarmAutomation:
     @callback
     def _sync(self, *_: Any) -> None:
         cfg = self.cfg()
-        ids = [self.panel(), *self.persons(), *self.distance_sensors().values(), *((cfg.get("lamps") or {}).get("motion") or [])]
+        ids = [self.panel(), *self.persons(), *self.distance_sensors().values()]
         ids = tuple(sorted({i for i in ids if i}))
         if ids != self._tracked:
             if self._track:
@@ -239,8 +232,6 @@ class AlarmAutomation:
         if entity_id in self.distance_sensors().values():
             self._distance_changed()
             return
-        if entity_id in ((cfg.get("lamps") or {}).get("motion") or []) and new.state in ("on", "detected"):
-            self.hass.async_create_task(self._lamps_show(self.state()))
 
     # ── time slots ─────────────────────────────────────────────────────────
 
@@ -428,8 +419,6 @@ class AlarmAutomation:
 
     async def _run_state(self, state: str) -> None:
         st = (self.cfg().get("states") or {}).get(state) or {}
-        await self._screen(st.get("screen_title"), st.get("screen_text"), _num(st.get("screen_clear"), 0))
-        await self._lamps_show(state)
         if stop := self._players(st, "stop"):
             await self._call("media_player", "media_stop", {ATTR_ENTITY_ID: stop})
         if st.get("notify"):
@@ -460,64 +449,9 @@ class AlarmAutomation:
                 await self._call("media_player", "volume_set", {
                     ATTR_ENTITY_ID: loud, "volume_level": st["volume_after"] / 100})
 
-    async def _screen(self, title: Any, text: Any, clear: float) -> None:
-        screen = self.cfg().get("screen") or {}
-        if not text:
-            return
-        if title_entity := screen.get("title"):
-            await self._set_text(title_entity, str(title or ""))
-        if text_entity := screen.get("text"):
-            await self._set_text(text_entity, str(text) if title_entity or not title else f"{title}: {text}")
-        if self._screen_timer:
-            self._screen_timer()
-            self._screen_timer = None
-        if clear > 0:
-            @callback
-            def _clear(_now: Any) -> None:
-                self._screen_timer = None
-                for entity in (screen.get("title"), screen.get("text")):
-                    if entity:
-                        self.hass.async_create_task(self._set_text(entity, ""))
-
-            self._screen_timer = async_call_later(self.hass, clear, _clear)
-
-    async def _set_text(self, entity_id: str, value: str) -> None:
-        domain = entity_id.split(".", 1)[0]
-        if domain not in ("text", "input_text"):
-            return
-        await self._call(domain, "set_value", {ATTR_ENTITY_ID: entity_id, "value": value})
-
-    async def _lamps_show(self, state: str | None) -> None:
-        """Status lamps: the preset of this state, on; off again after a while
-        (not while a sensor went off or the alarm sounds)."""
-        lamps = self.cfg().get("lamps") or {}
-        lights, selects = [x for x in lamps.get("lights") or [] if x], [x for x in lamps.get("selects") or [] if x]
-        if not state or not (lights or selects):
-            return
-        preset = (lamps.get("presets") or {}).get(state)
-        if preset:
-            for select in selects:
-                await self._call("select", "select_option", {ATTR_ENTITY_ID: select, "option": preset})
-        if lights:
-            await self._call("light", "turn_on", {ATTR_ENTITY_ID: lights})
-        if self._lamps_timer:
-            self._lamps_timer()
-            self._lamps_timer = None
-        minutes = _num(lamps.get("off_minutes"), 10)
-        if lights and minutes > 0 and state not in KEEP_LAMPS_ON:
-            @callback
-            def _off(_now: Any) -> None:
-                self._lamps_timer = None
-                if self.state() not in KEEP_LAMPS_ON:
-                    self.hass.async_create_task(self._call("light", "turn_off", {ATTR_ENTITY_ID: lights}))
-
-            self._lamps_timer = async_call_later(self.hass, minutes * 60, _off)
-
     async def test_state(self, state: str) -> None:
-        """Panel "Test": screen, status lamps and one spoken message of this state."""
+        """Panel "Test": the spoken message of this state, once."""
         st = (self.cfg().get("states") or {}).get(state) or {}
-        await self._screen(st.get("screen_title"), st.get("screen_text"), _num(st.get("screen_clear"), 30) or 30)
-        await self._lamps_show(state)
         players = self._players(st, "speak")
         if st.get("speak") and players and (tts := announce_tts(self.hass)):
             await self._call("tts", "speak", {ATTR_ENTITY_ID: tts, "media_player_entity_id": players, "message": st["speak"]})

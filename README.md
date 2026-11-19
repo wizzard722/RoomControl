@@ -91,11 +91,9 @@ A dedicated **Alarm** page in the panel:
 - **Everyone away**: RoomControl locks up and arms. Beyond a distance you set (default 100 km) the alarm goes to Armed Vacation.
 - **Someone comes home**: the alarm is disarmed; during a time slot it goes back to the slot's state after a while.
 - **Per state** RoomControl can:
-  - show a text on a screen (e.g. an NSPanel);
-  - speak and sound a siren on speakers, repeated while the state lasts;
+  - speak and sound a siren on the speakers of chosen rooms, repeated while the state lasts;
   - stop media;
-  - send a message;
-  - show a preset on status lamps (e.g. WLED).
+  - send a message.
 - **What the alarm did**, with the reason for each change.
 
 ### Safety: locks, alarm, smoke and doorbell
