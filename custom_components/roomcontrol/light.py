@@ -542,6 +542,8 @@ class RoomControlLight(LightEntity):
         # 1% mode switched on by the alarm (so leaving armed home restores it)
         self._dim_by_alarm = False
         self._alarm_started = False
+        # Grace period end from before a restart (used once by _check_idle)
+        self._restored_grace: datetime | None = None
         # Lamps of bundles with own times whose slot was running (None: not checked yet)
         self._own_prev: set[str] | None = None
         # Lamps in Dim because their time slot's Dim time has come
@@ -2679,6 +2681,11 @@ class RoomControlLight(LightEntity):
                 self._set_grace(None)
         elif self._cancel_motion_off is None:
             delay = self._motion_off_delay()
+            if self._restored_grace is not None:
+                # The grace period that ran before a restart: only what was left of it.
+                left = (self._restored_grace - dt_util.utcnow()).total_seconds()
+                self._restored_grace = None
+                delay = int(min(delay, max(1, left)))
             self._cancel_motion_off = async_call_later(self.hass, delay, self._motion_timeout)
             self._set_grace(dt_util.utcnow() + timedelta(seconds=delay))
 
@@ -3029,8 +3036,69 @@ class RoomControlLight(LightEntity):
         if self._lamp_dimmed(entity_id):
             self._dim_saved[entity_id] = int(min(255, max(1, brightness)))
 
+    # ── memory across a restart ────────────────────────────────────────────
+
+    def _memory_key(self) -> str:
+        return f"room:{self._area_id}"
+
+    def _memory_data(self) -> dict[str, Any]:
+        """What this room keeps across a restart (see memory.py)."""
+        iso = lambda t: t.isoformat() if t else None  # noqa: E731
+        return {
+            "dim_room": self._dim_room,
+            "dim_by_alarm": self._dim_by_alarm,
+            "dim_saved": dict(self._dim_saved),
+            "manual_until": iso(self._manual_until),
+            "late_pending": self._late_pending,
+            "late_on_done": self._late_on_done,
+            "on_by_motion": self._on_by_motion,
+            "grace_until": iso(self._grace_until),
+            "hand_set": sorted(self._hand_set),
+            "replay_on": sorted(self._replay_on),
+            "alarm_last_off": iso(self._alarm_last_off),
+            "idle_off_at": iso(self._idle_off_at),
+            "last_motion_at": iso(self._last_motion_at),
+            "debug": list(self._debug),
+        }
+
+    @callback
+    def _restore_memory(self) -> None:
+        """Put the room back as it was before the restart: Dim (with the
+        brightness to return to), manual control until its end time, the
+        grace period, Home later, lamps set by hand and the debug log."""
+        mem = self.hass.data.get(DOMAIN, {}).get("memory")
+        data = mem.get(self._memory_key()) if mem else None
+        if mem:
+            self.async_on_remove(mem.register(self._memory_key(), self._memory_data))
+        if not isinstance(data, dict):
+            return
+        when = lambda k: dt_util.parse_datetime(data[k]) if isinstance(data.get(k), str) else None  # noqa: E731
+        now = dt_util.utcnow()
+        self._dim_room = bool(data.get("dim_room"))
+        self._dim_by_alarm = bool(data.get("dim_by_alarm")) and self._dim_room
+        self._dim_saved = {
+            k: int(v) for k, v in (data.get("dim_saved") or {}).items() if isinstance(v, (int, float))
+        }
+        if (until := when("manual_until")) is not None and until > now:
+            self._manual_until = until
+            self._cancel_manual = async_call_later(self.hass, (until - now).total_seconds(), self._manual_expired)
+        self._late_pending = bool(data.get("late_pending"))
+        self._late_on_done = bool(data.get("late_on_done"))
+        self._on_by_motion = bool(data.get("on_by_motion"))
+        self._restored_grace = when("grace_until")
+        self._hand_set = {e for e in data.get("hand_set") or [] if isinstance(e, str)}
+        self._replay_on = {e for e in data.get("replay_on") or [] if isinstance(e, str)}
+        self._alarm_last_off = when("alarm_last_off")
+        self._idle_off_at = when("idle_off_at")
+        self._last_motion_at = when("last_motion_at") or self._last_motion_at
+        for entry in data.get("debug") or []:
+            if isinstance(entry, dict):
+                self._debug.append(entry)
+        self._dbg("info", "restart")
+
     async def async_added_to_hass(self) -> None:
         self.hass.data[DOMAIN].setdefault("entities", {})[self._area_id] = self
+        self._restore_memory()
         self._subscribe()
         self._prev_motion_lamps = set(self._motion_lamps())
         self._prev_dim_lamps = self._dim_bundle_lamps()

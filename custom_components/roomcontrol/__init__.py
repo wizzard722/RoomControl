@@ -27,6 +27,7 @@ from .texts import default_texts
 from .vacuums import VacuumManager
 from .control import FullControl, rc_call
 from .covers_known import CoverMemory
+from .memory import Memory
 from .entity_ids import async_prefix_entity_ids
 from .rooms import all_dim_rooms
 from .const import (
@@ -196,6 +197,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if CONF_AREA_ID in entry.data:  # safety net; migration should have handled it
         return False
     _data(hass)["loaded"] = True
+    memory = Memory(hass)
+    await memory.async_load()
+    memory.start()
+    _data(hass)["memory"] = memory  # first: everything below reads its state back from it
     clocks = ClockManager(hass)
     _data(hass)["clocks"] = clocks
     vacuums = VacuumManager(hass)
@@ -284,6 +289,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             smoke.stop()
         if (doorbells := _data(hass).pop("doorbells", None)) is not None:
             doorbells.stop()
+        if (memory := _data(hass).pop("memory", None)) is not None:
+            await memory.async_stop()
     return unloaded
 
 

@@ -79,8 +79,24 @@ class DoorbellManager:
             and isinstance(bell := room.get(CONF_DOORBELL), dict) and bell.get("entity")
         ]
 
+    def _memory_data(self) -> dict[str, Any] | None:
+        """The away message shown and the messages to put back (see memory.py)."""
+        if not self._away_shown and not self._saved_message:
+            return None
+        return {"away_shown": self._away_shown, "saved_message": dict(self._saved_message)}
+
     @callback
     def start(self) -> None:
+        if (mem := self.hass.data.get(DOMAIN, {}).get("memory")) is not None:
+            data = mem.get("doorbell")
+            if isinstance(data, dict):
+                # Away message still on the screen from before the restart: when
+                # someone comes home, the earlier message goes back.
+                self._away_shown = bool(data.get("away_shown"))
+                self._saved_message = {
+                    k: v for k, v in (data.get("saved_message") or {}).items() if isinstance(v, str)
+                }
+            self._unsubs.append(mem.register("doorbell", self._memory_data))
         self._unsubs.append(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._sync))
         self._sync()
 

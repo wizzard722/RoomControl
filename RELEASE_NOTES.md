@@ -15,6 +15,20 @@ With **All dim follows the alarm** on:
   - In other states (e.g. Armed Away) All dim comes back as it was before the restart.
 - Switching the option on applies the alarm's current state right away.
 
+#### RoomControl remembers its state across a restart
+Until now RoomControl kept its working state only in memory, so a restart of Home Assistant forgot it. That state is now saved every 5 minutes and when Home Assistant stops, and put back at startup:
+- **Per room**:
+  - **Dim**, including the brightness each lamp returns to and whether the alarm switched it on;
+  - **Manual control (Take over)**, until its original end time;
+  - the **grace period**: only what was left of it still runs;
+  - **Home later**;
+  - lights switched on by motion, and lamps whose brightness you set by hand;
+  - **What happened** (the debug log), with a "Home Assistant restarted" line.
+- **Smoke**: stays active until **All safe**, with the devices to switch back on.
+- **Doorbell**: the away message on the screen, and the message to put back.
+- **Full control**: what each lamp and curtain should be. A change made while Home Assistant was down is put back too.
+- Already kept: Vacation, All dim, Home later, the curtain state, alarm clocks, learned data, locks and vacuum.
+
 ---
 
 ## 1.18.0b5 (beta)

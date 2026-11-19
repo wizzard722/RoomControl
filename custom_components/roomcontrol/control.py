@@ -182,11 +182,33 @@ class FullControl:
 
     @callback
     def start(self) -> None:
+        mem = self.hass.data.get(DOMAIN, {}).get("memory")
+        if mem is not None:
+            # What each lamp/curtain should be, from before the restart: a change
+            # made while Home Assistant was down is put back too.
+            stored = mem.get("full_control")
+            if isinstance(stored, dict):
+                wanted = _wanted(self.hass)
+                for entity_id, want in stored.items():
+                    if isinstance(want, dict) and entity_id not in wanted:
+                        at = dt_util.parse_datetime(want.get("at") or "") if isinstance(want.get("at"), str) else None
+                        wanted[entity_id] = {**want, "at": at}
+            self._unsub_memory = mem.register("full_control", self._memory_data)
         self._unsub_signal = async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._sync)
         self._sync()
 
+    def _memory_data(self) -> dict[str, Any] | None:
+        wanted = {
+            e: {**w, "at": w["at"].isoformat() if isinstance(w.get("at"), datetime) else None}
+            for e, w in _wanted(self.hass).items() if e in self._room_of
+        }
+        return wanted or None
+
     @callback
     def stop(self) -> None:
+        if getattr(self, "_unsub_memory", None):
+            self._unsub_memory()
+            self._unsub_memory = None
         if self._unsub_signal:
             self._unsub_signal()
             self._unsub_signal = None

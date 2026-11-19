@@ -107,8 +107,42 @@ class SmokeManager:
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
+    def _memory_data(self) -> dict[str, Any] | None:
+        """Smoke stays active across a restart until "All safe" (see memory.py)."""
+        if not self.active and not self._maintenance_sent:
+            return None
+        return {
+            "active": self.active,
+            "since": self.since.isoformat() if self.since else None,
+            "areas": list(self.areas),
+            "switches_were_on": list(self._switches_were_on),
+            "maintenance_sent": {k: v.isoformat() for k, v in self._maintenance_sent.items()},
+        }
+
+    @callback
+    def _restore_memory(self) -> None:
+        mem = self.hass.data.get(DOMAIN, {}).get("memory")
+        if mem is None:
+            return
+        data = mem.get("smoke")
+        self._unsubs.append(mem.register("smoke", self._memory_data))
+        if not isinstance(data, dict):
+            return
+        sent = data.get("maintenance_sent") or {}
+        self._maintenance_sent = {
+            k: t for k, v in sent.items() if isinstance(v, str) and (t := dt_util.parse_datetime(v)) is not None
+        }
+        if data.get("active"):
+            # Smoke before the restart and nobody pressed "All safe" yet: still active.
+            self.active = True
+            self.since = dt_util.parse_datetime(data.get("since") or "") or dt_util.utcnow()
+            self.areas = [a for a in data.get("areas") or [] if isinstance(a, str)]
+            self._switches_were_on = [s for s in data.get("switches_were_on") or [] if isinstance(s, str)]
+            async_dispatcher_send(self.hass, SIGNAL_SMOKE)
+
     @callback
     def start(self) -> None:
+        self._restore_memory()
         self._unsubs.append(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._sync))
         self._unsubs.append(
             async_track_time_interval(self.hass, self._maintenance, MAINTENANCE_INTERVAL)
@@ -172,6 +206,8 @@ class SmokeManager:
             return
         self.active = True
         self.since = dt_util.utcnow()
+        if (mem := self.hass.data.get(DOMAIN, {}).get("memory")) is not None:
+            mem.changed()
         _LOGGER.warning("Smoke detected by %s (%s)", entity_id, area)
         where = self._area_name(area)
         message = text(self.hass, "smoke_notify", room=where)
@@ -190,6 +226,8 @@ class SmokeManager:
         self.active = False
         self.since = None
         self.areas = []
+        if (mem := self.hass.data.get(DOMAIN, {}).get("memory")) is not None:
+            mem.changed()
         persistent_notification.async_dismiss(self.hass, "roomcontrol_smoke")
         if self._switches_were_on:
             # The devices that were on before the smoke go on again.
