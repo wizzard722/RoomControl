@@ -14,6 +14,12 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - When Home Assistant starts during a time slot, the alarm is put in the slot's state as well.
 - Changing other alarm settings doesn't touch the alarm, so a state you set by hand stays until the next slot starts or ends.
 
+### Alarm: speakers per room
+- Speech, siren and *Stop media* now use the **media players set per room** (room → Settings → Media). You no longer pick players one by one.
+- Per state you choose the **rooms**. No room chosen means every room with speakers. The players that follow are shown under the choice.
+- The volume of a state now applies to the siren's players as well.
+- Players chosen one by one in 1.18.0b7 keep working until you choose rooms.
+
 ---
 
 ## 1.18.0b7 (beta)

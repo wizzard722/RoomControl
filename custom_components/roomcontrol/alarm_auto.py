@@ -18,9 +18,12 @@ General setting "alarm" (panel → Alarm), with the house's alarm panel from
  "lamps": {"lights": [...], "selects": [...], "presets": {state: option},
            "motion": [sensors], "off_minutes": 10},       # status lamps (WLED)
  "states": {state: {"screen_title", "screen_text", "screen_clear": s,
-            "speak": text, "players": [...], "volume": %, "volume_after": %,
-            "repeat": s (0: once), "siren": url, "siren_players": [...],
-            "stop_media": [players], "notify": text}}}
+            "speak": text, "speak_rooms": [area ids], "volume": %, "volume_after": %,
+            "repeat": s (0: once), "siren": url, "siren_rooms": [area ids],
+            "stop": bool, "stop_rooms": [area ids], "notify": text}}}
+Speakers are the media players set per room (room → Media); no rooms chosen
+means every room that has them. (Older: "players", "siren_players",
+"stop_media" lists of players are still used when no rooms are set.)
 
 Slots, "everyone away" and the distance are judged when they change (a slot
 starting or ending, the last person leaving, the distance crossing the
@@ -47,7 +50,8 @@ from homeassistant.helpers.event import (
 from homeassistant.util import dt as dt_util
 
 from .announce import announce_tts
-from .const import ALARM_TRANSITIONAL, DOMAIN, SETTING_ALARM_ENTITY, SIGNAL_CONFIG_UPDATED
+from .const import ALARM_TRANSITIONAL, CONF_MEDIA_PLAYERS, DOMAIN, SETTING_ALARM_ENTITY, SIGNAL_CONFIG_UPDATED
+from .rooms import managed_areas
 from .slots import mode_slots, slot_part
 
 _LOGGER = logging.getLogger(__name__)
@@ -399,20 +403,44 @@ class AlarmAutomation:
         # A background task: it may repeat for as long as the state lasts.
         self._loop = self.hass.async_create_background_task(self._run_state(new), f"{DOMAIN}_alarm_{new}")
 
+    def room_players(self, rooms: list[str] | None) -> list[str]:
+        """The media players of these rooms (room → Media); none: every room's."""
+        managed = managed_areas(self.hass)
+        chosen = {r for r in rooms or [] if r}
+        players: list[str] = []
+        for room in self.hass.data.get(DOMAIN, {}).get("rooms", []):
+            area = room.get("area_id")
+            if area not in managed or (chosen and area not in chosen):
+                continue
+            for player in room.get(CONF_MEDIA_PLAYERS, []) or []:
+                if player and player not in players:
+                    players.append(player)
+        return players
+
+    def _players(self, st: dict[str, Any], kind: str) -> list[str]:
+        """Players for speak / siren / stop of one state's settings."""
+        legacy = {"speak": "players", "siren": "siren_players", "stop": "stop_media"}[kind]
+        if f"{kind}_rooms" not in st and isinstance(st.get(legacy), list):
+            return [p for p in st[legacy] if p]  # older: players chosen one by one
+        if kind == "stop" and not st.get("stop"):
+            return []
+        return self.room_players(st.get(f"{kind}_rooms"))
+
     async def _run_state(self, state: str) -> None:
         st = (self.cfg().get("states") or {}).get(state) or {}
         await self._screen(st.get("screen_title"), st.get("screen_text"), _num(st.get("screen_clear"), 0))
         await self._lamps_show(state)
-        if stop := [p for p in st.get("stop_media") or [] if p]:
+        if stop := self._players(st, "stop"):
             await self._call("media_player", "media_stop", {ATTR_ENTITY_ID: stop})
         if st.get("notify"):
             self._notify(st["notify"])
-        speak, players = st.get("speak"), [p for p in st.get("players") or [] if p]
-        siren, siren_players = st.get("siren"), [p for p in st.get("siren_players") or [] if p]
+        speak, players = st.get("speak"), self._players(st, "speak")
+        siren, siren_players = st.get("siren"), self._players(st, "siren")
         if not (speak and players) and not (siren and siren_players):
             return
-        if players and isinstance(st.get("volume"), (int, float)):
-            await self._call("media_player", "volume_set", {ATTR_ENTITY_ID: players, "volume_level": st["volume"] / 100})
+        loud = list(dict.fromkeys([*(players if speak else []), *(siren_players if siren else [])]))
+        if loud and isinstance(st.get("volume"), (int, float)):
+            await self._call("media_player", "volume_set", {ATTR_ENTITY_ID: loud, "volume_level": st["volume"] / 100})
         repeat = _num(st.get("repeat"), 0)
         try:
             while True:
@@ -428,9 +456,9 @@ class AlarmAutomation:
                 if self.state() != state:
                     break
         finally:
-            if players and isinstance(st.get("volume_after"), (int, float)):
+            if loud and isinstance(st.get("volume_after"), (int, float)):
                 await self._call("media_player", "volume_set", {
-                    ATTR_ENTITY_ID: players, "volume_level": st["volume_after"] / 100})
+                    ATTR_ENTITY_ID: loud, "volume_level": st["volume_after"] / 100})
 
     async def _screen(self, title: Any, text: Any, clear: float) -> None:
         screen = self.cfg().get("screen") or {}
@@ -490,7 +518,7 @@ class AlarmAutomation:
         st = (self.cfg().get("states") or {}).get(state) or {}
         await self._screen(st.get("screen_title"), st.get("screen_text"), _num(st.get("screen_clear"), 30) or 30)
         await self._lamps_show(state)
-        players = [p for p in st.get("players") or [] if p]
+        players = self._players(st, "speak")
         if st.get("speak") and players and (tts := announce_tts(self.hass)):
             await self._call("tts", "speak", {ATTR_ENTITY_ID: tts, "media_player_entity_id": players, "message": st["speak"]})
 
