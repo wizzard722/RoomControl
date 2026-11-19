@@ -62,6 +62,40 @@ SERVICE_FOR = {
 }
 FAIL_AFTER = timedelta(minutes=5)
 
+# What each state does until the user changes it (texts in Dutch or English,
+# after Home Assistant's language). A value the user set, also an empty one,
+# replaces the default.
+_DEFAULT_TEXTS = {
+    "nl": {
+        "arming": {"speak": "Alarm Systeem wordt ingeschakeld."},
+        "pending": {"speak": "Alarm Systeem is geactiveerd.",
+                    "notify": "Het Alarm Systeem heeft gedetecteerd dat een sensor is afgegaan."},
+        "triggered": {"speak": "Het Alarm Systeem is afgegaan.", "notify": "Het alarm gaat af!"},
+        "armed_away": {"notify": "Armed Away is ingeschakeld."},
+    },
+    "en": {
+        "arming": {"speak": "The alarm system is being armed."},
+        "pending": {"speak": "The alarm system has been activated.",
+                    "notify": "The alarm system detected that a sensor went off."},
+        "triggered": {"speak": "The alarm system has gone off.", "notify": "The alarm is going off!"},
+        "armed_away": {"notify": "Armed Away is on."},
+    },
+}
+_DEFAULT_SOUND = {
+    "arming": {"volume": 30, "volume_after": 20, "repeat": 0},
+    "pending": {"volume": 40, "volume_after": 20, "repeat": 10},
+    "triggered": {"volume": 40, "volume_after": 20, "repeat": 10},
+}
+
+
+def state_defaults(language: str | None) -> dict[str, dict[str, Any]]:
+    """The default settings of every alarm state."""
+    texts = _DEFAULT_TEXTS["nl" if (language or "").lower().startswith("nl") else "en"]
+    return {
+        state: {**_DEFAULT_SOUND.get(state, {}), **texts.get(state, {})}
+        for state in ("arming", "pending", "triggered", "disarmed", "armed_home", "armed_away", "armed_night", "armed_vacation")
+    }
+
 
 def _num(value: Any, default: float) -> float:
     return float(value) if isinstance(value, (int, float)) else default
@@ -391,6 +425,11 @@ class AlarmAutomation:
         if self._loop:
             self._loop.cancel()
             self._loop = None
+        if old in ("pending", "triggered") and new not in ("pending", "triggered"):
+            # The alarm stopped sounding: a siren that is still playing stops too.
+            before = self.state_cfg(old)
+            if before.get("siren") and (siren := self._players(before, "siren")):
+                self.hass.async_create_task(self._call("media_player", "media_stop", {ATTR_ENTITY_ID: siren}))
         # A background task: it may repeat for as long as the state lasts.
         self._loop = self.hass.async_create_background_task(self._run_state(new), f"{DOMAIN}_alarm_{new}")
 
@@ -417,8 +456,13 @@ class AlarmAutomation:
             return []
         return self.room_players(st.get(f"{kind}_rooms"))
 
+    def state_cfg(self, state: str) -> dict[str, Any]:
+        """A state's settings: the defaults, with what the user set over them."""
+        own = (self.cfg().get("states") or {}).get(state) or {}
+        return {**state_defaults(self.hass.config.language).get(state, {}), **own}
+
     async def _run_state(self, state: str) -> None:
-        st = (self.cfg().get("states") or {}).get(state) or {}
+        st = self.state_cfg(state)
         if stop := self._players(st, "stop"):
             await self._call("media_player", "media_stop", {ATTR_ENTITY_ID: stop})
         if st.get("notify"):
@@ -451,7 +495,7 @@ class AlarmAutomation:
 
     async def test_state(self, state: str) -> None:
         """Panel "Test": the spoken message of this state, once."""
-        st = (self.cfg().get("states") or {}).get(state) or {}
+        st = self.state_cfg(state)
         players = self._players(st, "speak")
         if st.get("speak") and players and (tts := announce_tts(self.hass)):
             await self._call("tts", "speak", {ATTR_ENTITY_ID: tts, "media_player_entity_id": players, "message": st["speak"]})
@@ -500,4 +544,5 @@ class AlarmAutomation:
             ],
             "rearm_pending": self._rearm_timer is not None,
             "log": list(self.log)[:15],
+            "defaults": state_defaults(self.hass.config.language),
         }

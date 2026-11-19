@@ -1,5 +1,24 @@
 # Release notes
 
+## 1.18.0b10 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Alarm: default values per state
+- Every alarm state now starts with default values, which you can change. The texts are in Dutch or English, after Home Assistant's language.
+
+| State | Spoken text | Volume / after | Repeat | Message |
+| --- | --- | --- | --- | --- |
+| Arming | "The alarm system is being armed." | 30% / 20% | once | – |
+| Sensor tripped | "The alarm system has been activated." | 40% / 20% | every 10 s | "The alarm system detected that a sensor went off." |
+| Alarm sounds | "The alarm system has gone off." | 40% / 20% | every 10 s | "The alarm is going off!" |
+| Armed Away | – | – | – | "Armed Away is on." |
+
+- What you change is kept, an emptied field too. **Restore defaults** puts a state back to its defaults.
+- When the alarm stops sounding (from *Sensor tripped* or *Alarm sounds* to another state), a siren that is still playing is stopped.
+
+---
+
 ## 1.18.0b9 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
