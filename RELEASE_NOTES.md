@@ -1,5 +1,50 @@
 # Release notes
 
+## 1.18.0b7 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### New: the Alarm page
+A new page in the panel (shield button on the dashboard) brings everything the alarm does together. It can replace your own alarm automations and scripts. It has four tabs.
+
+#### Overview
+- The alarm's current state and since when.
+- The time slot running now, who is home, and the distance to home.
+- The state of All dim and Vacation.
+- **What the alarm did**: the latest changes, each with its reason.
+
+#### Automatic: RoomControl sets the alarm itself
+- **Time slots**: one or more time slots, each with the state the alarm should be in (Armed Home, Armed Away, Armed Night, Armed Vacation or Disarmed).
+  - A slot can count only when nobody is home.
+  - It uses the same time-slot editor as light bundles: days, start at a time / dusk / dark, end at a time / sunrise, Normal / Vacation.
+  - When a slot ends, the alarm is disarmed if someone is home, or left alone.
+- **Everyone away**: when all chosen persons have been away for a set time:
+  - RoomControl first locks the chosen locks;
+  - then it looks at the distance to home: beyond the limit (adjustable, default **100 km**) → **Armed Vacation**, closer → **Armed Home**. Both states can be chosen.
+  - While everyone stays away, crossing the limit changes the state.
+  - A message follows when the alarm is still off 5 minutes later.
+  - Vacation mode can follow the alarm (Armed Vacation → Vacation).
+- **Someone comes home**: the alarm is disarmed. During a time slot it goes back to the slot's state after a set time (default 10 min), with a message "{name} komt thuis".
+- **Messages**: to a notify service of your choice, skipped while a chosen switch is on. An optional alarm code is supported for panels that need one.
+
+#### Per state: what happens in each state
+This covers arming, sensor tripped, alarm sounds, disarmed, Armed Home / Away / Night / Vacation:
+- **Screen** (e.g. an NSPanel, via a `text` / `input_text` entity): title and text, cleared after a set time.
+- **Speakers**: a spoken text on chosen players at a set volume, repeated every N seconds for as long as the state lasts. The volume goes back afterwards.
+- **Siren**: a sound file on chosen players, repeated in the same way.
+- **Stop media** on chosen players.
+- **Message**.
+- **Status lamps** (e.g. WLED): lamps and preset selects show a preset per state, also on motion of chosen sensors, and switch off after a set time. They stay on while a sensor tripped or the alarm sounds.
+- A **Test** button per state.
+
+#### Rooms
+- What the lamps in each room do at Armed Home and Armed Away, with a button to open the room.
+
+### Note
+If RoomControl takes over arming, disarming and the alarm messages, switch off your own alarm automations in Home Assistant, so they don't work against each other.
+
+---
+
 ## 1.18.0b6 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).

@@ -28,6 +28,7 @@ from .vacuums import VacuumManager
 from .control import FullControl, rc_call
 from .covers_known import CoverMemory
 from .memory import Memory
+from .alarm_auto import AlarmAutomation
 from .entity_ids import async_prefix_entity_ids
 from .rooms import all_dim_rooms
 from .const import (
@@ -102,6 +103,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_set_config)
     websocket_api.async_register_command(hass, ws_set_dim)
     websocket_api.async_register_command(hass, ws_set_manual)
+    websocket_api.async_register_command(hass, ws_alarm_status)
+    websocket_api.async_register_command(hass, ws_alarm_test)
     websocket_api.async_register_command(hass, ws_call_service)
     websocket_api.async_register_command(hass, ws_get_debug)
     websocket_api.async_register_command(hass, ws_forget_learned)
@@ -228,6 +231,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     doorbells = DoorbellManager(hass)
     _data(hass)["doorbells"] = doorbells
     doorbells.start()
+    alarm = AlarmAutomation(hass)
+    _data(hass)["alarm"] = alarm
+    alarm.start()
     _setup_entity_id_prefix(hass, entry)
     return True
 
@@ -289,6 +295,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             smoke.stop()
         if (doorbells := _data(hass).pop("doorbells", None)) is not None:
             doorbells.stop()
+        if (alarm := _data(hass).pop("alarm", None)) is not None:
+            alarm.stop()
         if (memory := _data(hass).pop("memory", None)) is not None:
             await memory.async_stop()
     return unloaded
@@ -519,6 +527,34 @@ async def ws_test_text(
         hass, msg["message"], title="RoomControl (test)", notification_id=f"{DOMAIN}_text_test"
     )
     connection.send_result(msg["id"], {"sent": True})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/alarm_status"})
+@callback
+def ws_alarm_status(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """The Alarm page: state, time slot now, distance, persons and what happened."""
+    alarm = _data(hass).get("alarm")
+    connection.send_result(msg["id"], alarm.status() if alarm else {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/alarm_test", vol.Required("state"): str}
+)
+@websocket_api.async_response
+async def ws_alarm_test(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Panel "Test": screen text, status lamps and the spoken message of a state."""
+    alarm = _data(hass).get("alarm")
+    if alarm is not None:
+        await alarm.test_state(msg["state"])
+    connection.send_result(msg["id"], {"done": alarm is not None})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/smoke_clear"})

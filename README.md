@@ -84,6 +84,20 @@ RoomControl works with the areas and floors you already have in Home Assistant. 
 - **Music** on a chosen player that gets louder with every step, optionally on repeat.
 - **Snooze** and **stop**, as buttons and switches in Home Assistant. Dim is paused for the clock's lamps until the last step.
 
+### Alarm
+
+A dedicated **Alarm** page in the panel:
+- **Time slots** put the alarm in a chosen state (e.g. Armed Home at night).
+- **Everyone away**: RoomControl locks up and arms. Beyond a distance you set (default 100 km) the alarm goes to Armed Vacation.
+- **Someone comes home**: the alarm is disarmed; during a time slot it goes back to the slot's state after a while.
+- **Per state** RoomControl can:
+  - show a text on a screen (e.g. an NSPanel);
+  - speak and sound a siren on speakers, repeated while the state lasts;
+  - stop media;
+  - send a message;
+  - show a preset on status lamps (e.g. WLED).
+- **What the alarm did**, with the reason for each change.
+
 ### Safety: locks, alarm, smoke and doorbell
 
 - **Locks.**
