@@ -21,6 +21,7 @@ from homeassistant.util import dt as dt_util
 from .clocks import SIGNAL_CLOCKS_UPDATED, clock_key, room_clocks
 from .entity_ids import with_roomcontrol_ids
 from .const import (
+    ALARM_ARMED_HOME,
     ALARM_TRANSITIONAL,
     ALARM_DISARMED,
     DOMAIN,
@@ -232,7 +233,7 @@ class RoomDimSwitch(SwitchEntity):
 
 SETTING_ALL_DIM_SLOTS = "all_dim_slots"  # time slots, same format as a light bundle's
 SETTING_ALL_DIM_WINDOW = "all_dim_window"  # older: one {"start", "end"} window, every day
-SETTING_ALL_DIM_FOLLOWS_ALARM = "all_dim_follows_alarm"  # disarmed → all back
+SETTING_ALL_DIM_FOLLOWS_ALARM = "all_dim_follows_alarm"  # armed home → all dim, disarmed → all back
 
 
 def all_dim_slots(hass: HomeAssistant) -> list[dict[str, Any]]:
@@ -278,7 +279,8 @@ class AllDimSwitch(RestoreEntity, SwitchEntity):
 
     With a time window (general settings) it switches on by itself when the
     window starts and off when it ends; in between it can still be switched
-    by hand. "Follows the alarm": when the alarm goes to disarmed, all back."""
+    by hand. "Follows the alarm": Armed Home → all dim, Disarmed → all back
+    (also at startup: the alarm's state then decides)."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -341,6 +343,10 @@ class AllDimSwitch(RestoreEntity, SwitchEntity):
         self._alarm_watching = alarm or None
         if alarm:
             self._alarm_unsub = async_track_state_change_event(self.hass, [alarm], self._on_alarm)
+            if getattr(self, "_started", False):
+                # The option was just switched on (or another alarm chosen): apply its state now.
+                self._last_alarm = self._alarm_now() or self._last_alarm
+                self._follow_alarm(self._alarm_now())
 
     def _alarm_now(self) -> str | None:
         """The alarm panel's settled state now (None: no panel, or not settled)."""
@@ -350,17 +356,33 @@ class AllDimSwitch(RestoreEntity, SwitchEntity):
 
     @callback
     def _on_alarm(self, event: Any) -> None:
-        """The alarm goes to disarmed (from any other settled state): all back.
-        The last settled state is remembered (also across a restart), so an
-        alarm that only becomes available after a restart is judged right."""
+        """Follows the alarm: Armed Home → all dim, Disarmed → all back. The
+        last settled state is remembered (also across a restart)."""
         new = event.data.get("new_state")
         if new is None or new.state in ALARM_TRANSITIONAL:
             return
         previous, self._last_alarm = self._last_alarm, new.state
         self._refresh()
-        if new.state == ALARM_DISARMED and previous not in (None, ALARM_DISARMED) and getattr(self, "_started", True):
-            if any(e.dimmed for e in self._room_lights()):
+        if not getattr(self, "_started", True):
+            return  # before the start _startup decides
+        if new.state == previous and getattr(self, "_alarm_applied", True):
+            return  # same state: nothing new
+        self._alarm_applied = True  # (an alarm that was unknown at startup: apply it now)
+        self._follow_alarm(new.state)
+
+    @callback
+    def _follow_alarm(self, state: str | None) -> bool:
+        """Armed Home → all dim, Disarmed → all back; True when the alarm decided."""
+        lights = self._room_lights()
+        if state == ALARM_ARMED_HOME:
+            if lights and not all(e.dimmed for e in lights):
+                self.hass.async_create_task(self._set(True))
+            return True
+        if state == ALARM_DISARMED:
+            if any(e.dimmed for e in lights):
                 self.hass.async_create_task(self._set(False))
+            return True
+        return False
 
     @callback
     def _startup(self, _hass: Any = None) -> None:
@@ -374,8 +396,10 @@ class AllDimSwitch(RestoreEntity, SwitchEntity):
             want = inside
         settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
         alarm = self._alarm_now()
-        if settings.get(SETTING_ALL_DIM_FOLLOWS_ALARM) and alarm == ALARM_DISARMED and self._last_alarm not in (None, ALARM_DISARMED):
-            want = False
+        follows = bool(settings.get(SETTING_ALL_DIM_FOLLOWS_ALARM) and settings.get(SETTING_ALARM_ENTITY))
+        self._alarm_applied = not follows or alarm is not None
+        if follows and alarm in (ALARM_ARMED_HOME, ALARM_DISARMED):
+            want = alarm == ALARM_ARMED_HOME  # follows the alarm: its state now decides
         if alarm is not None:
             self._last_alarm = alarm
         self._in_window = inside

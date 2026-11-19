@@ -1,5 +1,22 @@
 # Release notes
 
+## 1.18.0b6 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Fixed since 1.18.0b5
+
+#### All dim follows the alarm, both ways
+With **All dim follows the alarm** on:
+- **Armed Home** switches All dim **on**. Before, nothing happened.
+- **Disarmed** switches All dim **off**.
+- At **startup** the alarm's state decides: Armed Home → on, Disarmed → off.
+  - This also applies when the alarm panel only becomes available after the start.
+  - In other states (e.g. Armed Away) All dim comes back as it was before the restart.
+- Switching the option on applies the alarm's current state right away.
+
+---
+
 ## 1.18.0b5 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
