@@ -5,7 +5,7 @@
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
 ### Alarm: persons from Home Assistant
-- **Who counts** for *Everyone away* and *Someone comes home*: the persons chosen on the Alarm page; else the persons under Presence; else **every person configured in Home Assistant**. Before, nobody counted when Presence was empty.
+- **Who counts** for *Everyone away* and *Someone comes home*: the persons under **Presence** in the general settings. When nobody is chosen there, everyone counts, as elsewhere in RoomControl: **every person configured in Home Assistant**. Before, nobody counted when Presence was empty. The Alarm page shows who counts; it no longer has a person choice of its own.
 - **Distance per person**: without a sensor of your own choice, RoomControl uses the person's sensor from Home Assistant's **Proximity** integration (`sensor.<zone>_<person>_distance`). The picker shows it as "Automatic: …".
 - A person whose distance is still not known counts as within the limit.
 

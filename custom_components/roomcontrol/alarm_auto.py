@@ -6,7 +6,7 @@ General setting "alarm" (panel → Alarm), with the house's alarm panel from
 {"slots_on": bool, "slots": [time slot + {"state": armed_home | armed_away |
    armed_night | armed_vacation | disarmed, "only_away": bool}],
  "outside": "disarm" | "none",          # when the last slot ends
- "away_on": bool, "persons": [person ids] (empty: the household's persons),
+ "away_on": bool, (who counts: the persons of Presence in the general settings),
  "away_delay": minutes, "distance_sensors": {person: sensor (m, km or mi)}
  (older: "distance_sensor", one sensor for everyone),
  "distance_km": 100, "far_state": "armed_vacation", "near_state": "armed_home",
@@ -96,11 +96,10 @@ class AlarmAutomation:
         return st.state if st is not None else None
 
     def persons(self) -> list[str]:
-        """Who counts: the persons chosen here; else those of Presence; else
-        every person configured in Home Assistant."""
-        own = [p for p in self.cfg().get("persons") or [] if p]
+        """Who counts: the persons of Presence (general settings); none chosen
+        there means everyone, as there: every person in Home Assistant."""
         presence = [p for p in self.hass.data.get(DOMAIN, {}).get("settings", {}).get("persons", []) or [] if p]
-        return own or presence or sorted(self.hass.states.async_entity_ids("person"))
+        return presence or sorted(self.hass.states.async_entity_ids("person"))
 
     def anyone_home(self) -> bool:
         return any((st := self.hass.states.get(p)) is not None and st.state == "home" for p in self.persons())
