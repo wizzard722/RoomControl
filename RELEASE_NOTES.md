@@ -44,6 +44,13 @@ Until now RoomControl kept its working state only in memory, so a restart of Hom
 - On a phone, the *Home later*, *Alarm clock* and *Vacuum* options next to each person stuck out of the Presence card, and pushed the person's name out of view.
 - They now move to their own line under the name when the card is too narrow. On wide screens nothing changes.
 
+#### New: "Opening" sensor per room with curtains
+- Every room with curtains gets a binary sensor on its device under Sensors: **Opening** ("Openen" in Dutch), shown as **Open** or **Closed**.
+- It uses the curtain state RoomControl knows, not the curtains' own often-wrong state. Partly open counts as open.
+- Its attributes show the state (open / closed / partly open) and the average position.
+- Entity ID: `binary_sensor.roomcontrol_<room>_opening`.
+- It sits next to the **Curtains status** sensor, which also tells partly open apart.
+
 ---
 
 ## 1.18.0b5 (beta)

@@ -44,7 +44,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.LIGHT, Platform.COVER, Platform.SENSOR, Platform.FAN, Platform.SWITCH, Platform.BUTTON, Platform.LOCK, Platform.NOTIFY]
+PLATFORMS = [Platform.LIGHT, Platform.COVER, Platform.SENSOR, Platform.BINARY_SENSOR, Platform.FAN, Platform.SWITCH, Platform.BUTTON, Platform.LOCK, Platform.NOTIFY]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
