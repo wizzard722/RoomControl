@@ -43,7 +43,11 @@ from homeassistant.components.media_player import MediaPlayerEntityFeature
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
-from homeassistant.helpers.event import async_call_later, async_track_point_in_time
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_point_in_time,
+    async_track_state_change_event,
+)
 from homeassistant.util import dt as dt_util
 
 from .smoke import smoke_active
@@ -103,12 +107,17 @@ class ClockState:
         self.unsub_snooze: CALLBACK_TYPE | None = None
         self.unsub_auto_stop: CALLBACK_TYPE | None = None
         self.unsub_covers: CALLBACK_TYPE | None = None
+        # Watches the player while the music plays (it stopped by itself → play again).
+        self.unsub_player: CALLBACK_TYPE | None = None
         self.music_on = False
+        # A one-time clock disables itself when it goes off; that must not stop it.
+        self.once_ringing = False
+        self.music_restarted: datetime | None = None
         # The player's repeat mode before the clock set it (restored at stop).
         self.repeat_before: str | None = None
 
     def cancel(self, *names: str) -> None:
-        for name in names or ("unsub_next", "unsub_snooze", "unsub_auto_stop", "unsub_covers"):
+        for name in names or ("unsub_next", "unsub_snooze", "unsub_auto_stop", "unsub_covers", "unsub_player"):
             if (unsub := getattr(self, name)) is not None:
                 unsub()
                 setattr(self, name, None)
@@ -163,7 +172,8 @@ class ClockManager:
             keys.add(key)
             state = self.states.setdefault(key, ClockState())
             self._schedule_next(key, clock, state)
-            if not clock.get("enabled", True) and state.active:
+            if not clock.get("enabled", True) and state.active and not state.once_ringing:
+                # Switched off while going off (not a one-time clock that just went off).
                 self._finish(key, state, music_off=True)
         for key in list(self.states.keys() - keys):  # clock removed
             self.states.pop(key).cancel()
@@ -322,6 +332,7 @@ class ClockManager:
                 return
             state.cancel("unsub_auto_stop")
             if clock.get("once"):
+                state.once_ringing = True  # it goes off now; disabling it must not stop it
                 await self._disable(area_id, clock["id"])
         state.ringing = True
         state.snoozed_until = None
@@ -336,7 +347,13 @@ class ClockManager:
         if not state.music_on:
             await self._music_start(key, clock, step)
         elif step > 0:
-            await self._set_volume(key, clock, step)
+            if not self._playing(key, clock):
+                # The music stopped by itself (track over, player reset): play again.
+                _LOGGER.info("Alarm clock %s: music had stopped at step %s, playing it again", key, step)
+                state.music_on = False
+                await self._music_start(key, clock, step)
+            else:
+                await self._set_volume(key, clock, step)
         if step >= self.snoozes(clock) and state.unsub_auto_stop is None and any(self.stop_actions(clock)):
             # Last step: the stop step follows one interval later.
             @callback
@@ -400,6 +417,38 @@ class ClockManager:
         state.music_on = True
         if clock.get("music_repeat"):
             await self._repeat(key, player, "all")
+        self._watch_player(key, player)
+
+    def _playing(self, key: str, clock: dict[str, Any]) -> bool:
+        st = self.hass.states.get(player) if (player := self._player(key, clock)) else None
+        return st is not None and st.state in ("playing", "buffering")
+
+    @callback
+    def _watch_player(self, key: str, player: str) -> None:
+        """While the clock goes off: if the music stops by itself (track over,
+        player reset) it is logged, and with "repeat" it plays again."""
+        state = self.states[key]
+        state.cancel("unsub_player")
+
+        @callback
+        def _changed(event: Any, k: str = key) -> None:
+            st = self.states.get(k)
+            new, old = event.data.get("new_state"), event.data.get("old_state")
+            if st is None or not st.ringing or not st.music_on or new is None or old is None:
+                return
+            if old.state in ("playing", "buffering") and new.state not in ("playing", "buffering", "paused"):
+                _LOGGER.warning(
+                    "Alarm clock %s: %s stopped playing by itself (%s → %s) at step %s",
+                    k, new.entity_id, old.state, new.state, st.step,
+                )
+                now = dt_util.utcnow()
+                recent = st.music_restarted is not None and now - st.music_restarted < timedelta(seconds=30)
+                if (found := self.find(k)) is not None and found[2].get("music_repeat") and not recent:
+                    st.music_restarted = now
+                    st.music_on = False
+                    self.hass.async_create_task(self._music_start(k, found[2], st.step))
+
+        state.unsub_player = async_track_state_change_event(self.hass, [player], _changed)
 
     def _can_repeat(self, player: str) -> bool:
         st = self.hass.states.get(player)
@@ -436,6 +485,7 @@ class ClockManager:
 
     async def _music_stop(self, key: str, clock: dict[str, Any]) -> None:
         state = self.states[key]
+        state.cancel("unsub_player")  # our own stop: not "stopped by itself"
         was_on, state.music_on = state.music_on, False
         if was_on and (player := self._player(key, clock)):
             try:
@@ -511,7 +561,8 @@ class ClockManager:
         state.ringing = False
         state.snoozed_until = None
         state.step = 0
-        state.cancel("unsub_snooze", "unsub_auto_stop", "unsub_covers")
+        state.once_ringing = False
+        state.cancel("unsub_snooze", "unsub_auto_stop", "unsub_covers", "unsub_player")
         async_dispatcher_send(self.hass, SIGNAL_CLOCKS_UPDATED)
 
     async def set_enabled(self, key: str, enabled: bool) -> None:

@@ -29,6 +29,12 @@ Until now RoomControl kept its working state only in memory, so a restart of Hom
 - **Full control**: what each lamp and curtain should be. A change made while Home Assistant was down is put back too.
 - Already kept: Vacation, All dim, Home later, the curtain state, alarm clocks, learned data, locks and vacuum.
 
+#### Alarm clock: music no longer stops after the first step
+- A **one-time** alarm clock switches itself off when it goes off. The next settings change then stopped it, including its music. It now keeps going until it is stopped or reaches its stop step.
+- When the music has stopped by itself (track over, player reset), the next step plays it again at that step's volume, instead of only turning the volume up.
+- With **Repeat**, the music also plays again as soon as it stops by itself, at most once every 30 seconds. Music a person paused on the speaker is left alone.
+- When the player stops playing by itself while the clock goes off, a warning is written to the Home Assistant log.
+
 ---
 
 ## 1.18.0b5 (beta)
