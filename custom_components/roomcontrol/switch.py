@@ -233,7 +233,7 @@ class RoomDimSwitch(SwitchEntity):
 
 SETTING_ALL_DIM_SLOTS = "all_dim_slots"  # time slots, same format as a light bundle's
 SETTING_ALL_DIM_WINDOW = "all_dim_window"  # older: one {"start", "end"} window, every day
-SETTING_ALL_DIM_FOLLOWS_ALARM = "all_dim_follows_alarm"  # armed home → all dim, disarmed → all back
+SETTING_ALL_DIM_FOLLOWS_ALARM = "all_dim_follows_alarm"  # armed home → all dim, disarmed → all back (default on)
 
 
 def all_dim_slots(hass: HomeAssistant) -> list[dict[str, Any]]:
@@ -334,7 +334,7 @@ class AllDimSwitch(RestoreEntity, SwitchEntity):
     @callback
     def _setup_alarm(self) -> None:
         settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
-        alarm = settings.get(SETTING_ALARM_ENTITY) if settings.get(SETTING_ALL_DIM_FOLLOWS_ALARM) else None
+        alarm = settings.get(SETTING_ALARM_ENTITY) if settings.get(SETTING_ALL_DIM_FOLLOWS_ALARM, True) else None
         if alarm == self._alarm_watching:
             return
         if self._alarm_unsub:
@@ -396,7 +396,7 @@ class AllDimSwitch(RestoreEntity, SwitchEntity):
             want = inside
         settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
         alarm = self._alarm_now()
-        follows = bool(settings.get(SETTING_ALL_DIM_FOLLOWS_ALARM) and settings.get(SETTING_ALARM_ENTITY))
+        follows = bool(settings.get(SETTING_ALL_DIM_FOLLOWS_ALARM, True) and settings.get(SETTING_ALARM_ENTITY))
         self._alarm_applied = not follows or alarm is not None
         if follows and alarm in (ALARM_ARMED_HOME, ALARM_DISARMED):
             want = alarm == ALARM_ARMED_HOME  # follows the alarm: its state now decides

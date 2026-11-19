@@ -1,5 +1,17 @@
 # Release notes
 
+## 1.18.0b9 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### All dim switches on at Armed Home (on by default)
+- **All dim follows the alarm** is now **on by default**: Armed Home switches All dim on, Disarmed switches it off. Before, it only happened after you had switched this option on.
+- The option is also on the Alarm page, in the **Armed Home** card ("Switch All dim on") and the **Disarmed** card ("Switch All dim off"). It is the same setting as under General settings → Dim.
+- The card summaries show "All dim on" / "All dim off".
+- If you switched the option off before, it stays off.
+
+---
+
 ## 1.18.0b8 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
