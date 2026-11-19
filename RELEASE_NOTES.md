@@ -9,6 +9,11 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - **Distance per person**: without a sensor of your own choice, RoomControl uses the person's sensor from Home Assistant's **Proximity** integration (`sensor.<zone>_<person>_distance`). The picker shows it as "Automatic: …".
 - A person whose distance is still not known counts as within the limit.
 
+### Alarm: time slots apply at once
+- When you save the alarm's time slots and one of them is running now, the alarm goes to that slot's state right away. Before, nothing happened until the next slot started or ended.
+- When Home Assistant starts during a time slot, the alarm is put in the slot's state as well.
+- Changing other alarm settings doesn't touch the alarm, so a state you set by hand stays until the next slot starts or ends.
+
 ---
 
 ## 1.18.0b7 (beta)

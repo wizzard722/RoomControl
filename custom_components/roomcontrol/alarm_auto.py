@@ -29,6 +29,7 @@ limit), so a state set by hand in between is left alone.
 from __future__ import annotations
 
 import asyncio
+import json
 from collections import deque
 from datetime import timedelta
 import logging
@@ -37,6 +38,7 @@ from typing import Any
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.event import (
     async_call_later,
     async_track_state_change_event,
@@ -73,7 +75,9 @@ class AlarmAutomation:
         self._unsubs: list[CALLBACK_TYPE] = []
         self._track: CALLBACK_TYPE | None = None
         self._tracked: tuple[str, ...] = ()
-        self._slot_prev: str | None | bool = False  # False: not judged yet
+        self._slot_prev: str | None | bool = False  # False: not judged yet; None: apply what runs now
+        self._slots_sig: str | None = None  # the time slots as last seen (changed → apply now)
+        self._started = False
         self._away_timer: CALLBACK_TYPE | None = None
         self._away_active = False
         self._rearm_timer: CALLBACK_TYPE | None = None
@@ -167,7 +171,16 @@ class AlarmAutomation:
     def start(self) -> None:
         self._unsubs.append(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._sync))
         self._unsubs.append(async_track_time_interval(self.hass, self._tick, timedelta(minutes=1)))
+        self._unsubs.append(async_at_started(self.hass, self._on_started))
         self._sync()
+
+    @callback
+    def _on_started(self, _hass: Any = None) -> None:
+        """Home Assistant has started: a time slot running now puts the alarm
+        in its state right away."""
+        self._started = True
+        self._slot_prev = None
+        self._tick()
 
     @callback
     def stop(self) -> None:
@@ -191,6 +204,12 @@ class AlarmAutomation:
                 self._track()
             self._tracked = ids
             self._track = async_track_state_change_event(self.hass, list(ids), self._on_change) if ids else None
+        # Time slots configured or changed: check at once and apply a slot running now.
+        sig = json.dumps([cfg.get("slots") or [], cfg.get("slots_on", True), self.panel()], sort_keys=True, default=str)
+        if sig != self._slots_sig:
+            if self._slots_sig is not None and self._started:
+                self._slot_prev = None
+            self._slots_sig = sig
         self._tick()
 
     # ── what changed ───────────────────────────────────────────────────────
@@ -248,7 +267,7 @@ class AlarmAutomation:
         target = slot.get("state") if slot else None
         previous, self._slot_prev = self._slot_prev, target
         if previous is False or target == previous:
-            return  # first look (startup / config) or nothing new
+            return  # before Home Assistant has started, or nothing new
         if self._rearm_timer is not None:
             return  # someone just came home: the slot's state comes back after the grace
         if target:
