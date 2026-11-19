@@ -35,6 +35,11 @@ Until now RoomControl kept its working state only in memory, so a restart of Hom
 - With **Repeat**, the music also plays again as soon as it stops by itself, at most once every 30 seconds. Music a person paused on the speaker is left alone.
 - When the player stops playing by itself while the clock goes off, a warning is written to the Home Assistant log.
 
+#### Room overview: floor plan centred on phones
+- The room's floor plan had a fixed width of 704 px. On a phone you only saw its left part, so the room looked off-centre and the card scrolled sideways.
+- It now scales to the available width and stays centred.
+- On narrow screens the names of neighbouring rooms are a bit smaller and only break between words.
+
 ---
 
 ## 1.18.0b5 (beta)
