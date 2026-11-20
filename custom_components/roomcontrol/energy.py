@@ -456,10 +456,18 @@ class Energy:
         return min(kwh, max(0.0, net_kw) * hours)
 
     def history(self) -> dict[str, Any]:
-        """Totals (this month, the last 30 days, everything kept) and the latest sessions."""
+        """Totals for today (the running session included), this month, the
+        last 30 and 365 days, and the sessions of the last 365 days, newest
+        first, each with its average grid price."""
         now = dt_util.now()
-        month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        d30 = now - timedelta(days=30)
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        month = today.replace(day=1)
+        running = None
+        if self.charging_since is not None:
+            running = {"start": self.charging_since.isoformat(), "end": dt_util.utcnow().isoformat(),
+                       "kwh": round(self.charged_kwh, 2), "grid_kwh": round(self.grid_kwh, 2),
+                       "solar_kwh": round(self.solar_kwh, 2), "battery_kwh": None,
+                       "cost": round(self.cost, 2) if self.priced else None, "running": True}
 
         def total(rows: list[dict[str, Any]]) -> dict[str, Any]:
             costs = [r["cost"] for r in rows if r.get("cost") is not None]
@@ -469,14 +477,23 @@ class Energy:
                     "battery_kwh": round(sum(r.get("battery_kwh") or 0 for r in rows), 1),
                     "cost": round(sum(costs), 2) if costs else None}
 
-        def after(when: datetime) -> list[dict[str, Any]]:
-            return [r for r in self.sessions if (t := dt_util.parse_datetime(r.get("end") or "")) and t >= when]
+        rows = self.sessions + ([running] if running else [])
 
+        def after(when: datetime) -> list[dict[str, Any]]:
+            return [r for r in rows if (t := dt_util.parse_datetime(r.get("end") or "")) and t >= when]
+
+        def with_price(r: dict[str, Any]) -> dict[str, Any]:
+            grid = r.get("grid_kwh", r.get("kwh")) or 0
+            price = round(r["cost"] / grid, 3) if r.get("cost") is not None and grid > 0 else None
+            return {**r, "price": price}
+
+        year = after(now - timedelta(days=365))
         return {
-            "month": total(after(month)), "days30": total(after(d30)), "all": total(self.sessions),
+            "today": total(after(today)), "month": total(after(month)),
+            "days30": total(after(now - timedelta(days=30))), "days365": total(year),
+            "all": total(self.sessions),
             "days": _num(_cfg(self.hass).get("history_days"), 365),
-            "first": self.sessions[0]["start"] if self.sessions else None,
-            "sessions": list(reversed(self.sessions[-20:])),
+            "sessions": [with_price(r) for r in reversed(year)][:500],
         }
 
     def status(self) -> dict[str, Any]:
