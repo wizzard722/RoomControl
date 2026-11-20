@@ -109,6 +109,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_alarm_status)
     websocket_api.async_register_command(hass, ws_alarm_test)
     websocket_api.async_register_command(hass, ws_energy_status)
+    websocket_api.async_register_command(hass, ws_ev_test)
     websocket_api.async_register_command(hass, ws_call_service)
     websocket_api.async_register_command(hass, ws_get_debug)
     websocket_api.async_register_command(hass, ws_forget_learned)
@@ -576,6 +577,26 @@ def ws_energy_status(
     """Power per room and phase, and whether the car is charging."""
     energy = _data(hass).get("energy")
     connection.send_result(msg["id"], energy.status() if energy else {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/ev_test", vol.Required("event"): vol.In(["started", "stopped", "full", "cheap"])}
+)
+@websocket_api.async_response
+async def ws_ev_test(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Panel "Test": one car message, sent on the chosen channels."""
+    energy = _data(hass).get("energy")
+    if energy is None:
+        connection.send_result(msg["id"], {"done": False})
+        return
+    status = energy.status()
+    cfg = _data(hass).get("settings", {}).get("energy") or {}
+    result = await energy.notifier.async_test(cfg, msg["event"], status.get("car"), status.get("price"))
+    connection.send_result(msg["id"], {"done": True, **result})
 
 
 @websocket_api.websocket_command(

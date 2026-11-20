@@ -24,6 +24,17 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### EV charger page
 - The *Power per room now* list was removed from the EV charger page.
 
+### Car messages
+- New card **Car messages** on the EV charger page (Settings tab): choose which messages you get — *Charging started*, *Charging stopped* (with how much was charged), *Fully charged* (98% or more, needs the battery level sensor) and *Cheapest time starts* (with an energy price sensor).
+- Each message has its own text (empty: a default in your language) with `{name}`, `{kw}`, `{kwh}`, `{soc}`, `{start}`, `{end}` and `{price}`, and a **Test** button that tells where it went.
+- Where to: speech on the speakers of chosen rooms, a melding in Home Assistant, and/or a message to persons' phones (Home Assistant app).
+- A change in charging only counts once it held for a minute, so a short dip in the estimate gives no message.
+
+### Cheapest time to charge (dynamic energy price)
+- New card **Energy price**: pick the price sensor of your dynamic energy supplier. Zonneplan (*Current electricity tariff* with its forecast), Nord Pool, ENTSO-e, EnergyZero and alike are read.
+- RoomControl works out how long the car needs to charge to full (battery level, battery size and the charger's maximum) and finds the cheapest unbroken stretch in the forecast, optionally ending by a *Charged by* time.
+- The EV charger page shows the price now, the time needed, the cheapest time to charge and a bar chart of the coming prices with that time highlighted.
+
 ### Power per phase next to each floor
 - With *Group rooms by floor* on and the **Energy** card set up, each floor heading on the Rooms page now shows the power of that floor per phase, separately: **L1 · L2 · L3** (with 1 phase: L1 only).
 - It is the sum of the rooms on that floor that are on that phase (their light bundles, switches and meters). A phase without any room on that floor shows "—"; rooms without a phase don't count.

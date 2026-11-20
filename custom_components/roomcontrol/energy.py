@@ -40,6 +40,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .const import CONF_GROUPS, DOMAIN
+from .ev import EvNotifier, price_status
 from .rooms import managed_areas
 
 SETTING_ENERGY = "energy"
@@ -292,6 +293,7 @@ class Energy:
         self.charging_since: datetime | None = None
         self.charged_kwh = 0.0
         self._last: datetime | None = None
+        self.notifier = EvNotifier(hass)
 
     @callback
     def start(self) -> None:
@@ -316,6 +318,10 @@ class Energy:
             self._last = now
         else:
             self.charging_since, self._last = None, None
+        if car:
+            # The charged kWh as it is now (the status was made before adding).
+            car = {**car, "charged_kwh": round(self.charged_kwh, 1) if self.charging_since else car.get("charged_kwh")}
+        self.notifier.update(_cfg(self.hass), car, status.get("price"))
         async_dispatcher_send(self.hass, SIGNAL_ENERGY)
 
     def status(self) -> dict[str, Any]:
@@ -374,6 +380,8 @@ class Energy:
                                "phase_detail": detail, "rooms": rooms}
         charger_phase = (cfg.get("charger_phase") or "L1") if three else "L1"
         if not cfg.get("charger_room") and not cfg.get("soc_sensor"):
+            if cfg.get("price_sensor"):
+                out["price"] = price_status(hass, cfg, {"battery_kwh": _num(cfg.get("battery_kwh"), 8.8)})
             return out
         phase_w = phases.get(charger_phase)
         on_phase = [(a, r["watts"]) for a, r in rooms.items() if r["phase"] == charger_phase]
@@ -413,4 +421,6 @@ class Energy:
             "phase_watts": phase_w, "phase_detail": detail.get(charger_phase) or {},
             "minus": [{"area": a, "watts": w} for a, w in on_phase],
         }
+        if cfg.get("price_sensor"):
+            out["price"] = price_status(hass, cfg, out["car"])
         return out
