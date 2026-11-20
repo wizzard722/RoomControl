@@ -89,15 +89,27 @@ def auto_sensor(hass: HomeAssistant, entity_id: str, unit: str = "w") -> str | N
     entry = ent_reg.async_get(entity_id)
     if entry is None or not entry.device_id:
         return None
-    found = []
+    units = (unit,)  # W only (the user chose that), kWh only
+    words = ("power", "vermogen", "verbruik") if unit == "w" else ("energy", "energie", "total", "totaal")
+    found: list[tuple[tuple[int, int, int], str]] = []
     for other in er.async_entries_for_device(ent_reg, entry.device_id):
         if other.domain != "sensor" or other.disabled_by:
             continue
         st = hass.states.get(other.entity_id)
         have = str((st.attributes.get("unit_of_measurement") if st else None) or other.unit_of_measurement or "").lower()
-        if have == unit:
-            found.append(other.entity_id)
-    return sorted(found)[0] if found else None
+        if have not in units:
+            continue
+        try:
+            numeric = st is not None and float(st.state) == float(st.state)
+        except (TypeError, ValueError):
+            numeric = False
+        name = f"{other.entity_id} {other.original_name or ''} {other.name or ''}".lower()
+        # Best first: a value now, then the right kind, then a fitting name.
+        rank = (0 if numeric else 1,
+                0 if (st.attributes.get("device_class") if st else other.original_device_class) in ("power", "energy") else 1,
+                0 if any(w in name for w in words) else 1)
+        found.append((rank, other.entity_id))
+    return sorted(found)[0][1] if found else None
 
 
 @callback
