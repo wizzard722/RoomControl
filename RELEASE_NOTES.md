@@ -15,6 +15,12 @@ New option in **Alarm → Automatic → Someone comes home**: *When it is dark: 
 - A person's **Home later** button still goes off as soon as that person comes home.
 - Fixed in passing: when a person with a **Home later** button on comes home in the dark, the lamps no longer flicker off and on.
 
+### Fixed: Layout – shaped rooms join up again
+Rooms reshaped with the dots (an L, a step, a moved wall) were treated as their outer rectangle, so other rooms didn't join them properly. Now the real walls count:
+- **Dragging a room** snaps it against the walls of shaped rooms, also into an L's inner corner.
+- **Dragging a dot** snaps the wall or corner onto a neighbouring room's wall (within 12 px), even when that wall is off the grid, e.g. after giving a wall a length in metres. Away from walls the dot follows the grid as before.
+- **Doors and passages** are found on any shared wall, not only the outer rectangle, so linked rooms that touch along an inner wall show their door in that wall.
+
 ### Alarm: what the alarm will do
 The Alarm page's Overview now shows **What the alarm will do** above *What the alarm did*: the next 24 hours, soonest first.
 - Time slots starting, with the state they set.
