@@ -1,5 +1,16 @@
 # Release notes
 
+## 1.18.0b13 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Alarm: siren removed
+- The **Siren** option is gone from Alarm → Per state. RoomControl no longer plays a sound file when the alarm changes state; per state it speaks the text and/or sends it as a message, and can stop media.
+- A siren set in an earlier version is no longer played. Volume and repeat now only apply to the spoken text.
+- Use your alarm panel or an automation of your own for a siren.
+
+---
+
 ## 1.18.0b12 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).

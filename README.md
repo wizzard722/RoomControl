@@ -91,7 +91,7 @@ A dedicated **Alarm** page in the panel:
 - **Everyone away**: RoomControl locks up and arms. Beyond a distance you set (default 100 km) the alarm goes to Armed Vacation.
 - **Someone comes home**: the alarm is disarmed. When it is dark, the lamps of the rooms set for *Home later* go on. After a wait time (default 10 minutes) they go off again, and during a time slot the alarm goes back to the slot's state.
 - **Per state** RoomControl can:
-  - speak and sound a siren on the speakers of chosen rooms, repeated while the state lasts;
+  - speak one text on the speakers of chosen rooms, repeated while the state lasts, and/or send it as a message;
   - stop media;
   - send a message.
 - **What the alarm will do** in the next 24 hours, and **what the alarm did**, with the reason for each change.

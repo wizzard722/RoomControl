@@ -18,12 +18,12 @@ General setting "alarm" (panel → Alarm), with the house's alarm panel from
  "code": "1234" (optional, for panels that need one),
  "states": {state: {"text": text (spoken and/or sent), "speak_on": bool, "notify_on": bool,
             "speak_rooms": [area ids], "volume": %, "volume_after": %, "repeat": s (0: once),
-            "siren_on": bool, "siren": url, "siren_rooms": [area ids],
             "stop": bool, "stop_rooms": [area ids], "notify_persons": [...], "notify_ha": bool}}}
  (older: "speak" and "notify" texts per state, see resolve_state)
 Speakers are the media players set per room (room → Media); no rooms chosen
-means every room that has them. (Older: "players", "siren_players",
-"stop_media" lists of players are still used when no rooms are set.)
+means every room that has them. (Older: "players" and "stop_media" lists
+of players are still used when no rooms are set. A siren per state, from an
+older version, is no longer played.)
 
 Slots, "everyone away" and the distance are judged when they change (a slot
 starting or ending, the last person leaving, the distance crossing the
@@ -114,7 +114,7 @@ def state_defaults(language: str | None) -> dict[str, dict[str, Any]]:
 
 def resolve_state(default: dict[str, Any], own: dict[str, Any]) -> dict[str, Any]:
     """One text per state, spoken and/or sent as a message:
-    {"text", "speak_on", "notify_on", "siren_on", ...}. Older settings had a
+    {"text", "speak_on", "notify_on", ...}. Older settings had a
     spoken text ("speak") and a message text ("notify"): the spoken text
     becomes the text (else the message text) and each channel is on when it
     had a text. "speak"/"notify" in the result are what is actually spoken /
@@ -125,11 +125,8 @@ def resolve_state(default: dict[str, Any], own: dict[str, Any]) -> dict[str, Any
     out = {**default, **own, "text": text or ""}
     out["speak_on"] = own["speak_on"] if isinstance(own.get("speak_on"), bool) else bool(speak)
     out["notify_on"] = own["notify_on"] if isinstance(own.get("notify_on"), bool) else bool(notify)
-    siren = out.get("siren") or ""
-    out["siren_on"] = own["siren_on"] if isinstance(own.get("siren_on"), bool) else bool(siren)
     out["speak"] = out["text"] if out["speak_on"] else ""
     out["notify"] = out["text"] if out["notify_on"] else ""
-    out["siren"] = siren if out["siren_on"] else ""
     return out
 
 
@@ -523,11 +520,6 @@ class AlarmAutomation:
         if self._loop:
             self._loop.cancel()
             self._loop = None
-        if old in ("pending", "triggered") and new not in ("pending", "triggered"):
-            # The alarm stopped sounding: a siren that is still playing stops too.
-            before = self.state_cfg(old)
-            if before.get("siren") and (siren := self._players(before, "siren")):
-                self.hass.async_create_task(self._call("media_player", "media_stop", {ATTR_ENTITY_ID: siren}))
         # A background task: it may repeat for as long as the state lasts.
         self._loop = self.hass.async_create_background_task(self._run_state(new), f"{DOMAIN}_alarm_{new}")
 
@@ -546,8 +538,8 @@ class AlarmAutomation:
         return players
 
     def _players(self, st: dict[str, Any], kind: str) -> list[str]:
-        """Players for speak / siren / stop of one state's settings."""
-        legacy = {"speak": "players", "siren": "siren_players", "stop": "stop_media"}[kind]
+        """Players for speak / stop of one state's settings."""
+        legacy = {"speak": "players", "stop": "stop_media"}[kind]
         if f"{kind}_rooms" not in st and isinstance(st.get(legacy), list):
             return [p for p in st[legacy] if p]  # older: players chosen one by one
         if kind == "stop" and not st.get("stop"):
@@ -567,19 +559,15 @@ class AlarmAutomation:
         if st.get("notify"):
             self._notify(st["notify"], st)
         speak, players = st.get("speak"), self._players(st, "speak")
-        siren, siren_players = st.get("siren"), self._players(st, "siren")
-        if not (speak and players) and not (siren and siren_players):
+        if not (speak and players):
             return
-        loud = list(dict.fromkeys([*(players if speak else []), *(siren_players if siren else [])]))
+        loud = players
         if loud and isinstance(st.get("volume"), (int, float)):
             await self._call("media_player", "volume_set", {ATTR_ENTITY_ID: loud, "volume_level": st["volume"] / 100})
         repeat = _num(st.get("repeat"), 0)
         try:
             while True:
-                if siren and siren_players:
-                    await self._call("media_player", "play_media", {
-                        ATTR_ENTITY_ID: siren_players, "media_content_id": siren, "media_content_type": "music"})
-                if speak and players and (tts := announce_tts(self.hass)):
+                if tts := announce_tts(self.hass):
                     await self._call("tts", "speak", {
                         ATTR_ENTITY_ID: tts, "media_player_entity_id": players, "message": speak, "cache": True})
                 if repeat <= 0 or self.state() != state:
