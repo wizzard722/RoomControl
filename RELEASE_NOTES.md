@@ -47,6 +47,12 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - A message disappears again after the time you set (default 60 s; 0 = it stays until the next one). A newer message restarts that time. **Test** shows a test message.
 - New action **roomcontrol.nspanel_message** (message, label, seconds) for your own automations.
 
+### Tags (NFC / QR)
+- New card **Tags** in the general settings: link a Home Assistant tag to light bundles, switches, locks, covers (and fans, scenes, scripts, input booleans).
+- Per tag: *Toggle* (when any is on / open / unlocked, all go off / close / lock; else all go on / open / unlock), *On / open* or *Off / close*, with a **Test** button.
+- **Who may use it**: optionally only chosen persons. A scan counts as theirs when it comes from their Home Assistant app (their user) or their phone; any other scan (e.g. a fixed NFC reader) then does nothing.
+- A tag scanned but not linked yet shows at the top with a **Link** button; a refused scan says who scanned it.
+
 ### Power per phase next to each floor
 - With *Group rooms by floor* on and the **Energy** card set up, each floor heading on the Rooms page now shows the power of that floor per phase, separately: **L1 · L2 · L3** (with 1 phase: L1 only).
 - It is the sum of the rooms on that floor that are on that phase (their light bundles, switches and meters). A phase without any room on that floor shows "—"; rooms without a phase don't count.

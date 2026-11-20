@@ -32,6 +32,7 @@ from .memory import Memory
 from .lamp_sync import LampSync
 from .room_switches import RoomSwitches, never_off
 from .energy import Energy
+from .tags import Tags, async_run_rule, tag_rules
 from .alarm_auto import AlarmAutomation
 from .entity_ids import async_prefix_entity_ids
 from .rooms import all_dim_rooms
@@ -112,6 +113,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_energy_status)
     websocket_api.async_register_command(hass, ws_ev_test)
     websocket_api.async_register_command(hass, ws_nspanel)
+    websocket_api.async_register_command(hass, ws_tags)
 
     async def _nspanel_service(call: ServiceCall) -> ServiceResponse:
         panels = await nspanel_show(
@@ -268,6 +270,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _data(hass)["energy"] = energy
     await energy.async_load()
     energy.start()
+    tags = Tags(hass)
+    _data(hass)["tags"] = tags
+    tags.start()
     _setup_entity_id_prefix(hass, entry)
     return True
 
@@ -338,6 +343,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if (energy := _data(hass).pop("energy", None)) is not None:
             energy.stop()
         nspanel_stop(hass)
+        if (tags := _data(hass).pop("tags", None)) is not None:
+            tags.stop()
         if (memory := _data(hass).pop("memory", None)) is not None:
             await memory.async_stop()
     return unloaded
@@ -598,6 +605,35 @@ def ws_energy_status(
     """Power per room and phase, and whether the car is charging."""
     energy = _data(hass).get("energy")
     connection.send_result(msg["id"], energy.status() if energy else {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/tags", vol.Optional("test"): int}
+)
+@websocket_api.async_response
+async def ws_tags(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Panel: Home Assistant's tags and the last scan; "test": run rule n as if scanned."""
+    result: dict[str, Any] = {}
+    if (n := msg.get("test")) is not None:
+        rules = tag_rules(hass)
+        result["ran"] = await async_run_rule(hass, rules[n]) if 0 <= n < len(rules) else None
+    tags: list[dict[str, Any]] = []
+    try:
+        from homeassistant.components.tag import TAG_DATA  # noqa: PLC0415
+
+        storage = hass.data.get(TAG_DATA)
+        items = storage.async_items() if storage is not None else []
+        for item in items:
+            tag_id = item.get("id") or item.get("tag_id")
+            tags.append({"id": tag_id, "name": item.get("name") or "", "last_scanned": item.get("last_scanned")})
+    except Exception:  # noqa: BLE001 - older/newer Home Assistant: the panel falls back to tag/list
+        tags = []
+    tracker = _data(hass).get("tags")
+    connection.send_result(msg["id"], {**result, "tags": tags, "last": tracker.last if tracker else None})
 
 
 @websocket_api.websocket_command(
