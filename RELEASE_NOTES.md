@@ -4,6 +4,25 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Devices on the room overview
+- A room's switches show as **Devices** tiles on its Overview, under the light bundle tiles. Tap a tile to switch it on or off. A switch that may never go off has a lock, and its tile doesn't switch it off.
+- A status chip shows how many devices are on.
+- Next to *All off* the panel says what it does, e.g. "All off also switches off Espresso machine · Fridge stays on". In a room without lights, All off now switches its switches off.
+- Switches switched off or back on by RoomControl show in **What happened**, with the reason (All off, Nobody home (Armed Away), Someone home again).
+
+### Power per room and an EV charger
+New card **Energy and EV charger** in the general settings, a **Power** card per room, and a charging card on the Rooms page.
+- **Connection**: 1 or 3 phases, with a power sensor per phase (e.g. from your smart meter, P1). W and kW are both understood.
+- **EV charger**: the room it is in, its phase (3 phases), from what power it counts as charging (default 1.2 kW) and its maximum power (default 3.7 kW).
+- **Car**: its name (shown everywhere, default "Car"), battery size (default 8.8 kWh) and, optionally, sensors for the battery level, charging state and plug, for example from the Audi Connect integration.
+- **Power per room** (room → Settings → Power):
+  - With 3 phases, the phase the room is on.
+  - Per light bundle and per switch of the room: a power sensor, or a fixed power. A light bundle counts its power times the brightness of its lamps that are on; a switch counts it while on.
+  - The card shows each part's power now and the room's total.
+- **Is the car charging?** RoomControl estimates the car's power as the power on the charger's phase minus the rooms on that phase. With a charging-state sensor that sensor decides; with a battery level sensor RoomControl shows the real level, the kWh in the battery and when it will be full.
+- **Rooms page**: a card "Audi A3 is charging · ±2.5 kW · 64%", with the kWh, full at, and "charging since … : … kWh". **How is this calculated?** shows the sum.
+- The charger's room shows a chip with the charging state.
+
 ### Alarm: lamps and WLED strips per state
 - Each state on Alarm → Per state has a **Lamps** card: add one or more lamps or WLED strips.
 - For a WLED strip you can choose a **preset** (optional). Without a preset the lamp just goes on.

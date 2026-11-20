@@ -174,6 +174,12 @@ A floor plan per floor, built from Home Assistant's floors and areas.
 
 The layout is an overview only: a link doesn't switch anything.
 
+### Switches, power and EV charger
+
+- **Switches** per room (espresso machine, fridge, TV …). Per switch: may it go off, and when (All off, nobody home / Armed Away, smoke). Switches that may never go off, such as a fridge, are never switched off. They show as tiles on the room's overview.
+- **Power** per room: per light bundle and switch a power sensor or a fixed power, and with 3 phases the room's phase.
+- **EV charger**: with a power sensor per phase, RoomControl estimates whether the car is charging and how fast. With the car's own sensors (e.g. Audi Connect) it also shows the battery level and when it will be full.
+
 ### Overview and analysis
 
 - **Dashboard.** Every room at a glance: lights, motion, an *Active* dot, and Dim, Take over and All off.

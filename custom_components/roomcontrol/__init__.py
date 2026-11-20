@@ -30,6 +30,7 @@ from .covers_known import CoverMemory
 from .memory import Memory
 from .lamp_sync import LampSync
 from .room_switches import RoomSwitches
+from .energy import Energy
 from .alarm_auto import AlarmAutomation
 from .entity_ids import async_prefix_entity_ids
 from .rooms import all_dim_rooms
@@ -107,6 +108,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_set_manual)
     websocket_api.async_register_command(hass, ws_alarm_status)
     websocket_api.async_register_command(hass, ws_alarm_test)
+    websocket_api.async_register_command(hass, ws_energy_status)
     websocket_api.async_register_command(hass, ws_call_service)
     websocket_api.async_register_command(hass, ws_get_debug)
     websocket_api.async_register_command(hass, ws_forget_learned)
@@ -243,6 +245,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _data(hass)["room_switches"] = room_switches
     await room_switches.async_load()
     room_switches.start()
+    energy = Energy(hass)
+    _data(hass)["energy"] = energy
+    energy.start()
     _setup_entity_id_prefix(hass, entry)
     return True
 
@@ -310,6 +315,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             lamp_sync.stop()
         if (room_switches := _data(hass).pop("room_switches", None)) is not None:
             room_switches.stop()
+        if (energy := _data(hass).pop("energy", None)) is not None:
+            energy.stop()
         if (memory := _data(hass).pop("memory", None)) is not None:
             await memory.async_stop()
     return unloaded
@@ -552,6 +559,18 @@ def ws_alarm_status(
     """The Alarm page: state, time slot now, distance, persons and what happened."""
     alarm = _data(hass).get("alarm")
     connection.send_result(msg["id"], alarm.status() if alarm else {})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/energy_status"})
+@callback
+def ws_energy_status(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Power per room and phase, and whether the car is charging."""
+    energy = _data(hass).get("energy")
+    connection.send_result(msg["id"], energy.status() if energy else {})
 
 
 @websocket_api.websocket_command(

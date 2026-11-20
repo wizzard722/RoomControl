@@ -23,6 +23,7 @@ from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SETTING_ALARM_ENTITY, SIGNAL_CONFIG_UPDATED
 from .rooms import anyone_home, household_persons, managed_areas
@@ -76,6 +77,19 @@ def never_off(hass: HomeAssistant) -> set[str]:
     }
 
 
+@callback
+def log_switches(hass: HomeAssistant, switches: list[str], kind: str, reason: str) -> None:
+    """Note it in each room's "What happened" (the room light's log)."""
+    entities = hass.data.get(DOMAIN, {}).get("entities", {})
+    for room in hass.data.get(DOMAIN, {}).get("rooms", []):
+        mine = [s for s in switches if s in {sw["entity_id"] for sw in room_switches(room)}]
+        light = entities.get(room.get("area_id"))
+        if not mine or light is None or not hasattr(light, "_debug"):
+            continue
+        names = [((st := hass.states.get(s)) and st.attributes.get("friendly_name")) or s for s in mine]
+        light._debug.append({"at": dt_util.utcnow().isoformat(), "kind": kind, "reason": reason, "bundles": names})
+
+
 async def async_switch_off(hass: HomeAssistant, switches: list[str], why: str) -> None:
     """Switch these off (those that are on), never one that may not go off."""
     blocked = never_off(hass)
@@ -83,6 +97,7 @@ async def async_switch_off(hass: HomeAssistant, switches: list[str], why: str) -
     if not todo:
         return
     _LOGGER.debug("Room switches off (%s): %s", why, todo)
+    log_switches(hass, todo, "off", f"switches_{why.replace(' ', '_')}")
     try:
         await hass.services.async_call("switch", "turn_off", {ATTR_ENTITY_ID: todo}, blocking=True)
     except Exception:  # noqa: BLE001
@@ -173,6 +188,7 @@ class RoomSwitches:
         if not todo:
             return
         _LOGGER.debug("Room switches back on (%s): %s", why, todo)
+        log_switches(self.hass, todo, "on", "switches_back")
         try:
             await self.hass.services.async_call("switch", "turn_on", {ATTR_ENTITY_ID: todo}, blocking=True)
         except Exception:  # noqa: BLE001
