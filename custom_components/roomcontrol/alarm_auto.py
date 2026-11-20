@@ -128,6 +128,8 @@ class AlarmAutomation:
         self._away_active = False
         self._rearm_timer: CALLBACK_TYPE | None = None
         self._rearm_at: Any = None
+        self._rearm_from: Any = None
+        self._rearm_who = ""
         self._away_at: Any = None
         self._fail_timer: CALLBACK_TYPE | None = None
         self._loop: asyncio.Task | None = None
@@ -440,7 +442,8 @@ class AlarmAutomation:
                 if again and self.state() == "disarmed":
                     self.hass.async_create_task(self.set_state(again["state"], "rearm"))
 
-            self._rearm_at = dt_util.now() + timedelta(minutes=minutes)
+            self._rearm_from, self._rearm_who = dt_util.now(), name
+            self._rearm_at = self._rearm_from + timedelta(minutes=minutes)
             self._rearm_timer = async_call_later(self.hass, minutes * 60, _again)
         else:
             self._notify(f"{name} komt thuis.")
@@ -608,6 +611,19 @@ class AlarmAutomation:
     def _log(self, what: str, detail: str = "") -> None:
         self.log.appendleft({"at": dt_util.utcnow().isoformat(), "what": what, "detail": detail})
 
+    def timer(self) -> dict[str, Any] | None:
+        """The running "someone comes home" wait time, for the panel's countdown."""
+        if self._rearm_timer is None or self._rearm_at is None:
+            return None
+        slot = self.slot_now()
+        return {
+            "from": self._rearm_from.isoformat() if self._rearm_from else None,
+            "until": self._rearm_at.isoformat(),
+            "who": self._rearm_who,
+            "lights": bool(self.arrive_lights()),
+            "state": slot.get("state") if slot else None,
+        }
+
     def upcoming(self, hours: int = 24) -> list[dict[str, Any]]:
         """What RoomControl expects the alarm to do in the next `hours`
         (panel "Straks"): time slots starting and ending, arming after
@@ -705,6 +721,7 @@ class AlarmAutomation:
                 for p in self.persons()
             ],
             "rearm_pending": self._rearm_timer is not None,
+            "timer": self.timer(),
             "upcoming": self.upcoming(),
             "log": list(self.log)[:15],
             "defaults": state_defaults(self.hass.config.language),

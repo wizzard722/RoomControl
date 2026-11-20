@@ -10,6 +10,8 @@ New option in **Alarm → Automatic → Someone comes home**: *When it is dark: 
 - After the **wait time** (default 10 minutes, configurable) the lamps go off again, unless there is motion in the room. In a time slot the alarm then goes back to the slot's state. Without a time slot someone is home, so the alarm stays disarmed.
 - The wait time is the setting that was called *In a time slot: back to its state after*. It now also applies to the lamps.
 - *What the alarm will do* shows when the lamps go off. *What the alarm did* shows when they went on and off.
+- **Countdown on the Alarm page.** While the wait time runs, the Overview shows who came home, a live countdown and a progress bar. It also says what follows: lamps off and/or the alarm back to the slot's state.
+- A person's **Home later** button still goes off as soon as that person comes home.
 - Fixed in passing: when a person with a **Home later** button on comes home in the dark, the lamps no longer flicker off and on.
 
 ### Alarm: what the alarm will do
