@@ -248,6 +248,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     room_switches.start()
     energy = Energy(hass)
     _data(hass)["energy"] = energy
+    await energy.async_load()
     energy.start()
     _setup_entity_id_prefix(hass, entry)
     return True

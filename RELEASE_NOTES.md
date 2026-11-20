@@ -35,6 +35,12 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - RoomControl works out how long the car needs to charge to full (battery level, battery size and the charger's maximum) and finds the cheapest unbroken stretch in the forecast, optionally ending by a *Charged by* time.
 - The EV charger page shows the price now, the time needed, the cheapest time to charge and a bar chart of the coming prices with that time highlighted.
 
+### Charging sessions and their cost
+- RoomControl now keeps every charging session: when, how long, the kWh from the grid (the estimate added up), the kWh **into the battery** (the rise of the battery level × its size) and the **cost** at the price of each moment (price sensor, else a new optional *fixed price*).
+- The EV charger page shows a **Charged** card with totals for this month, the last 30 days and everything kept, plus the latest sessions. The running session shows its cost so far.
+- *Keep charging sessions* (EV charger card) sets how many days they are kept (default 365, 0 = forever). A session that was running when Home Assistant restarted carries on.
+- The cheapest time covers all the energy the charge needs (to full), and the Energy price card shows that energy, the **cost of this charge** at the cheapest time and what charging right now would cost. Car messages may use `{cost}`.
+
 ### Power per phase next to each floor
 - With *Group rooms by floor* on and the **Energy** card set up, each floor heading on the Rooms page now shows the power of that floor per phase, separately: **L1 · L2 · L3** (with 1 phase: L1 only).
 - It is the sum of the rooms on that floor that are on that phase (their light bundles, switches and meters). A phase without any room on that floor shows "—"; rooms without a phase don't count.

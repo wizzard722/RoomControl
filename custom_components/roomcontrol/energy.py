@@ -12,7 +12,14 @@ General setting "energy":
  "charge_from_kw": 1.2,          # above this the car counts as charging
  "charger_max_kw": 3.7,
  "car_name": "Audi A3", "battery_kwh": 8.8,
- "soc_sensor": sensor (%), "charging_sensor": entity, "plug_sensor": entity}  # optional
+ "soc_sensor": sensor (%), "charging_sensor": entity, "plug_sensor": entity,  # optional
+ "price_kwh": 0.25,              # fixed price per kWh (without a price sensor)
+ "history_days": 365}            # how long charging sessions are kept (0: forever)
+
+Charging sessions (Store "roomcontrol.ev_sessions"): [{"start", "end", "kwh"
+(from the grid, the estimate added up), "battery_kwh" (into the battery:
+the rise of the battery level × its size, when known), "cost" (€, at the
+price of each moment), "soc_from", "soc_to"}].
 
 Room options: "phase": "L1" | "L2" | "L3" (3 phases only) and
 "power": {"bundle:<group id>" | "switch:<entity>": {"sensor": entity} | {"watts": n}};
@@ -37,10 +44,11 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import CONF_GROUPS, DOMAIN
-from .ev import EvNotifier, price_status
+from .ev import EvNotifier, price_now, price_status
 from .rooms import managed_areas
 
 SETTING_ENERGY = "energy"
@@ -285,15 +293,61 @@ def room_meters(hass: HomeAssistant, room: dict[str, Any], parts: list[dict[str,
 
 
 class Energy:
-    """Keeps track of the car's charging: since when, and how much."""
+    """Keeps track of the car's charging: since when, how much and what it cost,
+    and the past charging sessions."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self._unsub: CALLBACK_TYPE | None = None
         self.charging_since: datetime | None = None
         self.charged_kwh = 0.0
+        self.cost = 0.0
+        self.priced = False  # a price was known for (part of) this session
+        self.soc_from: float | None = None
+        self.soc_last: float | None = None
         self._last: datetime | None = None
+        self.sessions: list[dict[str, Any]] = []
+        self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.ev_sessions")
         self.notifier = EvNotifier(hass)
+
+    async def async_load(self) -> None:
+        data = await self._store.async_load() or {}
+        self.sessions = [s for s in data.get("sessions", []) if isinstance(s, dict)]
+        cur = data.get("current")
+        if isinstance(cur, dict) and (since := dt_util.parse_datetime(cur.get("since") or "")):
+            # Charging when Home Assistant stopped: carry on with that session.
+            self.charging_since = since
+            self.charged_kwh = float(cur.get("kwh") or 0)
+            self.cost = float(cur.get("cost") or 0)
+            self.priced = bool(cur.get("priced"))
+            self.soc_from = cur.get("soc_from")
+        self._prune()
+
+    def _keep(self) -> None:
+        def data() -> dict[str, Any]:
+            cur = None
+            if self.charging_since:
+                cur = {"since": self.charging_since.isoformat(), "kwh": self.charged_kwh, "cost": self.cost,
+                       "priced": self.priced, "soc_from": self.soc_from}
+            return {"sessions": self.sessions, "current": cur}
+        self._store.async_delay_save(data, 5)
+
+    def _prune(self) -> None:
+        days = _num(_cfg(self.hass).get("history_days"), 365)
+        if days > 0:
+            since = (dt_util.utcnow() - timedelta(days=days)).isoformat()
+            self.sessions = [s for s in self.sessions if (s.get("end") or "") >= since]
+
+    def price_kwh(self) -> float | None:
+        """The price per kWh now: the price sensor, else the fixed price."""
+        cfg = _cfg(self.hass)
+        if cfg.get("price_sensor"):
+            from .ev import price_forecast
+            sensor = cfg["price_sensor"]
+            if (p := price_now(self.hass, sensor, price_forecast(self.hass, sensor))) is not None:
+                return p
+        value = cfg.get("price_kwh")
+        return float(value) if isinstance(value, (int, float)) else None
 
     @callback
     def start(self) -> None:
@@ -306,23 +360,80 @@ class Energy:
             self._unsub = None
 
     @callback
+    def _end_session(self, now: datetime) -> None:
+        if self.charging_since is None:
+            return
+        battery = _num(_cfg(self.hass).get("battery_kwh"), 8.8)
+        added = None
+        if self.soc_from is not None and self.soc_last is not None and self.soc_last >= self.soc_from:
+            added = round((self.soc_last - self.soc_from) / 100 * battery, 2)
+        if self.charged_kwh >= 0.05 or added:
+            self.sessions.append({
+                "start": self.charging_since.isoformat(), "end": now.isoformat(),
+                "kwh": round(self.charged_kwh, 2), "battery_kwh": added,
+                "cost": round(self.cost, 2) if self.priced else None,
+                "soc_from": self.soc_from, "soc_to": self.soc_last,
+            })
+        self.charging_since, self._last = None, None
+        self.charged_kwh, self.cost, self.priced = 0.0, 0.0, False
+        self.soc_from = None
+        self._prune()
+        self._keep()
+
+    @callback
     def _tick(self, _now: Any = None) -> None:
         status = self.status()
         car = status.get("car") or {}
         now = dt_util.utcnow()
+        soc = car.get("soc")
         if car.get("charging"):
             if self.charging_since is None:
-                self.charging_since, self.charged_kwh = now, 0.0
+                self.charging_since, self.charged_kwh, self.cost, self.priced = now, 0.0, 0.0, False
+                self.soc_from = soc
             elif self._last is not None and car.get("kw"):
-                self.charged_kwh += car["kw"] * (now - self._last).total_seconds() / 3600
+                kwh = car["kw"] * (now - self._last).total_seconds() / 3600
+                self.charged_kwh += kwh
+                if (price := self.price_kwh()) is not None:
+                    self.cost += kwh * price
+                    self.priced = True
+            if self.soc_from is None:
+                self.soc_from = soc
+            if soc is not None:
+                self.soc_last = soc
             self._last = now
+            self._keep()
         else:
-            self.charging_since, self._last = None, None
+            if soc is not None:
+                self.soc_last = soc
+            self._end_session(now)
         if car:
             # The charged kWh as it is now (the status was made before adding).
-            car = {**car, "charged_kwh": round(self.charged_kwh, 1) if self.charging_since else car.get("charged_kwh")}
+            car = {**car, "charged_kwh": round(self.charged_kwh, 1) if self.charging_since else car.get("charged_kwh"),
+                   "cost": round(self.cost, 2) if self.charging_since and self.priced else car.get("cost")}
         self.notifier.update(_cfg(self.hass), car, status.get("price"))
         async_dispatcher_send(self.hass, SIGNAL_ENERGY)
+
+    def history(self) -> dict[str, Any]:
+        """Totals (this month, the last 30 days, everything kept) and the latest sessions."""
+        now = dt_util.now()
+        month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        d30 = now - timedelta(days=30)
+
+        def total(rows: list[dict[str, Any]]) -> dict[str, Any]:
+            costs = [r["cost"] for r in rows if r.get("cost") is not None]
+            return {"count": len(rows), "kwh": round(sum(r.get("kwh") or 0 for r in rows), 1),
+                    "battery_kwh": round(sum(r.get("battery_kwh") or 0 for r in rows), 1),
+                    "cost": round(sum(costs), 2) if costs else None}
+
+        def after(when: datetime) -> list[dict[str, Any]]:
+            return [r for r in self.sessions if (t := dt_util.parse_datetime(r.get("end") or "")) and t >= when]
+
+        return {
+            "month": total(after(month)), "days30": total(after(d30)), "all": total(self.sessions),
+            "days": _num(_cfg(self.hass).get("history_days"), 365),
+            "first": self.sessions[0]["start"] if self.sessions else None,
+            "sessions": list(reversed(self.sessions[-20:])),
+        }
 
     def status(self) -> dict[str, Any]:
         """For the panel: per room its power and phase; per phase its power; the car."""
@@ -418,9 +529,12 @@ class Energy:
             "plugged": plugged, "full_at": full_at,
             "since": self.charging_since.isoformat() if self.charging_since else None,
             "charged_kwh": round(self.charged_kwh, 1) if self.charging_since else None,
+            "cost": round(self.cost, 2) if self.charging_since and self.priced else None,
+            "price_kwh": self.price_kwh(),
             "phase_watts": phase_w, "phase_detail": detail.get(charger_phase) or {},
             "minus": [{"area": a, "watts": w} for a, w in on_phase],
         }
         if cfg.get("price_sensor"):
             out["price"] = price_status(hass, cfg, out["car"])
+        out["history"] = self.history()
         return out

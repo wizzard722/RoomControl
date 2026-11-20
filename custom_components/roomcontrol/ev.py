@@ -10,8 +10,8 @@ Inside the general setting "energy":
  "price_sensor": sensor,          # a dynamic tariff with a forecast (e.g. Zonneplan)
  "ready_by": "07:00"              # optional: the car must be charged by then
 
-Texts may hold {name}, {kw}, {kwh} (charged this time), {soc}, {start},
-{end} and {price}.
+Texts may hold {name}, {kw}, {kwh} (charged this time), {cost} (its cost),
+{soc}, {start}, {end} and {price}.
 """
 from __future__ import annotations
 
@@ -224,7 +224,9 @@ def price_status(hass: HomeAssistant, cfg: dict[str, Any], car: dict[str, Any]) 
     rows = price_forecast(hass, sensor)
     now = dt_util.utcnow()
     max_kw = float(cfg.get("charger_max_kw") or 3.7)
-    hours = charge_hours(cfg, car.get("soc"), float(car.get("battery_kwh") or 8.8), max_kw)
+    battery = float(car.get("battery_kwh") or 8.8)
+    hours = charge_hours(cfg, car.get("soc"), battery, max_kw)
+    need_kwh = hours * max_kw  # all the energy this charge needs, to full
     ready = _ready_by(cfg.get("ready_by"), now)
     best = cheapest(rows, hours, now, ready) if hours > 0 else None
     upcoming = [r for r in rows if r["end"] > now][:48]
@@ -232,9 +234,13 @@ def price_status(hass: HomeAssistant, cfg: dict[str, Any], car: dict[str, Any]) 
         "sensor": sensor,
         "now": price_now(hass, sensor, rows),
         "hours": round(hours, 2),
+        "kwh": round(need_kwh, 2),
+        "soc_known": car.get("soc") is not None,
         "ready_by": ready.isoformat() if ready else None,
         "cheapest": None if best is None else {
-            "start": best["start"].isoformat(), "end": best["end"].isoformat(), "avg": round(best["avg"], 4)},
+            "start": best["start"].isoformat(), "end": best["end"].isoformat(), "avg": round(best["avg"], 4),
+            "cost": round(best["avg"] * need_kwh, 2),
+            "cost_now": None if (p := price_now(hass, sensor, rows)) is None else round(p * need_kwh, 2)},
         "forecast": [{"start": r["start"].isoformat(), "end": r["end"].isoformat(), "price": round(r["price"], 4)}
                      for r in upcoming],
         "found": bool(rows),
@@ -286,6 +292,7 @@ def render(hass: HomeAssistant, text: str, car: dict[str, Any], price: dict[str,
         "start": _fmt_time(best.get("start")),
         "end": _fmt_time(best.get("end")),
         "price": _fmt_price(best.get("avg"), lang),
+        "cost": "—" if car.get("cost") is None else "€ " + (f"{float(car['cost']):.2f}".replace(".", ",") if lang == "nl" else f"{float(car['cost']):.2f}"),
     }
     out = text
     for key, value in values.items():
@@ -354,7 +361,7 @@ class EvNotifier:
             else:
                 last = self._last_car or car
                 soc = car.get("soc") if car.get("soc") is not None else last.get("soc")
-                ended = {**car, "charged_kwh": last.get("charged_kwh"), "kw": last.get("kw")}
+                ended = {**car, "charged_kwh": last.get("charged_kwh"), "kw": last.get("kw"), "cost": last.get("cost")}
                 self._fire(cfg, "full" if soc is not None and soc >= FULL_SOC else "stopped", ended, price)
         if charging:
             self._last_car = dict(car)
@@ -387,7 +394,7 @@ class EvNotifier:
                          price: dict[str, Any] | None) -> dict[str, Any]:
         ev = event_cfg(self.hass, cfg, event)
         sample = dict(car or {})
-        for key, value in (("kw", 3.6), ("charged_kwh", 6.4), ("soc", 80)):
+        for key, value in (("kw", 3.6), ("charged_kwh", 6.4), ("soc", 80), ("cost", 1.28)):
             if not sample.get(key):
                 sample[key] = value
         message = render(self.hass, ev["text"], sample, price)
