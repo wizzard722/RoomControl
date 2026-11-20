@@ -613,12 +613,22 @@ class AlarmAutomation:
                 await self._call("media_player", "volume_set", {
                     ATTR_ENTITY_ID: loud, "volume_level": st["volume_after"] / 100})
 
-    async def test_state(self, state: str) -> None:
-        """Panel "Test": the spoken message of this state, once."""
+    async def test_state(self, state: str) -> dict[str, Any]:
+        """Panel "Test": this state's text, once: spoken (when speech is on)
+        and sent as a message (when the message is on), all as set.
+        Returns what happened, for the panel."""
         st = self.state_cfg(state)
-        players = self._players(st, "speak")
-        if st.get("speak") and players and (tts := announce_tts(self.hass)):
-            await self._call("tts", "speak", {ATTR_ENTITY_ID: tts, "media_player_entity_id": players, "message": st["speak"]})
+        out: dict[str, Any] = {"text": bool(st.get("text"))}
+        if st.get("speak_on") and st.get("text"):
+            players = self._players(st, "speak")
+            tts = announce_tts(self.hass)
+            out["speak"] = {"players": len(players), "tts": bool(tts)}
+            if players and tts:
+                await self._call("tts", "speak", {ATTR_ENTITY_ID: tts, "media_player_entity_id": players, "message": st["text"]})
+        if st.get("notify_on") and st.get("text"):
+            sent = self._notify(st["text"], st, test=True)
+            out["notify"] = {**sent, "services": [s.split(".", 1)[1].removeprefix("mobile_app_") for s in sent["services"]]}
+        return out
 
     # ── helpers ────────────────────────────────────────────────────────────
 
@@ -629,11 +639,13 @@ class AlarmAutomation:
             _LOGGER.warning("Alarm: %s.%s failed: %s", domain, service, err)
 
     @callback
-    def _notify(self, message: str, st: dict[str, Any] | None = None) -> None:
+    def _notify(self, message: str, st: dict[str, Any] | None = None, test: bool = False) -> dict[str, Any]:
         """A message to the chosen persons' devices and/or as a notification in
         Home Assistant. Per state ("notify_persons", "notify_ha") or else the
         alarm's own choice ("msg_persons": [] = every person who counts,
-        "msg_ha": default on). Nothing to persons while "notify_skip" is on."""
+        "msg_ha": default on). Nothing to persons while "notify_skip" is on.
+        Returns where it went: {"services", "ha", "skipped",
+        "no_device": persons without a device}."""
         cfg, st = self.cfg(), st or {}
         persons = st.get("notify_persons")
         if not isinstance(persons, list):
@@ -646,21 +658,29 @@ class AlarmAutomation:
         skip = cfg.get("notify_skip")
         skipped = bool(skip and (s := self.hass.states.get(skip)) is not None and s.state == "on")
         services: list[str] = []
+        no_device: list[str] = []
         if not skipped:
             for person in persons:
-                if (service := person_notify_service(self.hass, person)) and service not in services:
+                service = person_notify_service(self.hass, person)
+                if not service:
+                    no_device.append(self._name(person))
+                elif service not in services:
                     services.append(service)
             if (legacy := cfg.get("notify") or "").startswith("notify.") and legacy not in services:
                 services.append(legacy)  # older: one service for every message
+        result = {"services": services, "ha": bool(ha), "skipped": skipped, "no_device": no_device}
         if not services and not ha:
-            return
-        self._log("notify", message)
+            return result
+        title = "Alarm Systeem (test)" if test else "Alarm Systeem"
+        if not test:
+            self._log("notify", message)
         for service in services:
             self.hass.async_create_task(self._call(
-                "notify", service.split(".", 1)[1], {"title": "Alarm Systeem", "message": message}))
+                "notify", service.split(".", 1)[1], {"title": title, "message": message}))
         if ha:
             persistent_notification.async_create(
-                self.hass, message, title="Alarm Systeem", notification_id=f"{DOMAIN}_alarm")
+                self.hass, message, title=title, notification_id=f"{DOMAIN}_alarm")
+        return result
 
     @callback
     def _log(self, what: str, detail: str = "") -> None:

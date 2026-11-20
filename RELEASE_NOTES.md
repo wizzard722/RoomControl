@@ -1,5 +1,15 @@
 # Release notes
 
+## 1.18.0b14 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Fixed: Test on Alarm → Per state now also sends the message
+- **Test** did only the speech; the message was never sent. It now does what is set for that state: the text is spoken when *Speech* is on, and sent as a message when *Message* is on. The message goes to the chosen persons' devices and/or Home Assistant, with the title "Alarm Systeem (test)". The "No messages" switch is followed as well.
+- Under the buttons the panel shows what happened, e.g. "Spoken on 2 speakers · Message sent to sm_s916b, Home Assistant · no device: Sarah". When something can't be done it says why: no text-to-speech set, no speakers in the chosen rooms, no person with a device, speech and message off, or the "No messages" switch is on.
+
+---
+
 ## 1.18.0b13 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).

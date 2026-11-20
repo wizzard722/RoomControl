@@ -550,11 +550,10 @@ async def ws_alarm_test(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """Panel "Test": screen text, status lamps and the spoken message of a state."""
+    """Panel "Test": the text of a state, spoken and/or sent as a message."""
     alarm = _data(hass).get("alarm")
-    if alarm is not None:
-        await alarm.test_state(msg["state"])
-    connection.send_result(msg["id"], {"done": alarm is not None})
+    result = await alarm.test_state(msg["state"]) if alarm is not None else {}
+    connection.send_result(msg["id"], {"done": alarm is not None, **result})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/smoke_clear"})
