@@ -7,6 +7,11 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### Switches card under Light
 - In a room's settings the **Switches** card now sits right under the **Light** card, so the lamps and devices of a room are together.
 
+### Room power: Home Assistant's own sensor picker
+- In a room's **Power** card the sensor of a light bundle or switch is now chosen with Home Assistant's own entity picker, which shows more information per sensor (name, entity ID, area and device).
+- It only offers the **power sensors (W or kW) of that room**: sensors in the room's area themselves, or on a device in that area. A sensor chosen before that is outside the room stays shown.
+- When the room has no power sensors, the card says so; choose *Fixed*, or give the sensor the room's area in Home Assistant.
+
 ### EV charger page, like the Alarm page
 - The Rooms page has a new **car icon** at the top, next to the alarm icon. It is **green while the car is charging**. It opens the **EV charger** page with two tabs:
   - **Overview**: the charging state with power, battery level, kWh, full at and "charging since"; *How is this calculated?*; and the power per room now.
