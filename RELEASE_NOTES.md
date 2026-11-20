@@ -38,6 +38,12 @@ When you rename an area in Home Assistant, RoomControl now follows at once:
 - The line under each motion sensor read "Switches lights on", as if the sensor were only used for light. It now reads "Time slots: always" / "Time slots: every day · 07:00–23:00" / "Time slots: 2 set".
 - The explanation now says what the time slots do: they only decide when motion on the sensor may switch the lights on. For everything else the sensor always counts (lights that are on stay on, the fan and the other motion options use it as usual).
 
+### Alarm: when a time slot ends
+- **Someone home**: the alarm goes to **Disarmed**, if it is still in the slot's state (e.g. Armed Home). A state you set by hand meanwhile stays.
+- **Nobody home** (shouldn't happen, as *Everyone away* acts first): the alarm goes to the state of *Everyone away* (closer / further than the limit) instead of staying in the slot's state.
+- *Change nothing* still leaves the alarm as it is.
+- Choices on the Alarm page now use the full width, so long options are readable on phones.
+
 ---
 
 ## 1.18.0b9 (beta)

@@ -304,8 +304,16 @@ class AlarmAutomation:
             return  # someone just came home: the slot's state comes back after the grace
         if target:
             self.hass.async_create_task(self.set_state(target, f"slot:{slot.get('name') or ''}"))
-        elif self.cfg().get("outside", "disarm") == "disarm" and self.anyone_home() and self.state() in ARMED:
-            self.hass.async_create_task(self.set_state("disarmed", "slot_end"))
+        elif self.cfg().get("outside", "disarm") == "disarm" and self.state() in ARMED:
+            # The last time slot ended. Someone home: disarmed, if the alarm is
+            # still in the slot's state (a state set by hand meanwhile stays).
+            # Nobody home (should not happen: then "everyone away" acted):
+            # the state of "everyone away" (closer / further than the limit).
+            if self.anyone_home():
+                if self.state() == previous:
+                    self.hass.async_create_task(self.set_state("disarmed", "slot_end"))
+            elif self.cfg().get("away_on", True) and self.state() != (away := self.away_target()):
+                self.hass.async_create_task(self.set_state(away, "slot_end_away"))
 
     # ── everyone away / distance ───────────────────────────────────────────
 
