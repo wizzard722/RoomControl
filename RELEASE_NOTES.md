@@ -4,6 +4,17 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Switches in a room
+New card **Switches** in a room's settings, for switches that are in that area in Home Assistant, such as an espresso machine, fridge, freezer or TV.
+- The card lists the area's switches that are not in the room yet; tap one to add it.
+- **May go off? Yes / Never** per switch. A switch set to *Never* (for example the fridge or freezer) is never switched off by RoomControl, also not at smoke and not when it is in the smoke action's own list.
+- For a switch that may go off, choose when it goes off:
+  - **All off**: the room's All off button, or its RoomControl light switched off.
+  - **Nobody home (Armed Away)**: when the alarm goes to Armed Away. The switches RoomControl switched off go back on when the alarm goes to Disarmed or Armed Home. Without an alarm panel this happens when the last person leaves and when someone comes home. RoomControl remembers which switches to switch back on, also across a restart.
+  - **Smoke**: they go back on at *All safe*.
+- By default a new switch may go off, at All off, Nobody home and Smoke.
+- The closed card shows e.g. "3 switches · 1 may never go off".
+
 ### Fixed: lamps moved in Home Assistant are picked up
 A room's lamps are the ones added in the panel. When a lamp changed area in Home Assistant, RoomControl kept it in its old room. Now RoomControl follows Home Assistant:
 - **Lamp moved to another area** (the light itself or its device): it leaves its old room and its light bundles. When the new area is a RoomControl room, the lamp joins that room, outside any light bundle, with its own lamp settings.

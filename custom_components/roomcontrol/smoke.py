@@ -33,6 +33,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dis
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.util import dt as dt_util
 
+from .room_switches import never_off, switches_for
 from .texts import text
 from .const import CONF_COVERS, CONF_MEDIA_PLAYERS, DOMAIN, SIGNAL_CONFIG_UPDATED
 from .announce import async_announce
@@ -270,7 +271,10 @@ class SmokeManager:
         fans = sorted({f for r in rooms for f in room_fans(self.hass, r["area_id"])})
         if self.action("fans") and fans:
             await self._call("fan", "turn_off", {ATTR_ENTITY_ID: fans})
-        switches = [s for s in self._settings().get(SETTING_SMOKE_SWITCHES, []) or [] if s]
+        blocked = never_off(self.hass)
+        switches = [s for s in self._settings().get(SETTING_SMOKE_SWITCHES, []) or [] if s and s not in blocked]
+        # Plus the rooms' switches that go off at smoke.
+        switches += [s for s in switches_for(self.hass, "smoke") if s not in switches]
         if self.action("switches") and switches:
             self._switches_were_on = [
                 x for x in switches if (st := self.hass.states.get(x)) is not None and st.state == "on"

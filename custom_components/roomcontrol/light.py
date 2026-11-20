@@ -3292,3 +3292,7 @@ class RoomControlLight(LightEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         self._on_by_motion = False
         await self._async_call("turn_off")
+        # All off: the room's switches that go off with it.
+        from .room_switches import async_switch_off, switches_for  # here: avoids an import cycle
+
+        await async_switch_off(self.hass, switches_for(self.hass, "all_off", self._area_id), "all off")
