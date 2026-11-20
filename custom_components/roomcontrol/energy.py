@@ -14,7 +14,8 @@ General setting "energy":
  "soc_sensor": sensor (%), "charging_sensor": entity, "plug_sensor": entity}  # optional
 
 Room options: "phase": "L1" | "L2" | "L3" (3 phases only) and
-"power": {"bundle:<group id>" | "switch:<entity>": {"sensor": entity} | {"watts": n}}.
+"power": {"bundle:<group id>" | "switch:<entity>": {"sensor": entity} | {"watts": n}};
+a light bundle may instead have one sensor per lamp: {"sensors": {lamp: sensor}}.
 
 A light bundle counts its watts times the brightness of its lamps that are
 on; a switch its watts when on; a power sensor counts as it is.
@@ -76,7 +77,12 @@ def room_parts(hass: HomeAssistant, room: dict[str, Any]) -> list[dict[str, Any]
         key = f"bundle:{group.get('id') or index}"
         conf = power.get(key) or {}
         lamps = [e for e in group.get("lights", []) or [] if e]
-        if conf.get("sensor"):
+        per_lamp = {l: x for l, x in (conf.get("sensors") or {}).items() if x and l in lamps}
+        if per_lamp:
+            # One power sensor per lamp of the bundle: their sum.
+            values = [w for w in (_watts(hass, x) for x in per_lamp.values()) if w is not None]
+            watts, source = (sum(values) if values else None), "sensor"
+        elif conf.get("sensor"):
             watts, source = _watts(hass, conf["sensor"]), "sensor"
         else:
             on = [hass.states.get(e) for e in lamps]

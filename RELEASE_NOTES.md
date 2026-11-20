@@ -4,6 +4,12 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Room power: a sensor per lamp of a light bundle
+- In a room's **Power** card, a light bundle set to *Sensor* now gets **one power sensor field per lamp** of the bundle, named after the lamp. RoomControl adds them up.
+- Each field offers the power sensors of the room, with the lamp's own sensors (on the lamp's device) first.
+- When only some lamps have a sensor, the card says so: only those count.
+- A single sensor chosen for a bundle before keeps working; it becomes the first lamp's sensor once you change a field.
+
 ### Energy and EV charger: Home Assistant's own sensor picker
 - The sensor fields in the **Energy** and **EV charger** cards (consumed and returned power per phase, solar panels, home battery, battery level, charging state and plug) now use Home Assistant's own entity picker. It searches and sorts by itself and shows the name, entity ID, area and device of each sensor.
 - Every sensor can still be chosen, also one without a unit.
