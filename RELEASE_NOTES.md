@@ -1,6 +1,6 @@
 # Release notes
 
-## 1.18.0b23 (beta)
+## 1.18.0b24 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
@@ -9,6 +9,12 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - The **Charged** card is redesigned: choose **Today**, **This month**, **30 days** or **365 days**; it shows the kWh, the number of sessions, the kWh into the battery, the cost (grid only) and a bar with the sun and grid parts. Today includes the running session.
 - For the other periods the card lists that period's charging sessions, 8 at a time with arrows for the next and previous 8. Each session (date, time, duration, sun/grid bar, kWh and cost) folds open to show the sun and grid kWh, the kWh into the battery, the average grid price and the cost.
 - The **cost** now counts only the grid part (own power is free). Sessions from before this version keep their cost for all kWh.
+
+---
+
+## 1.18.0b23 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
 ### NSPanel groups
 - The **NSPanels** card now has **groups**: make named groups of panels (e.g. *Downstairs*, *Bedrooms*); a panel may be in several groups.
