@@ -1,5 +1,15 @@
 # Release notes
 
+## 1.18.0b20 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### "Auto laden" follows Home Assistant's language
+- The car charging sensor on the General device is now named after Home Assistant's language: **Auto laden** in Dutch, **Car charging** in English. Its attributes have translated names too (e.g. *Accuniveau* / *Battery level*, *Vol om* / *Full at*).
+- The entity ID of an existing sensor stays the same (e.g. `sensor.roomcontrol_auto_laden`).
+
+---
+
 ## 1.18.0b19 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).

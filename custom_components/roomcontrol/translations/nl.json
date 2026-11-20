@@ -36,6 +36,50 @@
           "closed": "Dicht",
           "partly_open": "Deels open"
         }
+      },
+      "ev_charging": {
+        "name": "Auto laden",
+        "state_attributes": {
+          "charging": {
+            "name": "Laadt"
+          },
+          "car": {
+            "name": "Auto"
+          },
+          "battery_level": {
+            "name": "Accuniveau"
+          },
+          "battery_kwh": {
+            "name": "Energie in accu"
+          },
+          "battery_size_kwh": {
+            "name": "Accugrootte"
+          },
+          "full_at": {
+            "name": "Vol om"
+          },
+          "charging_since": {
+            "name": "Laadt sinds"
+          },
+          "charged_kwh": {
+            "name": "Geladen"
+          },
+          "estimate_kw": {
+            "name": "Schatting"
+          },
+          "from_car": {
+            "name": "Van de auto"
+          },
+          "plugged_in": {
+            "name": "Stekker erin"
+          },
+          "room": {
+            "name": "Ruimte"
+          },
+          "phase": {
+            "name": "Fase"
+          }
+        }
       }
     }
   }

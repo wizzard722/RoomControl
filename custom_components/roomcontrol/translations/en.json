@@ -36,6 +36,50 @@
           "closed": "Closed",
           "partly_open": "Partly open"
         }
+      },
+      "ev_charging": {
+        "name": "Car charging",
+        "state_attributes": {
+          "charging": {
+            "name": "Charging"
+          },
+          "car": {
+            "name": "Car"
+          },
+          "battery_level": {
+            "name": "Battery level"
+          },
+          "battery_kwh": {
+            "name": "Energy in battery"
+          },
+          "battery_size_kwh": {
+            "name": "Battery size"
+          },
+          "full_at": {
+            "name": "Full at"
+          },
+          "charging_since": {
+            "name": "Charging since"
+          },
+          "charged_kwh": {
+            "name": "Charged"
+          },
+          "estimate_kw": {
+            "name": "Estimate"
+          },
+          "from_car": {
+            "name": "From the car"
+          },
+          "plugged_in": {
+            "name": "Plugged in"
+          },
+          "room": {
+            "name": "Room"
+          },
+          "phase": {
+            "name": "Phase"
+          }
+        }
       }
     }
   }

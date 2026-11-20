@@ -123,7 +123,7 @@ class EvChargingSensor(SensorEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
-    _attr_name = "Auto laden"
+    _attr_translation_key = "ev_charging"  # "Auto laden" / "Car charging", after HA's language
     _attr_unique_id = f"{DOMAIN}_ev_charging"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
