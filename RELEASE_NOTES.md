@@ -4,6 +4,11 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Charging: sun or grid
+- Each charging session now records which part came from your own **solar panels** (and home battery) and which part from the **grid**: while the house as a whole returns power, the car charges on its own power; otherwise the grid part is at most what the house takes from the grid.
+- The **Charged** card shows sun and grid kWh with a bar, per total and per session; the running session shows its share of sun.
+- The **cost** now counts only the grid part (own power is free). Sessions from before this version keep their cost for all kWh.
+
 ### NSPanel groups
 - The **NSPanels** card now has **groups**: make named groups of panels (e.g. *Downstairs*, *Bedrooms*); a panel may be in several groups.
 - Per kind of message (alarm, car charging, smoke alarm, doorbell, announcements) choose where it goes: *All panels*, a group, or *None*.

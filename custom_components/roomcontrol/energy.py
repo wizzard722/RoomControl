@@ -17,9 +17,13 @@ General setting "energy":
  "history_days": 365}            # how long charging sessions are kept (0: forever)
 
 Charging sessions (Store "roomcontrol.ev_sessions"): [{"start", "end", "kwh"
-(from the grid, the estimate added up), "battery_kwh" (into the battery:
-the rise of the battery level × its size, when known), "cost" (€, at the
-price of each moment), "soc_from", "soc_to"}].
+(the charger's use, the estimate added up), "grid_kwh" / "solar_kwh" (the
+part from the grid / from your own solar panels and home battery: while the
+house as a whole returns power, the car runs on its own power; else the
+grid part is at most what the house takes from the grid), "battery_kwh"
+(into the battery: the rise of the battery level × its size, when known),
+"cost" (€, the grid part at the price of each moment; own power is free;
+older sessions: all kWh), "soc_from", "soc_to"}].
 
 Room options: "phase": "L1" | "L2" | "L3" (3 phases only) and
 "power": {"bundle:<group id>" | "switch:<entity>": {"sensor": entity} | {"watts": n}};
@@ -314,6 +318,8 @@ class Energy:
         self.charging_since: datetime | None = None
         self.charged_kwh = 0.0
         self.cost = 0.0
+        self.grid_kwh = 0.0
+        self.solar_kwh = 0.0
         self.priced = False  # a price was known for (part of) this session
         self.soc_from: float | None = None
         self.soc_last: float | None = None
@@ -331,6 +337,8 @@ class Energy:
             self.charging_since = since
             self.charged_kwh = float(cur.get("kwh") or 0)
             self.cost = float(cur.get("cost") or 0)
+            self.grid_kwh = float(cur.get("grid_kwh") or 0)
+            self.solar_kwh = float(cur.get("solar_kwh") or 0)
             self.priced = bool(cur.get("priced"))
             self.soc_from = cur.get("soc_from")
         self._prune()
@@ -340,6 +348,7 @@ class Energy:
             cur = None
             if self.charging_since:
                 cur = {"since": self.charging_since.isoformat(), "kwh": self.charged_kwh, "cost": self.cost,
+                       "grid_kwh": self.grid_kwh, "solar_kwh": self.solar_kwh,
                        "priced": self.priced, "soc_from": self.soc_from}
             return {"sessions": self.sessions, "current": cur}
         self._store.async_delay_save(data, 5)
@@ -384,10 +393,12 @@ class Energy:
                 "start": self.charging_since.isoformat(), "end": now.isoformat(),
                 "kwh": round(self.charged_kwh, 2), "battery_kwh": added,
                 "cost": round(self.cost, 2) if self.priced else None,
+                "grid_kwh": round(self.grid_kwh, 2), "solar_kwh": round(self.solar_kwh, 2),
                 "soc_from": self.soc_from, "soc_to": self.soc_last,
             })
         self.charging_since, self._last = None, None
         self.charged_kwh, self.cost, self.priced = 0.0, 0.0, False
+        self.grid_kwh = self.solar_kwh = 0.0
         self.soc_from = None
         self._prune()
         self._keep()
@@ -401,12 +412,17 @@ class Energy:
         if car.get("charging"):
             if self.charging_since is None:
                 self.charging_since, self.charged_kwh, self.cost, self.priced = now, 0.0, 0.0, False
+                self.grid_kwh = self.solar_kwh = 0.0
                 self.soc_from = soc
             elif self._last is not None and car.get("kw"):
-                kwh = car["kw"] * (now - self._last).total_seconds() / 3600
+                hours = (now - self._last).total_seconds() / 3600
+                kwh = car["kw"] * hours
                 self.charged_kwh += kwh
+                grid = self.grid_share(status, kwh, hours)
+                self.grid_kwh += grid
+                self.solar_kwh += kwh - grid
                 if (price := self.price_kwh()) is not None:
-                    self.cost += kwh * price
+                    self.cost += grid * price
                     self.priced = True
             if self.soc_from is None:
                 self.soc_from = soc
@@ -425,6 +441,20 @@ class Energy:
         self.notifier.update(_cfg(self.hass), car, status.get("price"))
         async_dispatcher_send(self.hass, SIGNAL_ENERGY)
 
+    @staticmethod
+    def grid_share(status: dict[str, Any], kwh: float, hours: float) -> float:
+        """The part of these kWh that came from the grid. Without solar or a
+        home battery (no returned power measured): all of it."""
+        detail = status.get("phase_detail") or {}
+        used = [d.get("consumed") for d in detail.values()]
+        if not used or any(u is None for u in used):
+            return kwh
+        back = [d.get("produced") for d in detail.values()]
+        if all(b is None for b in back):
+            return kwh
+        net_kw = (sum(used) - sum(b or 0 for b in back)) / 1000  # the house's import from the grid now
+        return min(kwh, max(0.0, net_kw) * hours)
+
     def history(self) -> dict[str, Any]:
         """Totals (this month, the last 30 days, everything kept) and the latest sessions."""
         now = dt_util.now()
@@ -434,6 +464,8 @@ class Energy:
         def total(rows: list[dict[str, Any]]) -> dict[str, Any]:
             costs = [r["cost"] for r in rows if r.get("cost") is not None]
             return {"count": len(rows), "kwh": round(sum(r.get("kwh") or 0 for r in rows), 1),
+                    "grid_kwh": round(sum(r.get("grid_kwh", r.get("kwh")) or 0 for r in rows), 1),
+                    "solar_kwh": round(sum(r.get("solar_kwh") or 0 for r in rows), 1),
                     "battery_kwh": round(sum(r.get("battery_kwh") or 0 for r in rows), 1),
                     "cost": round(sum(costs), 2) if costs else None}
 
@@ -542,6 +574,8 @@ class Energy:
             "since": self.charging_since.isoformat() if self.charging_since else None,
             "charged_kwh": round(self.charged_kwh, 1) if self.charging_since else None,
             "cost": round(self.cost, 2) if self.charging_since and self.priced else None,
+            "grid_kwh": round(self.grid_kwh, 1) if self.charging_since else None,
+            "solar_kwh": round(self.solar_kwh, 1) if self.charging_since else None,
             "price_kwh": self.price_kwh(),
             "phase_watts": phase_w, "phase_detail": detail.get(charger_phase) or {},
             "minus": [{"area": a, "watts": w} for a, w in on_phase],
