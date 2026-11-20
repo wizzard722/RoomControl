@@ -21,7 +21,7 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - The power sensor pickers show **every sensor**: power sensors (W, kW) first, all other sensors below, so a sensor without a unit can be chosen as well. Type in the search field to find it.
 
 ### EV charger: solar panels and home battery
-- **Energy and EV charger** now asks whether you have **solar panels** and/or a **home battery**. Then each phase gets a second field: besides the power **consumed**, the power **returned** (e.g. from your smart meter).
+- The **Energy** card now asks whether you have **solar panels** and/or a **home battery**. Then each phase gets a second field: besides the power **consumed**, the power **returned** (e.g. from your smart meter).
 - Optionally choose the power of your solar panels (inverter) and of your home battery (positive while discharging), and the phase they are on, or *all phases* (spread evenly).
 - RoomControl uses: use on a phase = consumed − returned + solar panels + home battery. So the car's estimate stays right while the sun shines.
 - *How is this calculated?* on the charging card shows these steps.
