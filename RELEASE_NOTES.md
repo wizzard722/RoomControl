@@ -7,6 +7,14 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### Switches card under Light
 - In a room's settings the **Switches** card now sits right under the **Light** card, so the lamps and devices of a room are together.
 
+### EV charger page, like the Alarm page
+- The Rooms page has a new **car icon** at the top, next to the alarm icon. It is **green while the car is charging**. It opens the **EV charger** page with two tabs:
+  - **Overview**: the charging state with power, battery level, kWh, full at and "charging since"; *How is this calculated?*; and the power per room now.
+  - **Settings**: the EV charger and the car.
+- The charging card is no longer on the Rooms page itself.
+- In the **general settings** Energy and EV charger are now two separate cards: **Energy** (connection, phases, returned power, solar panels, home battery) and **EV charger** (charger and car).
+- The power sensor pickers show **every sensor**: power sensors (W, kW) first, all other sensors below, so a sensor without a unit can be chosen as well. Type in the search field to find it.
+
 ### EV charger: solar panels and home battery
 - **Energy and EV charger** now asks whether you have **solar panels** and/or a **home battery**. Then each phase gets a second field: besides the power **consumed**, the power **returned** (e.g. from your smart meter).
 - Optionally choose the power of your solar panels (inverter) and of your home battery (positive while discharging), and the phase they are on, or *all phases* (spread evenly).
