@@ -129,7 +129,7 @@ class AlarmAutomation:
         self._rearm_timer: CALLBACK_TYPE | None = None
         self._rearm_at: Any = None
         self._rearm_from: Any = None
-        self._rearm_who = ""
+        self._rearm_who: list[str] = []
         self._away_at: Any = None
         self._fail_timer: CALLBACK_TYPE | None = None
         self._loop: asyncio.Task | None = None
@@ -409,7 +409,10 @@ class AlarmAutomation:
     def _arrived(self, person: str) -> None:
         cfg = self.cfg()
         self._away_active = False
-        if not cfg.get("home_on", True) or self.state() not in ARMED:
+        # Someone else came home a moment ago (the wait time is running): this
+        # person joins, and the wait time starts again for everyone.
+        joining = self._rearm_timer is not None
+        if not cfg.get("home_on", True) or (self.state() not in ARMED and not joining):
             return
         from .switch import _sun_phase
 
@@ -417,12 +420,17 @@ class AlarmAutomation:
         slot = self.slot_now()
         minutes = int(_num(cfg.get("home_minutes"), 10))
         lights = minutes > 0 and cfg.get("home_lights", True) and _sun_phase(self.hass)[1]
-        self.hass.async_create_task(self.set_state("disarmed", f"home:{name}"))
+        if self.state() in ARMED:
+            self.hass.async_create_task(self.set_state("disarmed", f"home:{name}"))
+        else:
+            self._log("home_join", name)
         if lights:
             self._log("arrive_lights", name)
             self._arrive_lights(True, person)
         if (slot or lights) and minutes > 0:
-            if slot:
+            if slot and joining:
+                self._notify(f"{name} komt ook thuis. Alarm blijft nog {minutes} minuten uitgeschakeld.")
+            elif slot:
                 self._notify(f"{name} komt thuis. Alarm is uitgeschakeld voor {minutes} minuten.")
             else:
                 self._notify(f"{name} komt thuis.")
@@ -435,6 +443,7 @@ class AlarmAutomation:
                 # time slot's state (no slot: someone is home, stays disarmed).
                 self._rearm_timer = None
                 self._rearm_at = None
+                self._rearm_who = []
                 if self.arrive_lights():
                     self._log("arrive_lights_off")
                     self._arrive_lights(False)
@@ -442,7 +451,8 @@ class AlarmAutomation:
                 if again and self.state() == "disarmed":
                     self.hass.async_create_task(self.set_state(again["state"], "rearm"))
 
-            self._rearm_from, self._rearm_who = dt_util.now(), name
+            self._rearm_who = [*self._rearm_who, name] if joining and name not in self._rearm_who else (self._rearm_who if joining else [name])
+            self._rearm_from = dt_util.now()
             self._rearm_at = self._rearm_from + timedelta(minutes=minutes)
             self._rearm_timer = async_call_later(self.hass, minutes * 60, _again)
         else:
@@ -619,7 +629,8 @@ class AlarmAutomation:
         return {
             "from": self._rearm_from.isoformat() if self._rearm_from else None,
             "until": self._rearm_at.isoformat(),
-            "who": self._rearm_who,
+            "who": ", ".join(self._rearm_who),
+            "count": len(self._rearm_who),
             "lights": bool(self.arrive_lights()),
             "state": slot.get("state") if slot else None,
         }

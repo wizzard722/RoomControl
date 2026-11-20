@@ -11,6 +11,7 @@ New option in **Alarm → Automatic → Someone comes home**: *When it is dark: 
 - The wait time is the setting that was called *In a time slot: back to its state after*. It now also applies to the lamps.
 - *What the alarm will do* shows when the lamps go off. *What the alarm did* shows when they went on and off.
 - **Countdown.** While the wait time runs, the Alarm page's Overview and the main Rooms page show who came home, a live countdown and a progress bar. They also say what follows: lamps off and/or the alarm back to the slot's state. Tap the card on the Rooms page to open the Alarm page.
+- **Several persons coming home.** Persons arriving at the same moment disarm the alarm once and share one wait time. Someone who comes home while the wait time runs joins it: the wait time starts again, so the lamps stay on and the alarm stays off until the last person has had their full wait time. The countdown shows everyone ("Paul, Sarah came home"), and *What the alarm did* notes who joined.
 - A person's **Home later** button still goes off as soon as that person comes home.
 - Fixed in passing: when a person with a **Home later** button on comes home in the dark, the lamps no longer flicker off and on.
 
