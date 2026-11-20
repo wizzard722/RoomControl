@@ -23,7 +23,8 @@ house as a whole returns power, the car runs on its own power; else the
 grid part is at most what the house takes from the grid), "battery_kwh"
 (into the battery: the rise of the battery level × its size, when known),
 "cost" (€, the grid part at the price of each moment; own power is free;
-older sessions: all kWh), "soc_from", "soc_to"}].
+older sessions: all kWh), "saved" (€, the sun part at the price of each
+moment: what it would have cost from the grid), "soc_from", "soc_to"}].
 
 Room options: "phase": "L1" | "L2" | "L3" (3 phases only) and
 "power": {"bundle:<group id>" | "switch:<entity>": {"sensor": entity} | {"watts": n}};
@@ -320,6 +321,7 @@ class Energy:
         self.cost = 0.0
         self.grid_kwh = 0.0
         self.solar_kwh = 0.0
+        self.saved = 0.0
         self.priced = False  # a price was known for (part of) this session
         self.soc_from: float | None = None
         self.soc_last: float | None = None
@@ -339,6 +341,7 @@ class Energy:
             self.cost = float(cur.get("cost") or 0)
             self.grid_kwh = float(cur.get("grid_kwh") or 0)
             self.solar_kwh = float(cur.get("solar_kwh") or 0)
+            self.saved = float(cur.get("saved") or 0)
             self.priced = bool(cur.get("priced"))
             self.soc_from = cur.get("soc_from")
         self._prune()
@@ -348,7 +351,7 @@ class Energy:
             cur = None
             if self.charging_since:
                 cur = {"since": self.charging_since.isoformat(), "kwh": self.charged_kwh, "cost": self.cost,
-                       "grid_kwh": self.grid_kwh, "solar_kwh": self.solar_kwh,
+                       "grid_kwh": self.grid_kwh, "solar_kwh": self.solar_kwh, "saved": self.saved,
                        "priced": self.priced, "soc_from": self.soc_from}
             return {"sessions": self.sessions, "current": cur}
         self._store.async_delay_save(data, 5)
@@ -394,11 +397,12 @@ class Energy:
                 "kwh": round(self.charged_kwh, 2), "battery_kwh": added,
                 "cost": round(self.cost, 2) if self.priced else None,
                 "grid_kwh": round(self.grid_kwh, 2), "solar_kwh": round(self.solar_kwh, 2),
+                "saved": round(self.saved, 2) if self.priced else None,
                 "soc_from": self.soc_from, "soc_to": self.soc_last,
             })
         self.charging_since, self._last = None, None
         self.charged_kwh, self.cost, self.priced = 0.0, 0.0, False
-        self.grid_kwh = self.solar_kwh = 0.0
+        self.grid_kwh = self.solar_kwh = self.saved = 0.0
         self.soc_from = None
         self._prune()
         self._keep()
@@ -412,7 +416,7 @@ class Energy:
         if car.get("charging"):
             if self.charging_since is None:
                 self.charging_since, self.charged_kwh, self.cost, self.priced = now, 0.0, 0.0, False
-                self.grid_kwh = self.solar_kwh = 0.0
+                self.grid_kwh = self.solar_kwh = self.saved = 0.0
                 self.soc_from = soc
             elif self._last is not None and car.get("kw"):
                 hours = (now - self._last).total_seconds() / 3600
@@ -423,6 +427,7 @@ class Energy:
                 self.solar_kwh += kwh - grid
                 if (price := self.price_kwh()) is not None:
                     self.cost += grid * price
+                    self.saved += (kwh - grid) * price  # own power: what it would have cost
                     self.priced = True
             if self.soc_from is None:
                 self.soc_from = soc
@@ -467,7 +472,8 @@ class Energy:
             running = {"start": self.charging_since.isoformat(), "end": dt_util.utcnow().isoformat(),
                        "kwh": round(self.charged_kwh, 2), "grid_kwh": round(self.grid_kwh, 2),
                        "solar_kwh": round(self.solar_kwh, 2), "battery_kwh": None,
-                       "cost": round(self.cost, 2) if self.priced else None, "running": True}
+                       "cost": round(self.cost, 2) if self.priced else None,
+                       "saved": round(self.saved, 2) if self.priced else None, "running": True}
 
         def total(rows: list[dict[str, Any]]) -> dict[str, Any]:
             costs = [r["cost"] for r in rows if r.get("cost") is not None]
@@ -475,7 +481,9 @@ class Energy:
                     "grid_kwh": round(sum(r.get("grid_kwh", r.get("kwh")) or 0 for r in rows), 1),
                     "solar_kwh": round(sum(r.get("solar_kwh") or 0 for r in rows), 1),
                     "battery_kwh": round(sum(r.get("battery_kwh") or 0 for r in rows), 1),
-                    "cost": round(sum(costs), 2) if costs else None}
+                    "cost": round(sum(costs), 2) if costs else None,
+                    "saved": round(sum(r["saved"] for r in rows if r.get("saved") is not None), 2)
+                    if any(r.get("saved") is not None for r in rows) else None}
 
         rows = self.sessions + ([running] if running else [])
 

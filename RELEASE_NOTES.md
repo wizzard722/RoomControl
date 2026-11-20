@@ -9,6 +9,11 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - The **Charged** card is redesigned: choose **Today**, **This month**, **30 days** or **365 days**; it shows the kWh, the number of sessions, the kWh into the battery, the cost (grid only) and a bar with the sun and grid parts. Today includes the running session.
 - For the other periods the card lists that period's charging sessions, 8 at a time with arrows for the next and previous 8. Each session (date, time, duration, sun/grid bar, kWh and cost) folds open to show the sun and grid kWh, the kWh into the battery, the average grid price and the cost.
 - The **cost** now counts only the grid part (own power is free). Sessions from before this version keep their cost for all kWh.
+- **Savings**: the sun part at the price of each moment, i.e. what it would have cost from the grid. Shown per period ("Saved by charging on your own power") and per session.
+
+### Energy prices per 15 minutes
+- Prices per 15 minutes (as Zonneplan and others now give) are fully supported: the cost and savings of charging, and the cheapest time to charge, follow each 15-minute block. The forecast now covers up to 36 hours ahead, whatever the block length.
+- The price chart groups 15-minute blocks into hours so it stays readable on a phone.
 
 ---
 

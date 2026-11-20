@@ -230,7 +230,8 @@ def price_status(hass: HomeAssistant, cfg: dict[str, Any], car: dict[str, Any]) 
     need_kwh = hours * max_kw  # all the energy this charge needs, to full
     ready = _ready_by(cfg.get("ready_by"), now)
     best = cheapest(rows, hours, now, ready) if hours > 0 else None
-    upcoming = [r for r in rows if r["end"] > now][:48]
+    # Up to 36 hours ahead, whatever the length of a price block (an hour or 15 minutes).
+    upcoming = [r for r in rows if r["end"] > now and r["start"] < now + timedelta(hours=36)][:200]
     return {
         "sensor": sensor,
         "now": price_now(hass, sensor, rows),
