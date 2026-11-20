@@ -4,6 +4,12 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Room power: meters as dummy switches
+- Power (W) and energy (kWh) sensors in a room that belong to **no lamp or switch** (for example the meter of a washing machine) now show up automatically in the room's **Power** card as a **meter** (dummy switch, meter only), one per device, named after the device.
+- A meter counts in the room's power, and so on its phase and in the car's estimate.
+- Per meter you can choose another power or energy sensor, clear one, or **Hide** the meter; hidden meters are listed below and can be shown again with a tap.
+- The phase of a room (3 phases) can be chosen in the Power card also when the room has no switches or light bundles.
+
 ### "Auto laden" follows Home Assistant's language
 - The car charging sensor on the General device is now named after Home Assistant's language: **Auto laden** in Dutch, **Car charging** in English. Its attributes have translated names too (e.g. *Accuniveau* / *Battery level*, *Vol om* / *Full at*).
 - The entity ID of an existing sensor stays the same (e.g. `sensor.roomcontrol_auto_laden`).

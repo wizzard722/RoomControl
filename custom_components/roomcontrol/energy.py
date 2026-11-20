@@ -34,7 +34,7 @@ from typing import Any
 
 from homeassistant.const import STATE_ON
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
@@ -190,6 +190,64 @@ def room_parts(hass: HomeAssistant, room: dict[str, Any]) -> list[dict[str, Any]
                     "name": (st.attributes.get("friendly_name") if st else None) or sw["entity_id"],
                     "watts": watts, "source": source, "auto": auto,
                     "energy": energy, "kwh": None if kwh is None else round(kwh, 3)})
+    out += room_meters(hass, room, out)
+    return out
+
+
+@callback
+def room_meters(hass: HomeAssistant, room: dict[str, Any], parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Dummy switches: power (W) and energy (kWh) sensors in the room's area
+    that belong to none of its lamps or switches, one per device (e.g. the
+    meter of a washing machine). They count in the room's power.
+    Room option "power": {"meter:<device id or sensor>": {"hidden": true} |
+    {"sensor": W sensor | "none", "energy_sensor": kWh sensor | "none"}}."""
+    from .room_switches import room_switches  # here: avoids an import cycle
+
+    area = room.get("area_id")
+    if not area:
+        return []
+    ent_reg, dev_reg = er.async_get(hass), dr.async_get(hass)
+    taken_devices: set[str] = set()
+    for entity in [e for g in room.get(CONF_GROUPS, []) or [] for e in g.get("lights", []) or []] + [
+            sw["entity_id"] for sw in room_switches(room)]:
+        entry = ent_reg.async_get(entity)
+        if entry is not None and entry.device_id:
+            taken_devices.add(entry.device_id)
+    taken_sensors = {x for p in parts for x in [*(p.get("sensors") or {}).values(), *(p.get("energy") or {}).values()]}
+    for conf in (room.get("power") or {}).values():
+        taken_sensors |= {conf.get("sensor")} | set((conf.get("sensors") or {}).values()) | set((conf.get("energy") or {}).values())
+    groups: dict[str, dict[str, Any]] = {}
+    for entry in ent_reg.entities.values():
+        if entry.domain != "sensor" or entry.disabled_by or entry.platform == DOMAIN:
+            continue
+        device = dev_reg.async_get(entry.device_id) if entry.device_id else None
+        if (entry.area_id or (device.area_id if device else None)) != area:
+            continue
+        if entry.device_id in taken_devices or entry.entity_id in taken_sensors:
+            continue
+        st = hass.states.get(entry.entity_id)
+        unit = str((st.attributes.get("unit_of_measurement") if st else None) or entry.unit_of_measurement or "").lower()
+        if unit not in ("w", "kwh"):
+            continue
+        key = f"meter:{entry.device_id or entry.entity_id}"
+        group = groups.setdefault(key, {"w": [], "kwh": [], "name": (device.name_by_user or device.name) if device else None})
+        group["w" if unit == "w" else "kwh"].append(entry.entity_id)
+        if not group["name"]:
+            group["name"] = (st.attributes.get("friendly_name") if st else None) or entry.entity_id
+    power = room.get("power") or {}
+    out = []
+    for key, group in sorted(groups.items(), key=lambda kv: str(kv[1]["name"]).lower()):
+        conf = power.get(key) or {}
+        w_sensor = conf.get("sensor") or (sorted(group["w"])[0] if group["w"] else None)
+        e_sensor = conf.get("energy_sensor") or (sorted(group["kwh"])[0] if group["kwh"] else None)
+        w_sensor = None if w_sensor == "none" else w_sensor
+        e_sensor = None if e_sensor == "none" else e_sensor
+        kwh = _kwh(hass, e_sensor)
+        out.append({"key": key, "kind": "meter", "name": group["name"], "hidden": bool(conf.get("hidden")),
+                    "watts": None if conf.get("hidden") else (_watts(hass, w_sensor) if w_sensor else 0.0),
+                    "source": "sensor", "auto": not conf.get("sensor"), "sensor": w_sensor,
+                    "energy_sensor": e_sensor, "kwh": None if kwh is None else round(kwh, 3),
+                    "w_options": sorted(group["w"]), "kwh_options": sorted(group["kwh"])})
     return out
 
 
