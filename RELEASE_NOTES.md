@@ -4,6 +4,15 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Fixed: lamps moved in Home Assistant are picked up
+A room's lamps are the ones added in the panel. When a lamp changed area in Home Assistant, RoomControl kept it in its old room. Now RoomControl follows Home Assistant:
+- **Lamp moved to another area** (the light itself or its device): it leaves its old room and its light bundles. When the new area is a RoomControl room, the lamp joins that room, outside any light bundle, with its own lamp settings.
+- **Lamp taken out of its area** (no area any more): it leaves the room.
+- **Lamp removed from Home Assistant**: it leaves the room.
+- **Lamp with a new entity ID**: it keeps its place in the room and its light bundles.
+- RoomControl checks this right away, and at start-up for changes made while it was not running.
+- The panel reloads when lamps or devices change in Home Assistant. If a room page is open, it reloads when you go back to the overview, so an older lamp list is never saved over the new one.
+
 ### Fixed: Test on Alarm → Per state now also sends the message
 - **Test** did only the speech; the message was never sent. It now does what is set for that state: the text is spoken when *Speech* is on, and sent as a message when *Message* is on. The message goes to the chosen persons' devices and/or Home Assistant, with the title "Alarm Systeem (test)". The "No messages" switch is followed as well.
 - Under the buttons the panel shows what happened, e.g. "Spoken on 2 speakers · Message sent to sm_s916b, Home Assistant · no device: Sarah". When something can't be done it says why: no text-to-speech set, no speakers in the chosen rooms, no person with a device, speech and message off, or the "No messages" switch is on.

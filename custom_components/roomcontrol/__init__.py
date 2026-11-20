@@ -28,6 +28,7 @@ from .vacuums import VacuumManager
 from .control import FullControl, rc_call
 from .covers_known import CoverMemory
 from .memory import Memory
+from .lamp_sync import LampSync
 from .alarm_auto import AlarmAutomation
 from .entity_ids import async_prefix_entity_ids
 from .rooms import all_dim_rooms
@@ -234,6 +235,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     alarm = AlarmAutomation(hass)
     _data(hass)["alarm"] = alarm
     alarm.start()
+    lamp_sync = LampSync(hass, _async_save_rooms)
+    _data(hass)["lamp_sync"] = lamp_sync
+    lamp_sync.start()
     _setup_entity_id_prefix(hass, entry)
     return True
 
@@ -297,6 +301,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             doorbells.stop()
         if (alarm := _data(hass).pop("alarm", None)) is not None:
             alarm.stop()
+        if (lamp_sync := _data(hass).pop("lamp_sync", None)) is not None:
+            lamp_sync.stop()
         if (memory := _data(hass).pop("memory", None)) is not None:
             await memory.async_stop()
     return unloaded
