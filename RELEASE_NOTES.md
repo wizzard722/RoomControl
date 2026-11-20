@@ -13,7 +13,7 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - The optional sensor *Plug* is now called **Charging cable connected**: the sensor (e.g. from Audi Connect) that tells whether the charging cable is in the car. The EV charger page says *Charging cable in the car* / *Charging cable not connected*, and the attribute of the *Car charging* sensor is now *Charging cable connected*.
 
 ### Width of the Rooms page
-- New setting under General settings › Display: **Width of the Rooms page** — *Normal* (as before, up to 900 px: 3 room cards side by side), *Wide* (up to 1400 px) or *Full width*. Wider pages fit more room cards next to each other; on a phone nothing changes.
+- The Rooms page now uses the whole width of the screen: as many room cards sit side by side as fit (before: at most 900 px, so 3 cards). E.g. 3 cards at 800 px, 4 at 1280 px, 7 at 1920 px; on a phone still one per row.
 
 ---
 
