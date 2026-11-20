@@ -1382,6 +1382,27 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
         font-weight: 500;
       }
 
+      .al-hero.ev-glow {
+        border-color: color-mix(in srgb, var(--success-color, #2e7d32) 60%, transparent);
+        animation: ev-glow 2.4s ease-in-out infinite;
+      }
+
+      @keyframes ev-glow {
+        0%, 100% {
+          box-shadow: 0 0 0 0 color-mix(in srgb, var(--success-color, #2e7d32) 0%, transparent);
+        }
+        50% {
+          box-shadow: 0 0 18px 4px color-mix(in srgb, var(--success-color, #2e7d32) 45%, transparent);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .al-hero.ev-glow {
+          animation: none;
+          box-shadow: 0 0 12px 2px color-mix(in srgb, var(--success-color, #2e7d32) 40%, transparent);
+        }
+      }
+
       .ev-soc {
         flex: none;
         margin-left: auto;
@@ -2209,10 +2230,10 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
       </section>
       `)}
 
-    `}_grp(e,t,n,r){let i=this.hass.language,a=V(`gs.${e}`,i),o=this._gsum(e),s=(this._grpQ??``).trim().toLowerCase(),c=this._grpOpen??new Set(this.page===`alarm`?[`al_slots`,`al_st_triggered`]:[`presence`]),l=!!s||c.has(e);if(s&&!`${a} ${o} ${V(`gs.kw_${e}`,i)}`.toLowerCase().includes(s))return L;return F`
+    `}_grp(e,t,n,r){let i=this.hass.language,a=V(`gs.${e}`,i),o=this._gsum(e),s=(this._grpQ??``).trim().toLowerCase(),c=this._grpOpen??new Set,l=!!s||c.has(e);if(s&&!`${a} ${o} ${V(`gs.kw_${e}`,i)}`.toLowerCase().includes(s))return L;return F`
       <div class="grp ${l?`open`:``}">
         <button class="grp-head" aria-expanded=${l?`true`:`false`}
-          @click=${()=>{let t=new Set(this._grpOpen??(this.page===`alarm`?[`al_slots`,`al_st_triggered`]:[`presence`]));c.has(e)?t.delete(e):t.add(e),this._grpOpen=t}}>
+          @click=${()=>{let t=new Set(this._grpOpen??[]);c.has(e)?t.delete(e):t.add(e),this._grpOpen=t}}>
           <span class="grp-icon ${n}"><ha-icon icon=${t}></ha-icon></span>
           <span class="grp-text"><span class="grp-title">${a}</span><span class="grp-sub">${o}</span></span>
           <ha-icon class="grp-chev" icon=${l?`mdi:chevron-up`:`mdi:chevron-down`}></ha-icon>
@@ -2502,7 +2523,7 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
         ${n?F`<span class="al-chip ${d}"><ha-icon icon=${n.charging?`mdi:car-electric`:`mdi:car`}></ha-icon>${n.charging?V(`ev.chip_charging`,e):V(`ev.chip_idle`,e)}</span>`:L}
       </div>
       ${a===`overview`?n?F`
-        <div class="al-hero ${d}">
+        <div class="al-hero ${d} ${n.charging?`ev-glow`:``}">
           <span class="al-hero-icon"><ha-icon icon=${n.charging?`mdi:car-electric`:`mdi:car`}></ha-icon></span>
           <span class="al-hero-text">
             <span class="al-hero-state">${n.charging?V(`ev.charging`,e).replace(`{name}`,i).replace(`{kw}`,c(n.kw)):V(`ev.not_charging`,e).replace(`{name}`,i)}</span>
@@ -2524,7 +2545,7 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
               <span>${V(`ev.phase_meter`,e).replace(`{phase}`,n.phase)}</span><b>${s(n.phase_watts)}</b>`}
             ${(n.minus??[]).map(e=>F`<span>− ${l(e.area)}</span><b>${s(e.watts)}</b>`)}
             <span class="ev-sum">= ${V(`ev.estimate`,e).replace(`{name}`,i)}</span><b class="ev-sum">${c(n.estimate_kw)}</b>
-            ${n.from_sensor||n.soc!=null?F`<span>${V(`ev.from_car`,e)}</span><b>${V(`ev.yes`,e)}</b>`:L}
+            
           </div>
         </div>
         <div class="al-card">
@@ -10498,7 +10519,7 @@ _vacuumPerson(e){return(this.settings.vacuum_persons??this.settings.persons).inc
               <span>${V(`ev.phase_meter`,e).replace(`{phase}`,r.phase)}</span><b>${s(r.phase_watts)}</b>`})()}
             ${(r.minus??[]).map(e=>F`<span>− ${o(e.area)}</span><b>${s(e.watts)}</b>`)}
             <span class="ev-sum">= ${V(`ev.estimate`,e).replace(`{name}`,i)}</span><b class="ev-sum">${a(r.estimate_kw)}</b>
-            ${r.from_sensor||r.soc!=null?F`<span>${V(`ev.from_car`,e)}</span><b>${V(`ev.yes`,e)}</b>`:L}
+            
           </div></details>
       </div>`}_dashTimer(){let e=this.hass.language;if(!this._settings?.alarm_entity)return L;let t=Date.now();this._dashBusy||t-(this._dashAt??0)<(this._dashAl?.timer?5e3:15e3)||(this._dashBusy=!0,this._dashAt=t,this.hass.callWS({type:`roomcontrol/alarm_status`}).then(e=>{this._dashAl=e,this.requestUpdate()}).catch(()=>{}).finally(()=>{this._dashBusy=!1}));let n=this._dashAl?.timer;if(!n?.until)return L;let r=new Date(n.until).getTime(),i=n.from?new Date(n.from).getTime():r,a=Math.ceil(Math.max(0,r-t)/1e3),o=`${Math.floor(a/60)}:${String(a%60).padStart(2,`0`)}`,s=r>i?Math.min(100,Math.max(0,100*(t-i)/(r-i))):100;this._dashTick||(this._dashTick=setInterval(()=>{this.isConnected&&this._view===`dashboard`&&this._dashAl?.timer?(this.requestUpdate(),r<Date.now()&&(this._dashAt=0)):(clearInterval(this._dashTick),this._dashTick=void 0)},1e3));let c=[n.lights?V(`al.timer_lights`,e):``,n.state?V(`al.timer_state`,e).replace(`{state}`,V(`alarm_state.${n.state}`,e)):``].filter(Boolean).join(V(`al.timer_and`,e));return F`
       <button class="dash-timer" role="timer" aria-live="off" title=${V(`al.title`,e)} @click=${()=>{this._view=`alarm`}}>
