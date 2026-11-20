@@ -3013,22 +3013,7 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
         ${n.soc!=null?F`<div class="ev-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${Math.round(n.soc)} aria-label=${V(`ev.battery`,e)}><span style="width:${Math.max(0,Math.min(100,n.soc))}%"></span></div>`:L}
         ${f.length?F`<div class="al-tiles">${f.map(e=>F`<div class="al-tile"><b>${e}</b></div>`)}</div>`:L}
         ${this._renderEvPriceCard(t.price)}
-        ${this._renderEvHistory(t.history)}
-        <div class="al-card">
-          <div class="al-card-title">${V(`ev.how`,e)}</div>
-          <div class="ev-grid">
-            ${p.produced!=null||p.solar!=null||p.battery!=null?F`
-              <span>${V(`ev.phase_meter`,e).replace(`{phase}`,n.phase)}: ${V(`ev.consumed`,e)}</span><b>${s(p.consumed)}</b>
-              ${p.produced!=null?F`<span>− ${V(`ev.returned`,e)}</span><b>${s(p.produced)}</b>`:L}
-              ${p.solar!=null?F`<span>+ ${V(`ev.solar`,e)}</span><b>${s(p.solar)}</b>`:L}
-              ${p.battery!=null?F`<span>${p.battery<0?`−`:`+`} ${V(`ev.home_battery`,e)}</span><b>${s(Math.abs(p.battery))}</b>`:L}
-              <span class="ev-sum">= ${V(`ev.house_use`,e).replace(`{phase}`,n.phase)}</span><b class="ev-sum">${s(n.phase_watts)}</b>`:F`
-              <span>${V(`ev.phase_meter`,e).replace(`{phase}`,n.phase)}</span><b>${s(n.phase_watts)}</b>`}
-            ${(n.minus??[]).map(e=>F`<span>− ${l(e.area)}</span><b>${s(e.watts)}</b>`)}
-            <span class="ev-sum">= ${V(`ev.estimate`,e).replace(`{name}`,i)}</span><b class="ev-sum">${c(n.estimate_kw)}</b>
-            
-          </div>
-        </div>`:F`<div class="al-card"><p class="hint">${V(`ev.not_set`,e)}</p>
+        ${this._renderEvHistory(t.history)}`:F`<div class="al-card"><p class="hint">${V(`ev.not_set`,e)}</p>
           <button class="al-btn" @click=${()=>{this._evTab=`settings`,this.requestUpdate()}}><ha-icon icon="mdi:cog-outline"></ha-icon>${V(`ev.tab_settings`,e)}</button></div>`:L}
       ${a===`settings`?F`${this._grp(`ev`,`mdi:car-electric`,`green`,()=>F`${this._renderEvSettings()}<p class="hint">${V(`ev.energy_where`,e)}</p>`)}${this._grp(`ev_notify`,`mdi:message-badge-outline`,`yellow`,()=>this._renderEvNotify())}${this._grp(`ev_price`,`mdi:currency-eur`,`teal`,()=>this._renderEvPrice())}`:L}`}_renderEnergy(){let e=this.hass.language,t=this.settings.energy??{},n=Number(t.phases)===3,r=n?[`L1`,`L2`,`L3`]:[`L1`],i=this._powerSensors(),a=(this.rooms??[]).filter(e=>!e.hidden),o=Object.keys(this.hass.states).filter(e=>e.startsWith(`sensor.`)),s=Object.keys(this.hass.states).filter(e=>/^(sensor|binary_sensor|switch|lock)\./.test(e)),c=(t,n)=>F`<span class="al-field"><span class="al-label">${t}</span>${n}</span>`;return F`
       <div class="al-situ-title">${V(`en.connection`,e)}</div>
