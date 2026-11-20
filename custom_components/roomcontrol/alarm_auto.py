@@ -12,6 +12,8 @@ General setting "alarm" (panel → Alarm), with the house's alarm panel from
  "distance_km": 100, "far_state": "armed_vacation", "near_state": "armed_home",
  "locks": [lock ids] (locked first), "fail_notify": bool,
  "home_on": bool, "home_minutes": 10,   # someone comes home: disarm (re-arm a slot later)
+ "home_lights": bool,                    # ... and when dark: the "Later thuis" rooms' lamps
+                                         # on until home_minutes have passed
  "notify": "notify.mobile_app_x", "notify_skip": entity (on → no messages),
  "code": "1234" (optional, for panels that need one),
  "states": {state: {            "speak": text, "speak_rooms": [area ids], "volume": %, "volume_after": %,
@@ -36,7 +38,7 @@ from typing import Any
 
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.event import (
     async_call_later,
@@ -49,7 +51,15 @@ from homeassistant.components import persistent_notification
 
 from .announce import announce_tts
 from .person_notify import person_notify_service
-from .const import ALARM_TRANSITIONAL, CONF_MEDIA_PLAYERS, DOMAIN, SETTING_ALARM_ENTITY, SETTING_SUN_ENTITY, SIGNAL_CONFIG_UPDATED
+from .const import (
+    ALARM_TRANSITIONAL,
+    CONF_MEDIA_PLAYERS,
+    DOMAIN,
+    SETTING_ALARM_ENTITY,
+    SETTING_SUN_ENTITY,
+    SIGNAL_CONFIG_UPDATED,
+    SIGNAL_LATE_HOME,
+)
 from .rooms import managed_areas
 from .slots import hm_minutes, mode_slots, slot_part
 
@@ -229,6 +239,7 @@ class AlarmAutomation:
                 setattr(self, name, None)
         if self._loop:
             self._loop.cancel()
+        self.arrive_lights().clear()  # no dispatch: the rooms are going away too
 
     @callback
     def _sync(self, *_: Any) -> None:
@@ -374,25 +385,57 @@ class AlarmAutomation:
 
     # ── someone comes home ─────────────────────────────────────────────────
 
+    def arrive_lights(self) -> set[str]:
+        """Persons for whom the "Later thuis" rooms' lamps are on after coming home."""
+        return self.hass.data.setdefault(DOMAIN, {}).setdefault("arrive_active", set())
+
+    @callback
+    def _arrive_lights(self, on: bool, person: str | None = None) -> None:
+        """Lamps of the rooms set for "Later thuis" on (it is dark) or off again.
+        The rooms do it the way they do for "Later thuis": on while it holds,
+        off afterwards unless there is motion in the room."""
+        active = self.arrive_lights()
+        if on and person:
+            active.add(person)
+        elif not on and active:
+            active.clear()
+        else:
+            return
+        async_dispatcher_send(self.hass, SIGNAL_LATE_HOME)
+
     @callback
     def _arrived(self, person: str) -> None:
         cfg = self.cfg()
         self._away_active = False
         if not cfg.get("home_on", True) or self.state() not in ARMED:
             return
+        from .switch import _sun_phase
+
         name = self._name(person)
         slot = self.slot_now()
         minutes = int(_num(cfg.get("home_minutes"), 10))
+        lights = minutes > 0 and cfg.get("home_lights", True) and _sun_phase(self.hass)[1]
         self.hass.async_create_task(self.set_state("disarmed", f"home:{name}"))
-        if slot and minutes > 0:
-            self._notify(f"{name} komt thuis. Alarm is uitgeschakeld voor {minutes} minuten.")
+        if lights:
+            self._log("arrive_lights", name)
+            self._arrive_lights(True, person)
+        if (slot or lights) and minutes > 0:
+            if slot:
+                self._notify(f"{name} komt thuis. Alarm is uitgeschakeld voor {minutes} minuten.")
+            else:
+                self._notify(f"{name} komt thuis.")
             if self._rearm_timer:
                 self._rearm_timer()
 
             @callback
             def _again(_now: Any) -> None:
+                # Time is up: the lamps off again and the alarm to the
+                # time slot's state (no slot: someone is home, stays disarmed).
                 self._rearm_timer = None
                 self._rearm_at = None
+                if self.arrive_lights():
+                    self._log("arrive_lights_off")
+                    self._arrive_lights(False)
                 again = self.slot_now()
                 if again and self.state() == "disarmed":
                     self.hass.async_create_task(self.set_state(again["state"], "rearm"))
@@ -628,8 +671,10 @@ class AlarmAutomation:
         if self._away_timer is not None and self._away_at is not None:
             add(self._away_at, "away", "", self.away_target())
         if self._rearm_timer is not None and self._rearm_at is not None:
-            slot = self.slot_now()
-            add(self._rearm_at, "rearm", (slot or {}).get("name") or "", (slot or {}).get("state"))
+            if self.arrive_lights():
+                add(self._rearm_at, "arrive_lights_off", "", None)
+            if slot := self.slot_now():
+                add(self._rearm_at, "rearm", slot.get("name") or "", slot.get("state"))
         events.sort(key=lambda e: e[0])
         seen: set[tuple[str, str, str]] = set()
         out = []

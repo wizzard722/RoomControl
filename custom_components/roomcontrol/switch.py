@@ -770,7 +770,9 @@ class LateHomeSwitch(RestoreEntity, SwitchEntity):
     def _on_person(self, _event: Any) -> None:
         if self._home() and self.person in self._active():
             # Home now: the switch goes off and the held rooms may go off.
-            self._set(False)
+            # A moment later, so the alarm's "someone comes home" (which may
+            # keep the lamps on a while longer) is seen first: no flicker.
+            self.hass.loop.call_soon(self._set, False)
         else:
             self.async_write_ha_state()
 

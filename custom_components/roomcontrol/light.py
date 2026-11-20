@@ -1602,8 +1602,10 @@ class RoomControlLight(LightEntity):
 
     def _late_home_holds(self) -> bool:
         """A "Later thuis" switch is on and this room keeps its bundles on for it."""
+        data = self.hass.data.get(DOMAIN, {})
+        # Also right after someone came home in the dark (alarm → Someone comes home).
         return bool(self._room.get(CONF_LATE_HOME)) and bool(
-            self.hass.data.get(DOMAIN, {}).get("late_home_active")
+            data.get("late_home_active") or data.get("arrive_active")
         )
 
     @callback

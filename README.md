@@ -89,7 +89,7 @@ RoomControl works with the areas and floors you already have in Home Assistant. 
 A dedicated **Alarm** page in the panel:
 - **Time slots** put the alarm in a chosen state (e.g. Armed Home at night).
 - **Everyone away**: RoomControl locks up and arms. Beyond a distance you set (default 100 km) the alarm goes to Armed Vacation.
-- **Someone comes home**: the alarm is disarmed; during a time slot it goes back to the slot's state after a while.
+- **Someone comes home**: the alarm is disarmed. When it is dark, the lamps of the rooms set for *Home later* go on. After a wait time (default 10 minutes) they go off again, and during a time slot the alarm goes back to the slot's state.
 - **Per state** RoomControl can:
   - speak and sound a siren on the speakers of chosen rooms, repeated while the state lasts;
   - stop media;

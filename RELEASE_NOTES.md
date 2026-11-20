@@ -4,6 +4,14 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Alarm: lamps on when someone comes home in the dark
+New option in **Alarm → Automatic → Someone comes home**: *When it is dark: lamps on as for Home later* (on by default).
+- When a person comes home while the alarm is armed and the sun is down, RoomControl switches on the lamps of the rooms that have **Keep on for Home later** on. The card lists those rooms.
+- After the **wait time** (default 10 minutes, configurable) the lamps go off again, unless there is motion in the room. In a time slot the alarm then goes back to the slot's state. Without a time slot someone is home, so the alarm stays disarmed.
+- The wait time is the setting that was called *In a time slot: back to its state after*. It now also applies to the lamps.
+- *What the alarm will do* shows when the lamps go off. *What the alarm did* shows when they went on and off.
+- Fixed in passing: when a person with a **Home later** button on comes home in the dark, the lamps no longer flicker off and on.
+
 ### Alarm: what the alarm will do
 The Alarm page's Overview now shows **What the alarm will do** above *What the alarm did*: the next 24 hours, soonest first.
 - Time slots starting, with the state they set.
