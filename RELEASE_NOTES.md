@@ -1,5 +1,16 @@
 # Release notes
 
+## 1.18.0b26 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Power on the Overview tiles
+- Below 10 W the power now shows one decimal (e.g. 5,6 W and 0,6 W), so the badges add up to the total of their section; before, two rounded badges (6 W + 1 W) could sit next to a total of 6 W.
+- A section's total now stands right after its heading (*Light bundles · 6,2 W*) instead of at the far right of the page.
+- A tile's name no longer runs under its power badge.
+
+---
+
 ## 1.18.0b25 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
