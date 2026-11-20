@@ -1,5 +1,69 @@
 # Release notes
 
+## 2.0.0
+
+The first stable release since 1.17.1, bringing together everything from the 1.18.0 betas (b1–b26). Big additions: an **Alarm** page, **energy per room and phase**, an **EV charger** page with dynamic prices and solar, a new **floor plan**, **room switches**, **NSPanel** messages and **tags**.
+
+### Breaking changes and things to check after updating
+- All entities have a `roomcontrol_` entity ID prefix (e.g. `sensor.roomcontrol_generiek_auto_laden`). Update your own automations and dashboards that use the old IDs.
+- Room schedules (`schedule.*` helpers) are replaced by **time slots**; the vacuum's schedule on/off switch is gone (add cleaning moments with "Add time schedule").
+- "Draw free shape" and the general setting "Free shapes in Layout" are replaced by shaping rooms with dots; outlines drawn before are kept.
+- The alarm's siren, screen and status lamps were removed from RoomControl (the alarm integration, e.g. Alarmo, handles those).
+- NSPanels: choose the panels per kind of message with **groups** (the single-panel choice of 1.18.0b22 is gone).
+- The cost of a charging session counts only the grid part; sessions from before keep their cost for all kWh.
+
+### Rooms and overview
+- Every room page has an **Overview** tab (first and default): status chips, quick tiles for light bundles and devices (tap = switch), *Dim · Take over · All off*, the floor plan, **Coming up** and **What happened** (with the reason).
+- Room settings and general settings are **collapsible, searchable cards** with a one-line summary; every card starts closed.
+- **Switches in a room** (espresso machine, fridge, TV …): choose per switch whether it may go off and when (All off, nobody home / Armed Away, smoke); back on at Disarmed or Armed Home. A switch that may never go off is never switched off.
+- **Devices with only a power meter** (no switch) show as fictitious devices, named from their sensors and renamable.
+- Tiles show the **current power** as a badge, with the total per section (one decimal below 10 W).
+- The **Rooms page** uses the full screen width, with an optional maximum of room cards per row.
+- Lamps moved, removed or renamed in Home Assistant are picked up by their rooms right away.
+
+### Floor plan and layout
+- A floor plan per floor from Home Assistant's floors and areas: doors (open/closed by their sensor, or fictitious), open passages and stairs between landings.
+- Shape rooms with dots (corners and walls), snap to the grid and to neighbouring rooms, keyboard control, wall lengths in metres, own rooms (garden, corridor …) and lamps and sensors placed in their room.
+- Each floor heading on the Rooms page can show the power per phase (**L1 · L2 · L3**).
+
+### Light, dim, motion and curtains
+- **Time slots** everywhere use one editor (name, days, start at a time/dusk/dark, end at a time/sunrise, Normal/Vacation): light bundles, motion sensors and All dim.
+- **All dim** is a switch on the General device with time slots; it can follow the alarm (Armed Home → on, Disarmed → off).
+- RoomControl remembers the **curtain state** from its own commands (many curtains report badly), with a **Curtains status** sensor and an **Opening** binary sensor per room.
+- The fan switches off after its run-on time; shared fans keep stepping while any linked room has motion.
+
+### Alarm page
+- A new **Alarm** page with Overview, Automatic and Per state: time slots that set the alarm, arming when everyone left (by distance), and **someone comes home**: lamps on in the dark and a configurable timer before the alarm goes back on (several persons at once supported), with a countdown on the overview.
+- **Per state**: one text, spoken on the speakers of chosen rooms and/or sent as a message to persons' phones and as a melding in Home Assistant, with a default text for every state and a Test button.
+- **Lamps and WLED strips** (with a preset) per state.
+- **Coming up** shows what the alarm will do; the alarm's log says why.
+- No more "Alarm is off" message, speech or lamps when Home Assistant starts.
+
+### Energy
+- **Power per room**: per light bundle (a power sensor per lamp, matched automatically, or fixed watts × brightness), per switch and per meter, with the room's phase. kWh sensors are kept for later use.
+- **Phases**: consumption and return per phase, with solar panels (per phase) and a home battery.
+- Home Assistant's own **entity picker** is used for every entity choice.
+
+### EV charger
+- An **EV charger** page (car icon in the header, green while charging), with a **Car charging** sensor on the General device.
+- Charging is detected from the charger's phase, or from the car's own charging sensor (e.g. Audi Connect), with battery level, battery size and **charging cable connected**.
+- **Car messages** (started, stopped, fully charged, cheapest time starts): speech, melding in Home Assistant and/or phones, each with its own text and a Test button.
+- **Dynamic energy price** (Zonneplan, Nord Pool, ENTSO-e, EnergyZero …, per hour or per 15 minutes): the **cheapest time to charge** for all the energy the charge needs, optionally ready by a set time, with the expected cost and a price chart.
+- **Solar forecast** (Forecast.Solar, Solcast, Open-Meteo …): expected sun above the house's own use counts as free charging.
+- **Charged** card: Today, This month, 30 and 365 days with kWh, cost, kWh into the battery, **sun vs grid** and the **savings** from own power; the sessions of each period 8 at a time, each folding open with its details. Sessions are kept for a set number of days.
+
+### Messages, NSPanels and tags
+- **NSPanel Easy** panels show RoomControl's messages (alarm, car, smoke, doorbell, announcements), per **group** of panels, and clear them after a set time; new action `roomcontrol.nspanel_message`.
+- **Tags** (NFC / QR): a scan toggles, opens or closes chosen light bundles, switches, locks and covers, optionally only for chosen persons.
+- **Presence**: a person can have no device; messages go to each person's own phone.
+
+### Fixes
+- Sensors with a translated name (*Car charging*, *Curtains status*) were not created on recent Home Assistant versions.
+- Device tiles did nothing when tapped; switches on the overview now switch.
+- Pages open at the top; renamed rooms are picked up right away; shaped rooms join up again in Layout; the floor plan and person options fit on a phone.
+
+---
+
 ## 1.18.0b26 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
