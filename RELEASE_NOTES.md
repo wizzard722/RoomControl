@@ -31,6 +31,9 @@ When you rename an area in Home Assistant, RoomControl now follows at once:
 - A notify service chosen before keeps working, shown as "Also to (chosen before)" with a button to remove it.
 - On the Alarm page each state now shows its action buttons under both cards.
 
+### Fixed: pages open at the top
+- Opening a room from the dashboard (or any other page of the panel) kept the scroll position of the page before, so the room opened halfway down. Every page now opens at the top.
+
 ---
 
 ## 1.18.0b9 (beta)
