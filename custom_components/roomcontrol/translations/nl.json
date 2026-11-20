@@ -41,6 +41,10 @@
         "seconds": {
           "name": "Seconden",
           "description": "Hoe lang het blijft staan (0: tot het volgende; leeg: zoals ingesteld in RoomControl)."
+        },
+        "group": {
+          "name": "Groep",
+          "description": "Naam van een panelengroep uit RoomControl (leeg: alle panelen)."
         }
       }
     }

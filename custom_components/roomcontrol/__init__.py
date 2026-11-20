@@ -23,7 +23,7 @@ from .learn import LearnStore
 from .smoke import SmokeManager
 from .doorbell import DoorbellManager
 from .announce import async_announce
-from .nspanel import async_clear as nspanel_clear, async_show as nspanel_show, chosen_panels, found_panels, nspanel_message, stop_timers as nspanel_stop
+from .nspanel import async_clear as nspanel_clear, async_show as nspanel_show, chosen_panels, found_panels, nspanel_message, stop_timers as nspanel_stop, target_panels
 from .texts import default_texts
 from .vacuums import VacuumManager
 from .control import FullControl, rc_call
@@ -117,7 +117,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 
     async def _nspanel_service(call: ServiceCall) -> ServiceResponse:
         panels = await nspanel_show(
-            hass, call.data.get("label") or "RoomControl", call.data["message"], call.data.get("seconds"))
+            hass, call.data.get("label") or "RoomControl", call.data["message"], call.data.get("seconds"),
+            panels=target_panels(hass, call.data.get("group") or "all"))
         return {"panels": panels}
 
     hass.services.async_register(
@@ -126,6 +127,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             vol.Required("message"): str,
             vol.Optional("label"): str,
             vol.Optional("seconds"): vol.Coerce(float),
+            vol.Optional("group"): str,
         }),
         supports_response=SupportsResponse.OPTIONAL,
     )
@@ -638,7 +640,7 @@ async def ws_tags(
 
 @websocket_api.websocket_command(
     {vol.Required("type"): f"{DOMAIN}/nspanel", vol.Optional("action", default="list"): vol.In(["list", "test", "clear"]),
-     vol.Optional("message"): str}
+     vol.Optional("message"): str, vol.Optional("target"): str}
 )
 @websocket_api.async_response
 async def ws_nspanel(
@@ -648,7 +650,8 @@ async def ws_nspanel(
 ) -> None:
     """Panel: the NSPanels found; "test" shows a message on the chosen ones."""
     if msg["action"] == "test":
-        shown = await nspanel_show(hass, "RoomControl", msg.get("message") or "Test")
+        shown = await nspanel_show(hass, "RoomControl", msg.get("message") or "Test",
+                                   panels=target_panels(hass, msg.get("target") or "all"))
         connection.send_result(msg["id"], {"shown": shown, "found": found_panels(hass)})
         return
     if msg["action"] == "clear":

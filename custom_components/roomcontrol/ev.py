@@ -323,7 +323,7 @@ async def async_send(hass: HomeAssistant, cfg: dict[str, Any], message: str, tes
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("EV message to %s failed: %s", service, err)
     if not test:
-        nspanel_message(hass, "ev", message)
+        nspanel_message(hass, "ev", message, target=n.get("nspanel"))
     if n.get("ha", True):
         persistent_notification.async_create(hass, message, title=title, notification_id=f"{DOMAIN}_ev")
         result["ha"] = True

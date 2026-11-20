@@ -41,6 +41,10 @@
         "seconds": {
           "name": "Seconds",
           "description": "How long it stays (0: until the next one; empty: as set in RoomControl)."
+        },
+        "group": {
+          "name": "Group",
+          "description": "Name of a panel group set in RoomControl (empty: every panel)."
         }
       }
     }

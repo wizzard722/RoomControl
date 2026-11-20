@@ -634,6 +634,9 @@ class AlarmAutomation:
             await self._call("media_player", "media_stop", {ATTR_ENTITY_ID: stop})
         if st.get("notify"):
             self._notify(st["notify"], st)
+        elif st.get("text") and st.get("nspanel") not in (None, "", "none"):
+            # Only on the panels: this state chose a panel group of its own.
+            nspanel_message(self.hass, "alarm", st["text"], target=st["nspanel"])
         speak, players = st.get("speak"), self._players(st, "speak")
         if not (speak and players):
             return
@@ -713,7 +716,7 @@ class AlarmAutomation:
                 services.append(legacy)  # older: one service for every message
         result = {"services": services, "ha": bool(ha), "skipped": skipped, "no_device": no_device}
         if not test:
-            nspanel_message(self.hass, "alarm", message)
+            nspanel_message(self.hass, "alarm", message, target=st.get("nspanel"))
         if not services and not ha:
             return result
         title = "Alarm Systeem (test)" if test else "Alarm Systeem"

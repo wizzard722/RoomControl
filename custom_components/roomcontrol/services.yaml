@@ -31,3 +31,8 @@ nspanel_message:
           min: 0
           max: 3600
           unit_of_measurement: s
+    group:
+      required: false
+      example: "Beneden"
+      selector:
+        text:

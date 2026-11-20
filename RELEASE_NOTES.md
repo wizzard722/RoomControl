@@ -4,6 +4,13 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### NSPanel groups
+- The **NSPanels** card now has **groups**: make named groups of panels (e.g. *Downstairs*, *Bedrooms*); a panel may be in several groups.
+- Per kind of message (alarm, car charging, smoke alarm, doorbell, announcements) choose where it goes: *All panels*, a group, or *None*.
+- The alarm can choose its own panels **per state** (Alarm › Per state › NSPanels), and the car messages in their own card (EV charger › Car messages). *As set for NSPanels* follows the general choice. A state with messages off still shows its text on the panels when a group is chosen there.
+- **Test** can send to all panels or to one group. The action **roomcontrol.nspanel_message** has a new optional **group** (the group's name).
+- The b22 choice of single panels is replaced by groups: please make a group for those panels again.
+
 ### Fixed: no power on some switch tiles
 - A switch whose device has several power (W) sensors could get one without a value (e.g. unavailable), so its tile on the Overview showed no power. The automatic match now picks a W sensor that has a value first, then one of the power kind, then one with power/vermogen in its name.
 - A tile that is on but has no known power now shows a grey **— W** badge; its tooltip says to choose a power sensor or fixed watts under Settings › Power.

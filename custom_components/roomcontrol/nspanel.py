@@ -7,10 +7,14 @@ again after a while (the panel itself keeps a message until it is cleared).
 
 General setting "nspanel": {
   "on": bool,
-  "panels": [panel names],         # [] = every panel found
   "seconds": 60,                   # how long a message stays (0: until the next)
-  "sources": {"alarm": bool, "ev": bool, "smoke": bool, "doorbell": bool,
-              "announce": bool}}   # which messages go to the panels (default all)
+  "groups": [{"id": str, "name": str, "panels": [panel names]}],
+  "sources": {"alarm" | "ev" | "smoke" | "doorbell" | "announce": target}}
+
+A target is "all" (every panel found, the default), "none", or a group's
+id. The alarm (per state: "nspanel") and the car messages ("notify" →
+"nspanel") can choose their own target over the source's.
+(Older: a source true/false = "all"/"none"; "panels" is no longer used.)
 """
 from __future__ import annotations
 
@@ -54,10 +58,37 @@ def found_panels(hass: HomeAssistant) -> list[str]:
 
 
 @callback
-def chosen_panels(hass: HomeAssistant) -> list[str]:
+def groups(hass: HomeAssistant) -> list[dict[str, Any]]:
+    return [g for g in nspanel_cfg(hass).get("groups") or [] if isinstance(g, dict) and g.get("id")]
+
+
+@callback
+def source_target(hass: HomeAssistant, source: str) -> str:
+    value = (nspanel_cfg(hass).get("sources") or {}).get(source, "all")
+    if value is True or value is None:
+        return "all"
+    if value is False:
+        return "none"
+    return str(value)
+
+
+@callback
+def target_panels(hass: HomeAssistant, target: str | None) -> list[str]:
+    """The panels of a target: "all", "none" or a group id (or name)."""
     found = found_panels(hass)
-    chosen = [p for p in nspanel_cfg(hass).get("panels") or [] if p in found]
-    return chosen or found
+    if target in (None, "", "all"):
+        return found
+    if target == "none":
+        return []
+    for group in groups(hass):
+        if target in (group["id"], group.get("name")):
+            return [p for p in group.get("panels") or [] if p in found]
+    return []  # a group that no longer exists
+
+
+@callback
+def chosen_panels(hass: HomeAssistant) -> list[str]:
+    return found_panels(hass)
 
 
 def _timers(hass: HomeAssistant) -> dict[str, CALLBACK_TYPE]:
@@ -105,16 +136,16 @@ async def async_clear(hass: HomeAssistant, panels: list[str] | None = None) -> N
 
 
 @callback
-def nspanel_message(hass: HomeAssistant, source: str, message: str, title: str | None = None) -> None:
+def nspanel_message(hass: HomeAssistant, source: str, message: str, title: str | None = None,
+                    target: str | None = None) -> None:
     """A RoomControl message of this kind: on the panels, when that is chosen."""
     cfg = nspanel_cfg(hass)
     if not cfg.get("on") or not message:
         return
-    if (cfg.get("sources") or {}).get(source, True) is False:
+    panels = target_panels(hass, target if target else source_target(hass, source))
+    if not panels:
         return
-    if not found_panels(hass):
-        return
-    hass.async_create_task(async_show(hass, title or label(hass, source), message))
+    hass.async_create_task(async_show(hass, title or label(hass, source), message, panels=panels))
 
 
 @callback
