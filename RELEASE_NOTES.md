@@ -1,5 +1,12 @@
 # Release notes
 
+## 2.0.1
+
+### Fixed: Zonneplan quarter-hour prices were not read
+- Zonneplan's quarter-hour tariff sensor (*Current quarter hourly electricity tariff*) gives its forecast as `start_date` / `end_date` with the price nested in `price_tax_included.amount`. RoomControl now reads that format (the price including tax), so the EV charger's price chart, the cheapest time to charge and the cost per charging session work with it. Nested `{amount}` prices and `end_date` are read for other suppliers too.
+
+---
+
 ## 2.0.0
 
 The first stable release since 1.17.1, bringing together everything from the 1.18.0 betas (b1–b26). Big additions: an **Alarm** page, **energy per room and phase**, an **EV charger** page with dynamic prices and solar, a new **floor plan**, **room switches**, **NSPanel** messages and **tags**.

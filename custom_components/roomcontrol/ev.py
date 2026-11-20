@@ -80,7 +80,11 @@ def event_cfg(hass: HomeAssistant, cfg: dict[str, Any], event: str) -> dict[str,
 
 # ── prices ─────────────────────────────────────────────────────────────────
 
-_TIME_KEYS = ("datetime", "start", "start_time", "from", "time", "timestamp", "date")
+_TIME_KEYS = ("datetime", "start_date", "start", "start_time", "from", "time", "timestamp", "date")
+_END_KEYS = ("end_date", "end", "end_time", "till", "to")
+# Nested prices ({"amount": …}); including tax first (what you pay).
+_NESTED_PRICE_KEYS = ("price_tax_included", "price_incl_tax", "price_including_tax", "total_price",
+                      "price", "price_tax_excluded")
 _PRICE_KEYS = ("electricity_price", "price", "value", "total", "price_incl", "tariff")
 
 
@@ -108,10 +112,28 @@ def _rows(attrs: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _price_of(row: dict[str, Any]) -> float | None:
+    """A row's price: a plain number (Zonneplan's older "electricity_price",
+    Nord Pool's "value" …) or nested, e.g. Zonneplan's quarter-hour
+    "price_tax_included": {"amount": …}."""
+    for key in _PRICE_KEYS:
+        if isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool):
+            return float(row[key])
+    for key in _NESTED_PRICE_KEYS:
+        value = row.get(key)
+        if isinstance(value, dict):
+            for inner in ("amount", "value", "total"):
+                if isinstance(value.get(inner), (int, float)):
+                    return float(value[inner])
+    return None
+
+
 def price_forecast(hass: HomeAssistant, sensor: str | None) -> list[dict[str, Any]]:
     """[{"start": utc datetime, "end": utc datetime, "price": €/kWh}], sorted.
     Reads the forecast in the price sensor's attributes: Zonneplan
-    ("forecast": [{"datetime", "electricity_price"}], in 1/10,000,000 €),
+    ("forecast": [{"datetime", "electricity_price"}], in 1/10,000,000 €;
+    per quarter hour [{"start_date", "end_date", "price_tax_included":
+    {"amount"}}]),
     Nord Pool ("raw_today"/"raw_tomorrow": [{"start", "end", "value"}]),
     ENTSO-e / EnergyZero ("prices": [{"time", "price"}]) and alike."""
     st = hass.states.get(sensor or "")
@@ -120,10 +142,10 @@ def price_forecast(hass: HomeAssistant, sensor: str | None) -> list[dict[str, An
     out: list[dict[str, Any]] = []
     for row in _rows(dict(st.attributes)):
         start = next((t for k in _TIME_KEYS if (t := _when(row.get(k))) is not None), None)
-        price = next((row[k] for k in _PRICE_KEYS if isinstance(row.get(k), (int, float))), None)
+        price = _price_of(row)
         if start is None or price is None:
             continue
-        end = _when(row.get("end")) or _when(row.get("end_time")) or _when(row.get("till"))
+        end = next((t for k in _END_KEYS if (t := _when(row.get(k))) is not None), None)
         out.append({"start": start, "end": end, "price": float(price)})
     if not out:
         return []
