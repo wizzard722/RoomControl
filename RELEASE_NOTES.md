@@ -9,6 +9,9 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - A section's total now stands right after its heading (*Light bundles · 6,2 W*) instead of at the far right of the page.
 - A tile's name no longer runs under its power badge.
 
+### EV charger: "charging cable" instead of "plug"
+- The optional sensor *Plug* is now called **Charging cable connected**: the sensor (e.g. from Audi Connect) that tells whether the charging cable is in the car. The EV charger page says *Charging cable in the car* / *Charging cable not connected*, and the attribute of the *Car charging* sensor is now *Charging cable connected*.
+
 ---
 
 ## 1.18.0b25 (beta)
