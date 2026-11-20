@@ -49,9 +49,9 @@ from homeassistant.components import persistent_notification
 
 from .announce import announce_tts
 from .person_notify import person_notify_service
-from .const import ALARM_TRANSITIONAL, CONF_MEDIA_PLAYERS, DOMAIN, SETTING_ALARM_ENTITY, SIGNAL_CONFIG_UPDATED
+from .const import ALARM_TRANSITIONAL, CONF_MEDIA_PLAYERS, DOMAIN, SETTING_ALARM_ENTITY, SETTING_SUN_ENTITY, SIGNAL_CONFIG_UPDATED
 from .rooms import managed_areas
-from .slots import mode_slots, slot_part
+from .slots import hm_minutes, mode_slots, slot_part
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -117,6 +117,8 @@ class AlarmAutomation:
         self._away_timer: CALLBACK_TYPE | None = None
         self._away_active = False
         self._rearm_timer: CALLBACK_TYPE | None = None
+        self._rearm_at: Any = None
+        self._away_at: Any = None
         self._fail_timer: CALLBACK_TYPE | None = None
         self._loop: asyncio.Task | None = None
 
@@ -327,6 +329,7 @@ class AlarmAutomation:
             if self._away_timer:
                 self._away_timer()
                 self._away_timer = None
+                self._away_at = None
             return
         if self._away_active or self._away_timer is not None:
             return
@@ -334,11 +337,14 @@ class AlarmAutomation:
         @callback
         def _go(_now: Any) -> None:
             self._away_timer = None
+            self._away_at = None
             if self.all_away():
                 self._away_active = True
                 self.hass.async_create_task(self._away())
 
-        self._away_timer = async_call_later(self.hass, _num(cfg.get("away_delay"), 1) * 60, _go)
+        delay = _num(cfg.get("away_delay"), 1) * 60
+        self._away_at = dt_util.now() + timedelta(seconds=delay)
+        self._away_timer = async_call_later(self.hass, delay, _go)
 
     def away_target(self) -> str:
         cfg = self.cfg()
@@ -386,10 +392,12 @@ class AlarmAutomation:
             @callback
             def _again(_now: Any) -> None:
                 self._rearm_timer = None
+                self._rearm_at = None
                 again = self.slot_now()
                 if again and self.state() == "disarmed":
                     self.hass.async_create_task(self.set_state(again["state"], "rearm"))
 
+            self._rearm_at = dt_util.now() + timedelta(minutes=minutes)
             self._rearm_timer = async_call_later(self.hass, minutes * 60, _again)
         else:
             self._notify(f"{name} komt thuis.")
@@ -557,6 +565,81 @@ class AlarmAutomation:
     def _log(self, what: str, detail: str = "") -> None:
         self.log.appendleft({"at": dt_util.utcnow().isoformat(), "what": what, "detail": detail})
 
+    def upcoming(self, hours: int = 24) -> list[dict[str, Any]]:
+        """What RoomControl expects the alarm to do in the next `hours`
+        (panel "Straks"): time slots starting and ending, arming after
+        everyone left and re-arming after someone came home.
+        [{"at": iso, "kind": ..., "name": ..., "state": ...}], soonest first."""
+        if not self.panel():
+            return []
+        cfg = self.cfg()
+        now = dt_util.now()
+        until = now + timedelta(hours=hours)
+        events: list[tuple[Any, str, str, str | None]] = []
+        settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
+        sun = self.hass.states.get(settings.get(SETTING_SUN_ENTITY) or "sun.sun")
+
+        def sun_at(attr: str) -> Any:
+            value = sun.attributes.get(attr) if sun is not None else None
+            parsed = dt_util.parse_datetime(value) if isinstance(value, str) else None
+            return dt_util.as_local(parsed) if parsed else None
+
+        def at_time(hm: Any, day: Any) -> Any:
+            minutes = hm_minutes(hm)
+            if minutes is None:
+                return None
+            return day.replace(hour=minutes // 60, minute=minutes % 60, second=0, microsecond=0)
+
+        def add(when: Any, kind: str, name: str, state: str | None) -> None:
+            if when is not None and now <= when <= until:
+                events.append((when, kind, name, state))
+
+        home = self.anyone_home()
+        if cfg.get("slots_on", True):
+            vacation = bool(self.hass.data.get(DOMAIN, {}).get("vacation"))
+            ends_to = None
+            if cfg.get("outside", "disarm") == "disarm":
+                ends_to = "disarmed" if home else (self.away_target() if cfg.get("away_on", True) else None)
+            for slot in mode_slots(cfg.get("slots") or [], vacation):
+                if slot.get("state") not in SERVICE_FOR or (slot.get("only_away") and home):
+                    continue
+                name = slot.get("name") or ""
+                days = {d for d in slot.get("days", []) or [] if isinstance(d, int)}
+                start, end = slot.get("start") or {}, slot.get("end") or {}
+                for offset in (-1, 0, 1):
+                    day = now + timedelta(days=offset)
+                    if day.weekday() not in days:
+                        continue
+                    if start.get("type", "time") == "time":
+                        begin = at_time(start.get("time"), day)
+                    else:
+                        begin = sun_at("next_dusk" if start.get("type") == "dusk" else "next_setting") if offset == 0 else None
+                    add(begin, "slot_start", name, slot["state"])
+                    if end.get("type") == "sunrise":
+                        stop = sun_at("next_rising") if offset in (0, -1) else None
+                    else:
+                        stop = at_time(end.get("time"), day)
+                        if stop is not None and begin is not None and stop <= begin:
+                            stop += timedelta(days=1)
+                    add(stop, "slot_end", name, ends_to)
+        # A slot ending where another one starts: only the start counts.
+        starts = {e[0].isoformat(timespec="minutes") for e in events if e[1] == "slot_start"}
+        events = [e for e in events if e[1] != "slot_end" or e[0].isoformat(timespec="minutes") not in starts]
+        if self._away_timer is not None and self._away_at is not None:
+            add(self._away_at, "away", "", self.away_target())
+        if self._rearm_timer is not None and self._rearm_at is not None:
+            slot = self.slot_now()
+            add(self._rearm_at, "rearm", (slot or {}).get("name") or "", (slot or {}).get("state"))
+        events.sort(key=lambda e: e[0])
+        seen: set[tuple[str, str, str]] = set()
+        out = []
+        for when, kind, name, state in events:
+            mark = (when.isoformat(timespec="minutes"), kind, name)
+            if mark not in seen:
+                seen.add(mark)
+                out.append({"at": when.isoformat(), "kind": kind, "name": name, "state": state})
+        return out[:8]
+
     def status(self) -> dict[str, Any]:
         """For the panel's Alarm page."""
         panel = self.panel()
@@ -577,6 +660,7 @@ class AlarmAutomation:
                 for p in self.persons()
             ],
             "rearm_pending": self._rearm_timer is not None,
+            "upcoming": self.upcoming(),
             "log": list(self.log)[:15],
             "defaults": state_defaults(self.hass.config.language),
         }

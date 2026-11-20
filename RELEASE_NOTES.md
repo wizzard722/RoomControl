@@ -4,6 +4,15 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Alarm: what the alarm will do
+The Alarm page's Overview now shows **What the alarm will do** above *What the alarm did*: the next 24 hours, soonest first.
+- Time slots starting, with the state they set.
+- Time slots ending, with the state that follows: Disarmed when someone is home, otherwise the *everyone away* state. A slot that ends where the next one starts only shows the start.
+- Arming after everyone left, while the delay runs.
+- Going back to the time slot's state after someone came home.
+
+Slots marked *only when nobody is home* are left out while someone is home.
+
 ### Alarm: default values per state
 - Every alarm state now starts with default values, which you can change. The texts are in Dutch or English, after Home Assistant's language.
 

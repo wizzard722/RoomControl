@@ -94,7 +94,7 @@ A dedicated **Alarm** page in the panel:
   - speak and sound a siren on the speakers of chosen rooms, repeated while the state lasts;
   - stop media;
   - send a message.
-- **What the alarm did**, with the reason for each change.
+- **What the alarm will do** in the next 24 hours, and **what the alarm did**, with the reason for each change.
 
 ### Safety: locks, alarm, smoke and doorbell
 
