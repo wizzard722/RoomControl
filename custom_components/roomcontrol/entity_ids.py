@@ -58,7 +58,13 @@ def _suggest(hass: HomeAssistant, domain: str, entity: Entity) -> None:
     if entity.entity_id:
         return  # the entity chose its own ID (bundle lights)
     entity.hass = hass  # names may read the room config
-    name = entity.name
+    try:
+        name = entity.name
+    except Exception:  # noqa: BLE001
+        # A translated name (translation_key) can't be read before the entity
+        # is added to its platform (newer Home Assistant raises): use the
+        # entity's own ID name instead.
+        name = getattr(entity, "_rc_id_name", None) or getattr(entity, "_attr_translation_key", None)
     if name is UNDEFINED:
         name = None
     parts = [_device_name(hass, entity)] if entity.has_entity_name else []

@@ -4,6 +4,9 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Fixed: "Auto laden" and "Curtains status" sensors were not created
+- With recent Home Assistant versions the **Auto laden** (Car charging) sensor on the General device and the rooms' **Curtains status** sensors were not created: reading their translated name while choosing the entity ID failed. RoomControl now uses a fixed name for the ID, e.g. `sensor.roomcontrol_generiek_auto_laden` and `sensor.roomcontrol_<room>_gordijnen_status`; the names shown still follow Home Assistant's language.
+
 ### Power per phase next to each floor
 - With *Group rooms by floor* on and the **Energy** card set up, each floor heading on the Rooms page now shows the power of that floor per phase, separately: **L1 · L2 · L3** (with 1 phase: L1 only).
 - It is the sum of the rooms on that floor that are on that phase (their light bundles, switches and meters). A phase without any room on that floor shows "—"; rooms without a phase don't count.

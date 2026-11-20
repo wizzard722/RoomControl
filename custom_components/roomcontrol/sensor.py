@@ -69,6 +69,7 @@ class CoversStateSensor(SensorEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_translation_key = "covers_state"
+    _rc_id_name = "Gordijnen status"  # for the entity ID (entity_ids.py)
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = [OPEN, CLOSED, PARTLY]
 
@@ -124,6 +125,7 @@ class EvChargingSensor(SensorEntity):
     _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_translation_key = "ev_charging"  # "Auto laden" / "Car charging", after HA's language
+    _rc_id_name = "Auto laden"  # for the entity ID (entity_ids.py)
     _attr_unique_id = f"{DOMAIN}_ev_charging"
     _attr_device_class = SensorDeviceClass.POWER
     _attr_state_class = SensorStateClass.MEASUREMENT
