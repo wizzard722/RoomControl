@@ -1,5 +1,25 @@
 # Release notes
 
+## 1.18.0b17 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Home Assistant's own picker everywhere
+- Every field where you choose an entity now uses Home Assistant's own entity picker, which searches and sorts by itself and shows the name, entity ID, area and device:
+  - General settings: alarm panel, sun entity, the text-to-speech service and the smoke action's switches.
+  - Alarm page: every entity field (e.g. distance sensors, locks, the "no messages" switch) and the lamps per state.
+  - Room settings: doorbell, camera and doorbell screen, the alarm clock's media player.
+  - Layout: the door sensor of a link.
+  - Energy, EV charger and room Power, as before.
+- Choices that are not entities (a state, a phase, a room, a person's device) stay plain lists.
+- If Home Assistant's picker isn't available in your browser, the old list is shown instead.
+
+### Solar output per phase
+- With solar panels, each phase in the **Energy** card now has its own **Solar output** field, next to Consumed and Returned. RoomControl adds the output of each phase to that phase.
+- A single solar sensor chosen before (with its phase) keeps counting until you choose a sensor per phase; the card says so.
+
+---
+
 ## 1.18.0b16 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).

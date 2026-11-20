@@ -5,7 +5,8 @@ General setting "energy":
  "phase_sensors": {"L1": sensor, "L2": sensor, "L3": sensor},  # consumed power per phase (W or kW)
  "has_solar": bool, "has_battery": bool,
  "produced_sensors": {"L1": sensor, ...},  # with solar or battery: power returned per phase
- "solar_sensor": sensor, "solar_phase": "all" | "L1" | "L2" | "L3",      # optional
+ "solar_sensors": {"L1": sensor, ...},  # optional: solar output per phase
+ (older: "solar_sensor" + "solar_phase": "all" | "L1" | "L2" | "L3")
  "battery_sensor": sensor (+ discharging, − charging), "battery_phase": "all" | "L1"…,  # optional
  "charger_room": area id, "charger_phase": "L1" | "L2" | "L3",
  "charge_from_kw": 1.2,          # above this the car counts as charging
@@ -213,7 +214,11 @@ class Energy:
                 return {"L1": w}
             return {p: w / 3 for p in names} if where == "all" else {where: w}
 
-        solar = share("solar_sensor", "solar_phase", bool(cfg.get("has_solar")))
+        per_phase_solar = {p: x for p, x in (cfg.get("solar_sensors") or {}).items() if x and p in names}
+        if cfg.get("has_solar") and per_phase_solar:
+            solar = {p: w for p, x in per_phase_solar.items() if (w := _watts(hass, x)) is not None}
+        else:
+            solar = share("solar_sensor", "solar_phase", bool(cfg.get("has_solar")))
         battery = share("battery_sensor", "battery_phase", bool(cfg.get("has_battery")))
         detail: dict[str, Any] = {}
         phases: dict[str, float | None] = {}

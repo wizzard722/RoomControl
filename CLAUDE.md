@@ -52,7 +52,12 @@ The user approved this layout; new screens and settings follow it.
 6. **Overview pages**: status chips, quick-control tiles (tap = switch),
    action buttons (Dim · Overnemen · Alles uit), a visual (floor plan),
    then "Straks" (upcoming) and "Wat er gebeurde" (recent, with reason).
-7. **Look**: Home Assistant CSS variables with fallbacks, light cards on a
+7. **Entity pickers**: always Home Assistant's own `ha-entity-picker`
+   (helper `Hpk(hass, {value, include, label, onChange, add})`, which
+   falls back to a plain `<select>` only when the element isn't loaded).
+   Plain selects stay only for choices that are not entities (a state,
+   a phase, a room, a notify service).
+8. **Look**: Home Assistant CSS variables with fallbacks, light cards on a
    grey ground, 12 px radii, amber for "on", blue for motion/selection, red
    for alarm. Touch targets ≥ 44 px, real `<button>`s with
    `aria-expanded`/`aria-pressed`, labels on inputs.
