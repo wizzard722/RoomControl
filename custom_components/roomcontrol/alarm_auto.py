@@ -329,8 +329,15 @@ class AlarmAutomation:
             return
         cfg = self.cfg()
         if entity_id == self.panel():
-            if old is None or old.state != new.state:
-                self._on_alarm(new.state, old.state if old else None)
+            if old is None or old.state in ("unavailable", "unknown"):
+                # Home Assistant starting, or the alarm integration (re)loading:
+                # the alarm shows the state it already had, not a change, so
+                # no message, speech or lamps.
+                if new.state not in ("unavailable", "unknown"):
+                    self._log(f"state:{new.state}", "restored")
+                return
+            if old.state != new.state:
+                self._on_alarm(new.state, old.state)
             return
         if entity_id in self.persons():
             was_home = old is not None and old.state == "home"
