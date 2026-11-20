@@ -34,6 +34,10 @@ When you rename an area in Home Assistant, RoomControl now follows at once:
 ### Fixed: pages open at the top
 - Opening a room from the dashboard (or any other page of the panel) kept the scroll position of the page before, so the room opened halfway down. Every page now opens at the top.
 
+### Motion sensors: clearer text for their time slots
+- The line under each motion sensor read "Switches lights on", as if the sensor were only used for light. It now reads "Time slots: always" / "Time slots: every day · 07:00–23:00" / "Time slots: 2 set".
+- The explanation now says what the time slots do: they only decide when motion on the sensor may switch the lights on. For everything else the sensor always counts (lights that are on stay on, the fan and the other motion options use it as usual).
+
 ---
 
 ## 1.18.0b9 (beta)
