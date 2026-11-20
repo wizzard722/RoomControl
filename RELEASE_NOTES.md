@@ -4,6 +4,11 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Room power: power sensors matched automatically
+- When a lamp or switch has a **power sensor (in W) on the same device**, RoomControl now uses it on its own: the light bundle or switch is set to *Sensor* and the field shows that sensor, with "Matched automatically (same device) – change it if it isn't right".
+- You can still change the field, clear it (then that lamp or switch has no sensor) or choose *Fixed*. Your choice wins over the automatic match.
+- The Power card only offers sensors in **W**.
+
 ### Room power: a sensor per lamp of a light bundle
 - In a room's **Power** card, a light bundle set to *Sensor* now gets **one power sensor field per lamp** of the bundle, named after the lamp. RoomControl adds them up.
 - Each field offers the power sensors of the room, with the lamp's own sensors (on the lamp's device) first.

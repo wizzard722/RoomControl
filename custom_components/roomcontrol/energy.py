@@ -31,6 +31,7 @@ from typing import Any
 
 from homeassistant.const import STATE_ON
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
@@ -67,8 +68,30 @@ def _num(value: Any, default: float) -> float:
 
 
 @callback
+def auto_power_sensor(hass: HomeAssistant, entity_id: str) -> str | None:
+    """The power sensor (in W) on the same device as this lamp or switch, if any."""
+    ent_reg = er.async_get(hass)
+    entry = ent_reg.async_get(entity_id)
+    if entry is None or not entry.device_id:
+        return None
+    found = []
+    for other in er.async_entries_for_device(ent_reg, entry.device_id):
+        if other.domain != "sensor" or other.disabled_by:
+            continue
+        st = hass.states.get(other.entity_id)
+        unit = str((st.attributes.get("unit_of_measurement") if st else None) or other.unit_of_measurement or "").lower()
+        if unit == "w":
+            found.append(other.entity_id)
+    return sorted(found)[0] if found else None
+
+
+@callback
 def room_parts(hass: HomeAssistant, room: dict[str, Any]) -> list[dict[str, Any]]:
-    """Power of each light bundle and switch of the room: [{key, name, watts, source}]."""
+    """Power of each light bundle and switch of the room: [{key, name, watts, source}].
+
+    A part without a choice of its own uses the power sensor on the same
+    device as its lamp / switch (matched automatically). A chosen sensor
+    wins; "none" means: no sensor for this lamp / switch."""
     from .room_switches import room_switches  # here: avoids an import cycle
 
     power = room.get("power") or {}
@@ -77,12 +100,24 @@ def room_parts(hass: HomeAssistant, room: dict[str, Any]) -> list[dict[str, Any]
         key = f"bundle:{group.get('id') or index}"
         conf = power.get(key) or {}
         lamps = [e for e in group.get("lights", []) or [] if e]
-        per_lamp = {l: x for l, x in (conf.get("sensors") or {}).items() if x and l in lamps}
+        fixed = "watts" in conf and conf.get("mode") != "sensor"
+        chosen = conf.get("sensors") or {}
+        per_lamp: dict[str, str] = {}
+        auto = False
+        if not fixed and not conf.get("sensor"):
+            for lamp in lamps:
+                pick = chosen.get(lamp)
+                if pick == "none":
+                    continue
+                if not pick and (pick := auto_power_sensor(hass, lamp)):
+                    auto = True
+                if pick:
+                    per_lamp[lamp] = pick
         if per_lamp:
             # One power sensor per lamp of the bundle: their sum.
             values = [w for w in (_watts(hass, x) for x in per_lamp.values()) if w is not None]
             watts, source = (sum(values) if values else None), "sensor"
-        elif conf.get("sensor"):
+        elif conf.get("sensor") and not fixed:
             watts, source = _watts(hass, conf["sensor"]), "sensor"
         else:
             on = [hass.states.get(e) for e in lamps]
@@ -90,19 +125,25 @@ def room_parts(hass: HomeAssistant, room: dict[str, Any]) -> list[dict[str, Any]
             level = (sum((s.attributes.get("brightness") or 255) for s in on) / (255 * len(on))) if on else 0
             watts, source = (_num(conf.get("watts"), 0) * level if on else 0.0), "watts"
         out.append({"key": key, "kind": "bundle", "name": (group.get("name") or "").strip() or f"#{index + 1}",
-                    "watts": watts, "source": source})
+                    "watts": watts, "source": source, "auto": auto, "sensors": per_lamp})
     for sw in room_switches(room):
         key = f"switch:{sw['entity_id']}"
         conf = power.get(key) or {}
-        if conf.get("sensor"):
-            watts, source = _watts(hass, conf["sensor"]), "sensor"
+        fixed = "watts" in conf and conf.get("mode") != "sensor"
+        sensor = conf.get("sensor")
+        auto = False
+        if not fixed and not sensor:
+            sensor = auto_power_sensor(hass, sw["entity_id"])
+            auto = bool(sensor)
+        if sensor and sensor != "none" and not fixed:
+            watts, source = _watts(hass, sensor), "sensor"
         else:
             st = hass.states.get(sw["entity_id"])
             watts, source = (_num(conf.get("watts"), 0) if st is not None and st.state == STATE_ON else 0.0), "watts"
         st = hass.states.get(sw["entity_id"])
         out.append({"key": key, "kind": "switch",
                     "name": (st.attributes.get("friendly_name") if st else None) or sw["entity_id"],
-                    "watts": watts, "source": source})
+                    "watts": watts, "source": source, "auto": auto})
     return out
 
 
