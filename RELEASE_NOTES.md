@@ -4,6 +4,18 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Alarm: one text per state, with separate options for speech and message
+Alarm → Per state is rearranged:
+- **One text per state**, at the top. It is spoken on the speakers and sent as a message; before, each state had a spoken text and a separate message text.
+- **This text goes to** shows where it goes: the rooms whose speakers speak it, the persons who get it on their device, and Home Assistant.
+- Below it, two cards side by side (stacked on phones):
+  - **Speech**, with an on/off switch: rooms, volume, volume afterwards and repeat.
+  - **Message**, with an on/off switch: to persons (which ones) and the notification in Home Assistant.
+- Then **Siren** and **Stop media**, each with its own switch.
+- The summary of each closed state shows the text and what is on, e.g. `"The alarm system has gone off." · speech ↻ 10 s · message`.
+- **Your settings carry over.** The spoken text becomes the text, or the message text when there was no spoken text. Speech and message are on when they had a text. A siren is on when it had a sound file.
+- The defaults now use one text per state. For *Alarm sounds* the message is now the spoken text ("The alarm system has gone off.").
+
 ### Presence: a person can have no device
 - Under Presence in the general settings, each person's device picker now has **No device**. That person then gets no messages on a phone (for example alarm messages); the notification in Home Assistant and spoken messages are not affected.
 - The first option now reads **Automatic: <device>** (the device of the person's Home Assistant app), or **Automatic (none found)**.

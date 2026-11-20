@@ -16,9 +16,11 @@ General setting "alarm" (panel → Alarm), with the house's alarm panel from
                                          # on until home_minutes have passed
  "notify": "notify.mobile_app_x", "notify_skip": entity (on → no messages),
  "code": "1234" (optional, for panels that need one),
- "states": {state: {            "speak": text, "speak_rooms": [area ids], "volume": %, "volume_after": %,
-            "repeat": s (0: once), "siren": url, "siren_rooms": [area ids],
-            "stop": bool, "stop_rooms": [area ids], "notify": text}}}
+ "states": {state: {"text": text (spoken and/or sent), "speak_on": bool, "notify_on": bool,
+            "speak_rooms": [area ids], "volume": %, "volume_after": %, "repeat": s (0: once),
+            "siren_on": bool, "siren": url, "siren_rooms": [area ids],
+            "stop": bool, "stop_rooms": [area ids], "notify_persons": [...], "notify_ha": bool}}}
+ (older: "speak" and "notify" texts per state, see resolve_state)
 Speakers are the media players set per room (room → Media); no rooms chosen
 means every room that has them. (Older: "players", "siren_players",
 "stop_media" lists of players are still used when no rooms are set.)
@@ -108,6 +110,27 @@ def state_defaults(language: str | None) -> dict[str, dict[str, Any]]:
         state: {**_DEFAULT_SOUND.get(state, {}), **texts.get(state, {})}
         for state in ("arming", "pending", "triggered", "disarmed", "armed_home", "armed_away", "armed_night", "armed_vacation")
     }
+
+
+def resolve_state(default: dict[str, Any], own: dict[str, Any]) -> dict[str, Any]:
+    """One text per state, spoken and/or sent as a message:
+    {"text", "speak_on", "notify_on", "siren_on", ...}. Older settings had a
+    spoken text ("speak") and a message text ("notify"): the spoken text
+    becomes the text (else the message text) and each channel is on when it
+    had a text. "speak"/"notify" in the result are what is actually spoken /
+    sent ("" = nothing), so the rest of the code reads those."""
+    speak = own["speak"] if "speak" in own else default.get("speak", "")
+    notify = own["notify"] if "notify" in own else default.get("notify", "")
+    text = own["text"] if "text" in own else (speak or notify or "")
+    out = {**default, **own, "text": text or ""}
+    out["speak_on"] = own["speak_on"] if isinstance(own.get("speak_on"), bool) else bool(speak)
+    out["notify_on"] = own["notify_on"] if isinstance(own.get("notify_on"), bool) else bool(notify)
+    siren = out.get("siren") or ""
+    out["siren_on"] = own["siren_on"] if isinstance(own.get("siren_on"), bool) else bool(siren)
+    out["speak"] = out["text"] if out["speak_on"] else ""
+    out["notify"] = out["text"] if out["notify_on"] else ""
+    out["siren"] = siren if out["siren_on"] else ""
+    return out
 
 
 def _num(value: Any, default: float) -> float:
@@ -532,9 +555,10 @@ class AlarmAutomation:
         return self.room_players(st.get(f"{kind}_rooms"))
 
     def state_cfg(self, state: str) -> dict[str, Any]:
-        """A state's settings: the defaults, with what the user set over them."""
+        """A state's settings: the defaults, with what the user set over them,
+        resolved to one text and on/off per channel (see resolve_state)."""
         own = (self.cfg().get("states") or {}).get(state) or {}
-        return {**state_defaults(self.hass.config.language).get(state, {}), **own}
+        return resolve_state(state_defaults(self.hass.config.language).get(state, {}), own)
 
     async def _run_state(self, state: str) -> None:
         st = self.state_cfg(state)
