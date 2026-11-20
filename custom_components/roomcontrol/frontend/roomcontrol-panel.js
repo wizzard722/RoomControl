@@ -6253,6 +6253,10 @@ _vacuumPerson(e){return(this.settings.vacuum_persons??this.settings.persons).inc
 
       `)}
 
+      ${this._grp(e,`switches`,`mdi:power-plug-outline`,`purple`,V(`grp.switches`,t),this._grpSum(e,`switches`),(e.switches??[]).length>0||this._swAvail(e).length>0,()=>F`
+      ${this._renderSwitches(e)}
+      `)}
+
       ${this._grp(e,`motion`,`mdi:motion-sensor`,`info`,V(`grp.motion`,t),this._grpSum(e,`motion`),!0,()=>F`
       <!-- Linked rooms section -->
       <div class="section ${this._infoOpen(`links`)?`show-info`:``}">
@@ -6419,10 +6423,6 @@ _vacuumPerson(e){return(this.settings.vacuum_persons??this.settings.persons).inc
       <!-- Media player section -->
       ${this._renderMedia(e)}
 
-      `)}
-
-      ${this._grp(e,`switches`,`mdi:power-plug-outline`,`purple`,V(`grp.switches`,t),this._grpSum(e,`switches`),(e.switches??[]).length>0||this._swAvail(e).length>0,()=>F`
-      ${this._renderSwitches(e)}
       `)}
 
       ${this._grp(e,`power`,`mdi:gauge`,`yellow`,V(`grp.power`,t),this._grpSum(e,`power`),Object.keys(this.settings?.energy?.phase_sensors??{}).length>0,()=>F`

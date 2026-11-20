@@ -39,6 +39,7 @@ New card **Switches** in a room's settings, for switches that are in that area i
   - **Smoke**: they go back on at *All safe*.
 - By default a new switch may go off, at All off, Nobody home and Smoke.
 - The closed card shows e.g. "3 switches · 1 may never go off".
+- The Switches card sits right under the Light card in the room settings.
 
 ### Fixed: lamps moved in Home Assistant are picked up
 A room's lamps are the ones added in the panel. When a lamp changed area in Home Assistant, RoomControl kept it in its old room. Now RoomControl follows Home Assistant:
