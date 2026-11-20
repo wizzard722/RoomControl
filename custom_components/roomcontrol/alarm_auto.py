@@ -22,8 +22,7 @@ General setting "alarm" (panel → Alarm), with the house's alarm panel from
  (older: "speak" and "notify" texts per state, see resolve_state)
 Speakers are the media players set per room (room → Media); no rooms chosen
 means every room that has them. (Older: "players" and "stop_media" lists
-of players are still used when no rooms are set. A siren per state, from an
-older version, is no longer played.)
+of players are still used when no rooms are set.)
 
 Slots, "everyone away" and the distance are judged when they change (a slot
 starting or ending, the last person leaving, the distance crossing the
@@ -78,9 +77,34 @@ SERVICE_FOR = {
 FAIL_AFTER = timedelta(minutes=5)
 
 # What each state does until the user changes it (texts in Dutch or English,
-# after Home Assistant's language). A value the user set, also an empty one,
-# replaces the default.
-_DEFAULT_TEXTS = {
+# after Home Assistant's language). Every state has a text; "speak_on" /
+# "notify_on" say whether it is spoken / sent by default. A value the user
+# set, also an empty one, replaces the default.
+_DEFAULT_STATES = {
+    "nl": {
+        "arming": ("Alarm Systeem wordt ingeschakeld.", True, False),
+        "pending": ("Alarm Systeem is geactiveerd.", True, True),
+        "triggered": ("Het Alarm Systeem is afgegaan.", True, True),
+        "disarmed": ("Alarm Systeem is uitgeschakeld.", False, False),
+        "armed_home": ("Alarm Systeem staat op Armed Home.", False, False),
+        "armed_away": ("Armed Away is ingeschakeld.", False, True),
+        "armed_night": ("Alarm Systeem staat op Armed Night.", False, False),
+        "armed_vacation": ("Alarm Systeem staat op Armed Vacation.", False, False),
+    },
+    "en": {
+        "arming": ("The alarm system is being armed.", True, False),
+        "pending": ("The alarm system has been activated.", True, True),
+        "triggered": ("The alarm system has gone off.", True, True),
+        "disarmed": ("The alarm system is disarmed.", False, False),
+        "armed_home": ("The alarm system is set to Armed Home.", False, False),
+        "armed_away": ("Armed Away is on.", False, True),
+        "armed_night": ("The alarm system is set to Armed Night.", False, False),
+        "armed_vacation": ("The alarm system is set to Armed Vacation.", False, False),
+    },
+}
+# Older versions: a spoken and a message text per state. Only used to carry
+# over a state the user changed then (resolve_state).
+_LEGACY_TEXTS = {
     "nl": {
         "arming": {"speak": "Alarm Systeem wordt ingeschakeld."},
         "pending": {"speak": "Alarm Systeem is geactiveerd.",
@@ -104,12 +128,14 @@ _DEFAULT_SOUND = {
 
 
 def state_defaults(language: str | None) -> dict[str, dict[str, Any]]:
-    """The default settings of every alarm state."""
-    texts = _DEFAULT_TEXTS["nl" if (language or "").lower().startswith("nl") else "en"]
-    return {
-        state: {**_DEFAULT_SOUND.get(state, {}), **texts.get(state, {})}
-        for state in ("arming", "pending", "triggered", "disarmed", "armed_home", "armed_away", "armed_night", "armed_vacation")
-    }
+    """The default settings of every alarm state: text, speak_on, notify_on,
+    the sound settings, and ("legacy") the texts of older versions."""
+    lang = "nl" if (language or "").lower().startswith("nl") else "en"
+    out = {}
+    for state, (text, speak_on, notify_on) in _DEFAULT_STATES[lang].items():
+        out[state] = {**_DEFAULT_SOUND.get(state, {}), "text": text, "speak_on": speak_on,
+                      "notify_on": notify_on, "legacy": _LEGACY_TEXTS[lang].get(state, {})}
+    return out
 
 
 def resolve_state(default: dict[str, Any], own: dict[str, Any]) -> dict[str, Any]:
@@ -119,12 +145,19 @@ def resolve_state(default: dict[str, Any], own: dict[str, Any]) -> dict[str, Any
     becomes the text (else the message text) and each channel is on when it
     had a text. "speak"/"notify" in the result are what is actually spoken /
     sent ("" = nothing), so the rest of the code reads those."""
-    speak = own["speak"] if "speak" in own else default.get("speak", "")
-    notify = own["notify"] if "notify" in own else default.get("notify", "")
-    text = own["text"] if "text" in own else (speak or notify or "")
-    out = {**default, **own, "text": text or ""}
-    out["speak_on"] = own["speak_on"] if isinstance(own.get("speak_on"), bool) else bool(speak)
-    out["notify_on"] = own["notify_on"] if isinstance(own.get("notify_on"), bool) else bool(notify)
+    legacy = default.get("legacy") or {}
+    if "text" not in own and ("speak" in own or "notify" in own):
+        # Changed in an older version: carry its spoken / message text over.
+        speak = own.get("speak", legacy.get("speak", "")) or ""
+        notify = own.get("notify", legacy.get("notify", "")) or ""
+        text, speak_on, notify_on = speak or notify, bool(speak), bool(notify)
+    else:
+        text = own.get("text", default.get("text", "")) or ""
+        speak_on, notify_on = bool(default.get("speak_on")), bool(default.get("notify_on"))
+    out = {k: v for k, v in {**default, **own}.items() if k != "legacy"}
+    out["text"] = text
+    out["speak_on"] = own["speak_on"] if isinstance(own.get("speak_on"), bool) else speak_on
+    out["notify_on"] = own["notify_on"] if isinstance(own.get("notify_on"), bool) else notify_on
     out["speak"] = out["text"] if out["speak_on"] else ""
     out["notify"] = out["text"] if out["notify_on"] else ""
     return out

@@ -4,10 +4,11 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
-### Alarm: siren removed
-- The **Siren** option is gone from Alarm → Per state. RoomControl no longer plays a sound file when the alarm changes state; per state it speaks the text and/or sends it as a message, and can stop media.
-- A siren set in an earlier version is no longer played. Volume and repeat now only apply to the spoken text.
-- Use your alarm panel or an automation of your own for a siren.
+### Alarm: a default text for every state
+- Every state on Alarm → Per state now has a default text, also *Disarmed*, *Armed Home*, *Armed Night* and *Armed Vacation* (e.g. "The alarm system is disarmed."). You can change each one.
+- What is on stays as before: *Arming* is spoken; *Sensor tripped* and *Alarm sounds* are spoken and sent as a message; *Armed Away* is sent as a message. For the other states speech and message are off until you switch them on.
+- A closed state shows its text, also when speech and message are off ("speech and message off").
+- Alarm → Per state now has **Text**, **Speech**, **Message** and **Stop media**. Volume and repeat apply to the spoken text.
 
 ---
 
