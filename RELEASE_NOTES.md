@@ -1,5 +1,15 @@
 # Release notes
 
+## 1.18.0b12 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Presence: a person can have no device
+- Under Presence in the general settings, each person's device picker now has **No device**. That person then gets no messages on a phone (for example alarm messages); the notification in Home Assistant and spoken messages are not affected.
+- The first option now reads **Automatic: <device>** (the device of the person's Home Assistant app), or **Automatic (none found)**.
+
+---
+
 ## 1.18.0b11 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).

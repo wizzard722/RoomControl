@@ -1,7 +1,7 @@
 """Messages to persons: each person's device (e.g. a phone).
 
-General setting "person_notify": {person entity: "notify.<service>"}. A person
-without a choice uses the Home Assistant app on their own device: the device
+General setting "person_notify": {person entity: "notify.<service>" | "none"}.
+"none": the person gets no messages on a device. A person without a choice uses the Home Assistant app on their own device: the device
 of one of the person's device trackers, whose app registered the notify
 service mobile_app_<device name>.
 """
@@ -37,6 +37,8 @@ def auto_notify_service(hass: HomeAssistant, person: str) -> str | None:
 def person_notify_service(hass: HomeAssistant, person: str) -> str | None:
     """The notify service that reaches this person (chosen, else automatic)."""
     chosen = (hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_PERSON_NOTIFY) or {}).get(person)
+    if chosen == "none":
+        return None  # chosen: no device for this person
     if isinstance(chosen, str) and chosen.startswith("notify."):
         return chosen
     return auto_notify_service(hass, person)
