@@ -45,7 +45,10 @@ from homeassistant.helpers.event import (
 )
 from homeassistant.util import dt as dt_util
 
+from homeassistant.components import persistent_notification
+
 from .announce import announce_tts
+from .person_notify import person_notify_service
 from .const import ALARM_TRANSITIONAL, CONF_MEDIA_PLAYERS, DOMAIN, SETTING_ALARM_ENTITY, SIGNAL_CONFIG_UPDATED
 from .rooms import managed_areas
 from .slots import mode_slots, slot_part
@@ -466,7 +469,7 @@ class AlarmAutomation:
         if stop := self._players(st, "stop"):
             await self._call("media_player", "media_stop", {ATTR_ENTITY_ID: stop})
         if st.get("notify"):
-            self._notify(st["notify"])
+            self._notify(st["notify"], st)
         speak, players = st.get("speak"), self._players(st, "speak")
         siren, siren_players = st.get("siren"), self._players(st, "siren")
         if not (speak and players) and not (siren and siren_players):
@@ -509,15 +512,38 @@ class AlarmAutomation:
             _LOGGER.warning("Alarm: %s.%s failed: %s", domain, service, err)
 
     @callback
-    def _notify(self, message: str) -> None:
-        cfg = self.cfg()
-        service = cfg.get("notify") or ""
+    def _notify(self, message: str, st: dict[str, Any] | None = None) -> None:
+        """A message to the chosen persons' devices and/or as a notification in
+        Home Assistant. Per state ("notify_persons", "notify_ha") or else the
+        alarm's own choice ("msg_persons": [] = every person who counts,
+        "msg_ha": default on). Nothing to persons while "notify_skip" is on."""
+        cfg, st = self.cfg(), st or {}
+        persons = st.get("notify_persons")
+        if not isinstance(persons, list):
+            persons = cfg.get("msg_persons") if isinstance(cfg.get("msg_persons"), list) else None
+        persons = [p for p in persons or [] if p] or self.persons()
+        off = st.get("notify_persons_off") if isinstance(st.get("notify_persons_off"), bool) else cfg.get("msg_persons_off", False)
+        if off:
+            persons = []
+        ha = st.get("notify_ha") if isinstance(st.get("notify_ha"), bool) else cfg.get("msg_ha", True)
         skip = cfg.get("notify_skip")
-        if not service.startswith("notify.") or (skip and (st := self.hass.states.get(skip)) is not None and st.state == "on"):
+        skipped = bool(skip and (s := self.hass.states.get(skip)) is not None and s.state == "on")
+        services: list[str] = []
+        if not skipped:
+            for person in persons:
+                if (service := person_notify_service(self.hass, person)) and service not in services:
+                    services.append(service)
+            if (legacy := cfg.get("notify") or "").startswith("notify.") and legacy not in services:
+                services.append(legacy)  # older: one service for every message
+        if not services and not ha:
             return
         self._log("notify", message)
-        self.hass.async_create_task(self._call(
-            "notify", service.split(".", 1)[1], {"title": "Alarm Systeem", "message": message}))
+        for service in services:
+            self.hass.async_create_task(self._call(
+                "notify", service.split(".", 1)[1], {"title": "Alarm Systeem", "message": message}))
+        if ha:
+            persistent_notification.async_create(
+                self.hass, message, title="Alarm Systeem", notification_id=f"{DOMAIN}_alarm")
 
     @callback
     def _log(self, what: str, detail: str = "") -> None:

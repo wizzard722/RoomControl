@@ -23,6 +23,14 @@ When you rename an area in Home Assistant, RoomControl now follows at once:
 - **Entity IDs** made from the old name get the new one, e.g. `light.roomcontrol_slaapkamer_plafond` → `light.roomcontrol_grote_slaapkamer_plafond`. An ID you chose yourself is left alone, and so is one whose new ID is already taken.
 - The room's **device** and the entities' **names** update straight away.
 
+### Alarm: messages to persons and as a notification in Home Assistant
+- **A device per person**: under Presence in the general settings each person gets a device for messages (e.g. a phone, `notify.mobile_app_…`). Without a choice, RoomControl uses the device of the person's Home Assistant app, found through the person's device tracker.
+- **Alarm page → Automatic → Messages**: alarm messages go to **persons** (no one chosen: everyone who counts) and/or as a **notification in Home Assistant**. Each person's device is shown next to their name.
+- **Per state** (Message card) you can choose otherwise: to persons or not, which persons, and a notification in Home Assistant or not.
+- Spoken messages on the rooms' media players stay in the Speakers card.
+- A notify service chosen before keeps working, shown as "Also to (chosen before)" with a button to remove it.
+- On the Alarm page each state now shows its action buttons under both cards.
+
 ---
 
 ## 1.18.0b9 (beta)
