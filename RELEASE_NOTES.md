@@ -1,5 +1,14 @@
 # Release notes
 
+## 1.18.0b15 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Switches card under Light
+- In a room's settings the **Switches** card now sits right under the **Light** card, so the lamps and devices of a room are together.
+
+---
+
 ## 1.18.0b14 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
@@ -39,7 +48,6 @@ New card **Switches** in a room's settings, for switches that are in that area i
   - **Smoke**: they go back on at *All safe*.
 - By default a new switch may go off, at All off, Nobody home and Smoke.
 - The closed card shows e.g. "3 switches · 1 may never go off".
-- The Switches card sits right under the Light card in the room settings.
 
 ### Fixed: lamps moved in Home Assistant are picked up
 A room's lamps are the ones added in the panel. When a lamp changed area in Home Assistant, RoomControl kept it in its old room. Now RoomControl follows Home Assistant:
