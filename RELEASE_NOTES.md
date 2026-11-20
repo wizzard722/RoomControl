@@ -50,6 +50,8 @@ When you rename an area in Home Assistant, RoomControl now follows at once:
 - *Change nothing* still leaves the alarm as it is.
 - Choices on the Alarm page now use the full width, so long options are readable on phones.
 
+---
+
 ## 1.18.0b10 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
