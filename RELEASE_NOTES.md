@@ -1,6 +1,6 @@
 # Release notes
 
-## 1.18.0b10 (beta)
+## 1.18.0b11 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
@@ -10,7 +10,7 @@ New option in **Alarm → Automatic → Someone comes home**: *When it is dark: 
 - After the **wait time** (default 10 minutes, configurable) the lamps go off again, unless there is motion in the room. In a time slot the alarm then goes back to the slot's state. Without a time slot someone is home, so the alarm stays disarmed.
 - The wait time is the setting that was called *In a time slot: back to its state after*. It now also applies to the lamps.
 - *What the alarm will do* shows when the lamps go off. *What the alarm did* shows when they went on and off.
-- **Countdown on the Alarm page.** While the wait time runs, the Overview shows who came home, a live countdown and a progress bar. It also says what follows: lamps off and/or the alarm back to the slot's state.
+- **Countdown.** While the wait time runs, the Alarm page's Overview and the main Rooms page show who came home, a live countdown and a progress bar. They also say what follows: lamps off and/or the alarm back to the slot's state. Tap the card on the Rooms page to open the Alarm page.
 - A person's **Home later** button still goes off as soon as that person comes home.
 - Fixed in passing: when a person with a **Home later** button on comes home in the dark, the lamps no longer flicker off and on.
 
@@ -22,19 +22,6 @@ The Alarm page's Overview now shows **What the alarm will do** above *What the a
 - Going back to the time slot's state after someone came home.
 
 Slots marked *only when nobody is home* are left out while someone is home.
-
-### Alarm: default values per state
-- Every alarm state now starts with default values, which you can change. The texts are in Dutch or English, after Home Assistant's language.
-
-| State | Spoken text | Volume / after | Repeat | Message |
-| --- | --- | --- | --- | --- |
-| Arming | "The alarm system is being armed." | 30% / 20% | once | – |
-| Sensor tripped | "The alarm system has been activated." | 40% / 20% | every 10 s | "The alarm system detected that a sensor went off." |
-| Alarm sounds | "The alarm system has gone off." | 40% / 20% | every 10 s | "The alarm is going off!" |
-| Armed Away | – | – | – | "Armed Away is on." |
-
-- What you change is kept, an emptied field too. **Restore defaults** puts a state back to its defaults.
-- When the alarm stops sounding (from *Sensor tripped* or *Alarm sounds* to another state), a siren that is still playing is stopped.
 
 ### Fixed: renamed rooms are picked up right away
 When you rename an area in Home Assistant, RoomControl now follows at once:
@@ -62,6 +49,23 @@ When you rename an area in Home Assistant, RoomControl now follows at once:
 - **Nobody home** (shouldn't happen, as *Everyone away* acts first): the alarm goes to the state of *Everyone away* (closer / further than the limit) instead of staying in the slot's state.
 - *Change nothing* still leaves the alarm as it is.
 - Choices on the Alarm page now use the full width, so long options are readable on phones.
+
+## 1.18.0b10 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Alarm: default values per state
+- Every alarm state now starts with default values, which you can change. The texts are in Dutch or English, after Home Assistant's language.
+
+| State | Spoken text | Volume / after | Repeat | Message |
+| --- | --- | --- | --- | --- |
+| Arming | "The alarm system is being armed." | 30% / 20% | once | – |
+| Sensor tripped | "The alarm system has been activated." | 40% / 20% | every 10 s | "The alarm system detected that a sensor went off." |
+| Alarm sounds | "The alarm system has gone off." | 40% / 20% | every 10 s | "The alarm is going off!" |
+| Armed Away | – | – | – | "Armed Away is on." |
+
+- What you change is kept, an emptied field too. **Restore defaults** puts a state back to its defaults.
+- When the alarm stops sounding (from *Sensor tripped* or *Alarm sounds* to another state), a siren that is still playing is stopped.
 
 ---
 
