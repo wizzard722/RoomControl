@@ -12,6 +12,9 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### EV charger: "charging cable" instead of "plug"
 - The optional sensor *Plug* is now called **Charging cable connected**: the sensor (e.g. from Audi Connect) that tells whether the charging cable is in the car. The EV charger page says *Charging cable in the car* / *Charging cable not connected*, and the attribute of the *Car charging* sensor is now *Charging cable connected*.
 
+### Width of the Rooms page
+- New setting under General settings › Display: **Width of the Rooms page** — *Normal* (as before, up to 900 px: 3 room cards side by side), *Wide* (up to 1400 px) or *Full width*. Wider pages fit more room cards next to each other; on a phone nothing changes.
+
 ---
 
 ## 1.18.0b25 (beta)
