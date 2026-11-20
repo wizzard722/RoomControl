@@ -14,6 +14,7 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 
 ### Width of the Rooms page
 - The Rooms page now uses the whole width of the screen: as many room cards sit side by side as fit (before: at most 900 px, so 3 cards). E.g. 3 cards at 800 px, 4 at 1280 px, 7 at 1920 px; on a phone still one per row.
+- New setting under General settings › Display: **Room cards per row** — *Automatic* (default: as many as fit) or a maximum of 2 to 8. With a maximum the cards grow to fill the row; on a narrow screen there are fewer per row.
 
 ---
 
