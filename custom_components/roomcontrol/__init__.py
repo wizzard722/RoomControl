@@ -29,7 +29,7 @@ from .control import FullControl, rc_call
 from .covers_known import CoverMemory
 from .memory import Memory
 from .lamp_sync import LampSync
-from .room_switches import RoomSwitches
+from .room_switches import RoomSwitches, never_off
 from .energy import Energy
 from .alarm_auto import AlarmAutomation
 from .entity_ids import async_prefix_entity_ids
@@ -439,6 +439,7 @@ PANEL_SERVICES = {
     "light": ("turn_on", "turn_off"),
     "cover": ("open_cover", "close_cover", "stop_cover", "set_cover_position"),
     "lock": ("lock", "unlock", "open"),
+    "switch": ("turn_on", "turn_off"),  # a room's switches (room → Switches)
 }
 
 
@@ -468,12 +469,16 @@ async def ws_call_service(
         known.update(l.get("entity_id") for l in room.get("lights", []) or [] if isinstance(l, dict))
         known.update(c for c in room.get("covers", []) or [] if c)
         known.update(l.get("entity_id") for l in room.get("locks", []) or [] if isinstance(l, dict))
+        known.update(sw.get("entity_id") for sw in room.get("switches", []) or [] if isinstance(sw, dict))
     own = {
         s.entity_id for s in hass.states.async_all(domain)
         if s.attributes.get("roomcontrol_area") is not None
     }
     if not ids or any(e not in known and e not in own for e in ids):
-        connection.send_error(msg["id"], "not_found", "Not a lamp, curtain or lock of a RoomControl room")
+        connection.send_error(msg["id"], "not_found", "Not a lamp, curtain, lock or switch of a RoomControl room")
+        return
+    if domain == "switch" and service == "turn_off" and (blocked := never_off(hass) & set(ids)):
+        connection.send_error(msg["id"], "not_allowed", f"{', '.join(sorted(blocked))} may never go off")
         return
     data = {k: v for k, v in msg["data"].items() if k != "entity_id"}
     if domain == "lock":

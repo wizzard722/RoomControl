@@ -1,5 +1,15 @@
 # Release notes
 
+## 1.18.0b21 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Fixed: device tiles did nothing when tapped
+- Tapping a switch tile under **Devices** on a room's Overview did nothing: RoomControl's backend only accepted lamps, curtains and locks from the panel. It now also switches a room's switches on and off.
+- A switch set to *May go off: Never* can still be switched on from its tile, but never off; RoomControl refuses that also when it's asked directly.
+
+---
+
 ## 1.18.0b20 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
