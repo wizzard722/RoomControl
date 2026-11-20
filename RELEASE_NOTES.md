@@ -17,6 +17,13 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - Its name comes from its sensors (the shared start of their names, without words like power/energy/vermogen/energie, else the device name), e.g. **Combi-oven**. You can rename it in the Switches card; *Hide* leaves it out.
 - A fictitious device can't be switched; it counts as on from 2 W.
 
+### Current power on the Overview tiles
+- With the **Energy** card set up, a room's **Overview** shows the current power as a badge on each light bundle and switch tile that is on (amber), and on each meter-only device (grey when idle).
+- The **Light bundles** and **Devices** headings show the total of their tiles on the right.
+
+### EV charger page
+- The *Power per room now* list was removed from the EV charger page.
+
 ### Power per phase next to each floor
 - With *Group rooms by floor* on and the **Energy** card set up, each floor heading on the Rooms page now shows the power of that floor per phase, separately: **L1 · L2 · L3** (with 1 phase: L1 only).
 - It is the sum of the rooms on that floor that are on that phase (their light bundles, switches and meters). A phase without any room on that floor shows "—"; rooms without a phase don't count.
