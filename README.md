@@ -207,7 +207,7 @@ Per room, on the room's device:
 | `button` | Alarm clock snooze / stop |
 | `lock` | The room's locks |
 
-On the **General** device: All dim, Vacation, Home later (per person), Announce (switch and notify entity) and All locked.
+On the **General** device: All dim, Vacation, Home later (per person), Announce (switch and notify entity), All locked and the **Auto laden** sensor (the car's charging power, with its charging details as attributes).
 
 ---
 

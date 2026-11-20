@@ -1,5 +1,17 @@
 # Release notes
 
+## 1.18.0b19 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### "Auto laden" sensor
+- New sensor **Auto laden** on the **General** device (Settings → Devices → RoomControl → General → Sensors), e.g. `sensor.roomcontrol_auto_laden`.
+- Its state is the car's charging power in **kW** (0 when it isn't charging), so it can go on dashboards, in graphs and in the Energy dashboard's power views.
+- Attributes: `charging` (true/false), `car` (its name), `battery_level` (%), `battery_kwh`, `battery_size_kwh`, `full_at`, `charging_since`, `charged_kwh`, `estimate_kw`, `from_car`, `plugged_in`, `room` and `phase`. Use `charging` in automations, e.g. to be told when the car starts or stops charging.
+- The icon shows a charging car while it charges. The sensor is unavailable until the EV charger is set up, and updates every 30 seconds.
+
+---
+
 ## 1.18.0b18 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).

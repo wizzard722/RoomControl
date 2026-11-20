@@ -35,6 +35,7 @@ from typing import Any
 from homeassistant.const import STATE_ON
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
@@ -42,6 +43,7 @@ from .const import CONF_GROUPS, DOMAIN
 from .rooms import managed_areas
 
 SETTING_ENERGY = "energy"
+SIGNAL_ENERGY = "roomcontrol_energy"  # sent after each check (every 30 s)
 PHASES = ("L1", "L2", "L3")
 CHARGING_STATES = {"charging", "on", "true", "laden", "bezig met laden"}
 
@@ -224,6 +226,7 @@ class Energy:
             self._last = now
         else:
             self.charging_since, self._last = None, None
+        async_dispatcher_send(self.hass, SIGNAL_ENERGY)
 
     def status(self) -> dict[str, Any]:
         """For the panel: per room its power and phase; per phase its power; the car."""
