@@ -1,11 +1,17 @@
 # Release notes
 
-## 1.18.0b24 (beta)
+## 1.18.0b25 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
 ### Fixed: "Alarm is off" message at every start of Home Assistant
 - When Home Assistant started (or the alarm integration reloaded), the alarm went from *unavailable* to its own state, and RoomControl treated that as a change: it sent the state's message (e.g. "Alarm Systeem is uitgeschakeld."), spoke it and switched that state's lamps. A state that comes back from *unavailable* or *unknown* is now only noted in the alarm's log ("after a restart: no messages").
+
+---
+
+## 1.18.0b24 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
 ### Charging: sun or grid
 - Each charging session now records which part came from your own **solar panels** (and home battery) and which part from the **grid**: while the house as a whole returns power, the car charges on its own power; otherwise the grid part is at most what the house takes from the grid.
