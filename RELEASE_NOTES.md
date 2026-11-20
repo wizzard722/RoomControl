@@ -7,6 +7,13 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### Switches card under Light
 - In a room's settings the **Switches** card now sits right under the **Light** card, so the lamps and devices of a room are together.
 
+### EV charger: solar panels and home battery
+- **Energy and EV charger** now asks whether you have **solar panels** and/or a **home battery**. Then each phase gets a second field: besides the power **consumed**, the power **returned** (e.g. from your smart meter).
+- Optionally choose the power of your solar panels (inverter) and of your home battery (positive while discharging), and the phase they are on, or *all phases* (spread evenly).
+- RoomControl uses: use on a phase = consumed − returned + solar panels + home battery. So the car's estimate stays right while the sun shines.
+- *How is this calculated?* on the charging card shows these steps.
+- The sensor fields are **searchable**: type part of a name to filter the list. The lists are **sorted by name**.
+
 ### Room settings open with every card closed
 - A room's settings no longer open with the Light card unfolded: every card starts closed, showing only its one-line summary. Opening another room also starts closed. A search still unfolds the matching cards.
 
