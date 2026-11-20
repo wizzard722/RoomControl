@@ -4,6 +4,12 @@
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
 
+### Alarm: lamps and WLED strips per state
+- Each state on Alarm → Per state has a **Lamps** card: add one or more lamps or WLED strips.
+- For a WLED strip you can choose a **preset** (optional). Without a preset the lamp just goes on.
+- When a state starts, its lamps go on, and a WLED strip with a preset switches to that preset. Lamps of the previous state that the new state doesn't use go off. So e.g. a strip at the front door shows *Armed Away* in one colour and *Armed Home* in another.
+- The closed state shows its lamps, e.g. "WLED strip front door (Armed Away)".
+
 ### Switches in a room
 New card **Switches** in a room's settings, for switches that are in that area in Home Assistant, such as an espresso machine, fridge, freezer or TV.
 - The card lists the area's switches that are not in the room yet; tap one to add it.

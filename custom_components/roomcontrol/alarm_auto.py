@@ -18,7 +18,10 @@ General setting "alarm" (panel → Alarm), with the house's alarm panel from
  "code": "1234" (optional, for panels that need one),
  "states": {state: {"text": text (spoken and/or sent), "speak_on": bool, "notify_on": bool,
             "speak_rooms": [area ids], "volume": %, "volume_after": %, "repeat": s (0: once),
-            "stop": bool, "stop_rooms": [area ids], "notify_persons": [...], "notify_ha": bool}}}
+            "stop": bool, "stop_rooms": [area ids], "notify_persons": [...], "notify_ha": bool,
+            "lamps": [{"entity_id": light, "preset": WLED preset name (optional)}]}}}
+ A state's lamps go on (a WLED strip with its preset) when the state starts;
+ lamps of the previous state that the new state does not use go off.
  (older: "speak" and "notify" texts per state, see resolve_state)
 Speakers are the media players set per room (room → Media); no rooms chosen
 means every room that has them. (Older: "players" and "stop_media" lists
@@ -39,6 +42,7 @@ from typing import Any
 
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.event import (
@@ -554,7 +558,7 @@ class AlarmAutomation:
             self._loop.cancel()
             self._loop = None
         # A background task: it may repeat for as long as the state lasts.
-        self._loop = self.hass.async_create_background_task(self._run_state(new), f"{DOMAIN}_alarm_{new}")
+        self._loop = self.hass.async_create_background_task(self._run_state(new, old), f"{DOMAIN}_alarm_{new}")
 
     def room_players(self, rooms: list[str] | None) -> list[str]:
         """The media players of these rooms (room → Media); none: every room's."""
@@ -585,7 +589,45 @@ class AlarmAutomation:
         own = (self.cfg().get("states") or {}).get(state) or {}
         return resolve_state(state_defaults(self.hass.config.language).get(state, {}), own)
 
-    async def _run_state(self, state: str) -> None:
+    @staticmethod
+    def state_lamps(st: dict[str, Any]) -> list[dict[str, Any]]:
+        """A state's lamps: [{"entity_id", "preset"}]."""
+        return [
+            {"entity_id": l["entity_id"], "preset": l.get("preset") or None}
+            for l in st.get("lamps") or []
+            if isinstance(l, dict) and str(l.get("entity_id", "")).startswith("light.")
+        ]
+
+    def preset_select(self, light: str) -> str | None:
+        """The preset select of a WLED light (on the same device), if any."""
+        ent_reg = er.async_get(self.hass)
+        entry = ent_reg.async_get(light)
+        if entry is None or not entry.device_id:
+            return None
+        for other in er.async_entries_for_device(ent_reg, entry.device_id):
+            if other.domain == "select" and (other.translation_key == "preset" or other.entity_id.endswith("_preset")):
+                return other.entity_id
+        return None
+
+    async def _run_lamps(self, state: str, old: str | None) -> None:
+        """This state's lamps on (with their preset); the previous state's
+        lamps that this state does not use, off."""
+        lamps = self.state_lamps(self.state_cfg(state))
+        mine = {l["entity_id"] for l in lamps}
+        if old and old != state:
+            before = [l["entity_id"] for l in self.state_lamps(self.state_cfg(old)) if l["entity_id"] not in mine]
+            if before:
+                await self._call("light", "turn_off", {ATTR_ENTITY_ID: before})
+        for lamp in lamps:
+            select = self.preset_select(lamp["entity_id"]) if lamp["preset"] else None
+            if select:
+                # A WLED preset switches the strip on by itself.
+                await self._call("select", "select_option", {ATTR_ENTITY_ID: select, "option": lamp["preset"]})
+            else:
+                await self._call("light", "turn_on", {ATTR_ENTITY_ID: lamp["entity_id"]})
+
+    async def _run_state(self, state: str, old: str | None = None) -> None:
+        await self._run_lamps(state, old)
         st = self.state_cfg(state)
         if stop := self._players(st, "stop"):
             await self._call("media_player", "media_stop", {ATTR_ENTITY_ID: stop})
