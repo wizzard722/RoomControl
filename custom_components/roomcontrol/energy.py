@@ -194,13 +194,42 @@ def room_parts(hass: HomeAssistant, room: dict[str, Any]) -> list[dict[str, Any]
     return out
 
 
+_MEASURE_WORDS = {
+    "energie", "energy", "vermogen", "power", "verbruik", "consumption", "spanning", "voltage",
+    "stroom", "current", "frequentie", "frequency", "totaal", "total", "huidig", "actueel",
+    "w", "kw", "kwh", "a", "v", "hz",
+}
+
+
+def meter_name(names: list[str], device: str | None = None) -> str:
+    """A name for a meter from its sensors' names: their common start, without
+    measurement words ("Combi-oven energie" + "Combi-oven vermogen" →
+    "Combi-oven"); else the device name; else the first sensor's name."""
+    words = [str(n).split() for n in names if n]
+    common: list[str] = []
+    if words:
+        for parts in zip(*words):
+            if all(p.lower() == parts[0].lower() for p in parts):
+                common.append(parts[0])
+            else:
+                break
+    while common and common[-1].lower().strip(":-()") in _MEASURE_WORDS:
+        common.pop()
+    if not common and words:
+        first = [w for w in words[0] if w.lower().strip(":-()") not in _MEASURE_WORDS]
+        common = first if len(words) == 1 else []
+    return " ".join(common) or device or (names[0] if names else "?")
+
+
 @callback
 def room_meters(hass: HomeAssistant, room: dict[str, Any], parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Dummy switches: power (W) and energy (kWh) sensors in the room's area
     that belong to none of its lamps or switches, one per device (e.g. the
     meter of a washing machine). They count in the room's power.
     Room option "power": {"meter:<device id or sensor>": {"hidden": true} |
-    {"sensor": W sensor | "none", "energy_sensor": kWh sensor | "none"}}."""
+    {"sensor": W sensor | "none", "energy_sensor": kWh sensor | "none",
+    "name": a name of the user's own}}. Without a name of its own the meter is
+    named after its sensors (meter_name)."""
     from .room_switches import room_switches  # here: avoids an import cycle
 
     area = room.get("area_id")
@@ -230,12 +259,14 @@ def room_meters(hass: HomeAssistant, room: dict[str, Any], parts: list[dict[str,
         if unit not in ("w", "kwh"):
             continue
         key = f"meter:{entry.device_id or entry.entity_id}"
-        group = groups.setdefault(key, {"w": [], "kwh": [], "name": (device.name_by_user or device.name) if device else None})
+        group = groups.setdefault(key, {"w": [], "kwh": [], "names": [],
+                                        "device": (device.name_by_user or device.name) if device else None})
         group["w" if unit == "w" else "kwh"].append(entry.entity_id)
-        if not group["name"]:
-            group["name"] = (st.attributes.get("friendly_name") if st else None) or entry.entity_id
+        group["names"].append((st.attributes.get("friendly_name") if st else None) or entry.original_name or entry.entity_id)
     power = room.get("power") or {}
     out = []
+    for group in groups.values():
+        group["name"] = meter_name(group["names"], group["device"])
     for key, group in sorted(groups.items(), key=lambda kv: str(kv[1]["name"]).lower()):
         conf = power.get(key) or {}
         w_sensor = conf.get("sensor") or (sorted(group["w"])[0] if group["w"] else None)
@@ -243,7 +274,8 @@ def room_meters(hass: HomeAssistant, room: dict[str, Any], parts: list[dict[str,
         w_sensor = None if w_sensor == "none" else w_sensor
         e_sensor = None if e_sensor == "none" else e_sensor
         kwh = _kwh(hass, e_sensor)
-        out.append({"key": key, "kind": "meter", "name": group["name"], "hidden": bool(conf.get("hidden")),
+        out.append({"key": key, "kind": "meter", "name": (conf.get("name") or "").strip() or group["name"],
+                    "found_name": group["name"], "hidden": bool(conf.get("hidden")),
                     "watts": None if conf.get("hidden") else (_watts(hass, w_sensor) if w_sensor else 0.0),
                     "source": "sensor", "auto": not conf.get("sensor"), "sensor": w_sensor,
                     "energy_sensor": e_sensor, "kwh": None if kwh is None else round(kwh, 3),

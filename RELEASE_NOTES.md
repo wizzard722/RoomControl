@@ -12,6 +12,11 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - *How is this calculated?* no longer shows the line "Battery level and charging state from the car".
 - The **general settings** and the **Alarm** page (Automatic and Per state) now open with every card closed, like a room's settings.
 
+### Devices with only a power meter (no switch)
+- Power sensors in a room that belong to no lamp and no switch (e.g. *Combi-oven energie* and *Combi-oven vermogen*) now show up as a **fictitious device** under the room's **Switches** card, and among the switches in the room's **Overview** (on/off and its current power).
+- Its name comes from its sensors (the shared start of their names, without words like power/energy/vermogen/energie, else the device name), e.g. **Combi-oven**. You can rename it in the Switches card; *Hide* leaves it out.
+- A fictitious device can't be switched; it counts as on from 2 W.
+
 ### Power per phase next to each floor
 - With *Group rooms by floor* on and the **Energy** card set up, each floor heading on the Rooms page now shows the power of that floor per phase, separately: **L1 · L2 · L3** (with 1 phase: L1 only).
 - It is the sum of the rooms on that floor that are on that phase (their light bundles, switches and meters). A phase without any room on that floor shows "—"; rooms without a phase don't count.
