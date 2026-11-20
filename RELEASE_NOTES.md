@@ -15,6 +15,10 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - Prices per 15 minutes (as Zonneplan and others now give) are fully supported: the cost and savings of charging, and the cheapest time to charge, follow each 15-minute block. The forecast now covers up to 36 hours ahead, whatever the block length.
 - The price chart groups 15-minute blocks into hours so it stays readable on a phone.
 
+### Solar forecast for the cheapest time to charge
+- The **Energy price** card has a new part **Solar forecast**: RoomControl lists the solar forecasts your Home Assistant has for the Energy dashboard (Forecast.Solar, Solcast, Open-Meteo Solar Forecast and alike) and you choose which to use; several are added up (e.g. two roof planes).
+- What the panels are expected to give above the house's own use (*House use while the sun shines*, default 400 W) counts as free charging, so the cheapest time to charge can be a sunny stretch instead of a cheap night. The card shows the expected share of sun in that time, and the price chart shows the expected sun per hour in yellow.
+
 ---
 
 ## 1.18.0b23 (beta)

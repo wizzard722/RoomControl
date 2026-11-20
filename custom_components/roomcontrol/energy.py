@@ -329,6 +329,9 @@ class Energy:
         self.sessions: list[dict[str, Any]] = []
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.ev_sessions")
         self.notifier = EvNotifier(hass)
+        self.sun: list[dict[str, Any]] = []  # solar forecast periods (solar_forecast.py)
+        self._sun_at: datetime | None = None
+        self._sun_for: tuple[str, ...] = ()
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
@@ -407,8 +410,19 @@ class Energy:
         self._prune()
         self._keep()
 
+    async def async_refresh_sun(self) -> None:
+        from .solar_forecast import async_read, periods  # noqa: PLC0415
+
+        ids = tuple(i for i in _cfg(self.hass).get("solar_forecast") or [] if isinstance(i, str))
+        self._sun_for, self._sun_at = ids, dt_util.utcnow()
+        self.sun = periods(await async_read(self.hass, list(ids))) if ids else []
+
     @callback
     def _tick(self, _now: Any = None) -> None:
+        ids = tuple(i for i in _cfg(self.hass).get("solar_forecast") or [] if isinstance(i, str))
+        if ids != self._sun_for or (ids and (self._sun_at is None or dt_util.utcnow() - self._sun_at > timedelta(minutes=15))):
+            self._sun_for, self._sun_at = ids, dt_util.utcnow()
+            self.hass.async_create_task(self.async_refresh_sun())
         status = self.status()
         car = status.get("car") or {}
         now = dt_util.utcnow()
@@ -561,7 +575,7 @@ class Energy:
         charger_phase = (cfg.get("charger_phase") or "L1") if three else "L1"
         if not cfg.get("charger_room") and not cfg.get("soc_sensor"):
             if cfg.get("price_sensor"):
-                out["price"] = price_status(hass, cfg, {"battery_kwh": _num(cfg.get("battery_kwh"), 8.8)})
+                out["price"] = price_status(hass, cfg, {"battery_kwh": _num(cfg.get("battery_kwh"), 8.8)}, self.sun)
             return out
         phase_w = phases.get(charger_phase)
         on_phase = [(a, r["watts"]) for a, r in rooms.items() if r["phase"] == charger_phase]
@@ -606,6 +620,6 @@ class Energy:
             "minus": [{"area": a, "watts": w} for a, w in on_phase],
         }
         if cfg.get("price_sensor"):
-            out["price"] = price_status(hass, cfg, out["car"])
+            out["price"] = price_status(hass, cfg, out["car"], self.sun)
         out["history"] = self.history()
         return out

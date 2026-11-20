@@ -112,6 +112,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_alarm_test)
     websocket_api.async_register_command(hass, ws_energy_status)
     websocket_api.async_register_command(hass, ws_ev_test)
+    websocket_api.async_register_command(hass, ws_solar_forecasts)
     websocket_api.async_register_command(hass, ws_nspanel)
     websocket_api.async_register_command(hass, ws_tags)
 
@@ -657,6 +658,23 @@ async def ws_nspanel(
     if msg["action"] == "clear":
         await nspanel_clear(hass)
     connection.send_result(msg["id"], {"found": found_panels(hass), "chosen": chosen_panels(hass)})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/solar_forecasts"})
+@websocket_api.async_response
+async def ws_solar_forecasts(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Panel: the solar forecast integrations this Home Assistant has."""
+    from .solar_forecast import async_list  # noqa: PLC0415
+
+    energy = _data(hass).get("energy")
+    if energy is not None:
+        await energy.async_refresh_sun()
+    connection.send_result(msg["id"], {"forecasts": await async_list(hass),
+                                       "periods": len(energy.sun) if energy is not None else 0})
 
 
 @websocket_api.websocket_command(

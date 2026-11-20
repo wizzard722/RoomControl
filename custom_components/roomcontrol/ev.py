@@ -27,6 +27,7 @@ from .announce import async_announce
 from .const import DOMAIN
 from .nspanel import nspanel_message
 from .person_notify import person_notify_service
+from .solar_forecast import DEFAULT_BASE_LOAD_W, grid_share, sun_kw_at
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -217,8 +218,11 @@ def charge_hours(cfg: dict[str, Any], soc: float | None, battery_kwh: float, max
     return max(0.0, need / max_kw)
 
 
-def price_status(hass: HomeAssistant, cfg: dict[str, Any], car: dict[str, Any]) -> dict[str, Any] | None:
-    """For the panel: the forecast and the cheapest time to charge."""
+def price_status(hass: HomeAssistant, cfg: dict[str, Any], car: dict[str, Any],
+                 sun: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
+    """For the panel: the forecast and the cheapest time to charge. With a
+    solar forecast (`sun`, see solar_forecast.py) a price block counts only
+    for the part the grid is expected to give."""
     sensor = cfg.get("price_sensor")
     if not sensor:
         return None
@@ -229,7 +233,22 @@ def price_status(hass: HomeAssistant, cfg: dict[str, Any], car: dict[str, Any]) 
     hours = charge_hours(cfg, car.get("soc"), battery, max_kw)
     need_kwh = hours * max_kw  # all the energy this charge needs, to full
     ready = _ready_by(cfg.get("ready_by"), now)
-    best = cheapest(rows, hours, now, ready) if hours > 0 else None
+    base_kw = float(cfg.get("base_load_w") if isinstance(cfg.get("base_load_w"), (int, float)) else DEFAULT_BASE_LOAD_W) / 1000
+    for r in rows:
+        r["sun_kw"] = sun_kw_at(sun, r["start"], r["end"]) if sun else 0.0
+        r["share"] = grid_share(r["sun_kw"], base_kw, max_kw) if sun else 1.0
+    effective = [{**r, "price": r["price"] * r["share"]} for r in rows]
+    best = cheapest(effective, hours, now, ready) if hours > 0 else None
+    sun_pct = None
+    if best is not None and sun:
+        # The expected share of sun in that stretch (weighted by time).
+        span = covered = 0.0
+        for r in rows:
+            o = (min(best["end"], r["end"]) - max(best["start"], r["start"])).total_seconds()
+            if o > 0:
+                span += o
+                covered += o * (1 - r["share"])
+        sun_pct = round(covered / span * 100) if span else 0
     # Up to 36 hours ahead, whatever the length of a price block (an hour or 15 minutes).
     upcoming = [r for r in rows if r["end"] > now and r["start"] < now + timedelta(hours=36)][:200]
     return {
@@ -241,10 +260,12 @@ def price_status(hass: HomeAssistant, cfg: dict[str, Any], car: dict[str, Any]) 
         "ready_by": ready.isoformat() if ready else None,
         "cheapest": None if best is None else {
             "start": best["start"].isoformat(), "end": best["end"].isoformat(), "avg": round(best["avg"], 4),
-            "cost": round(best["avg"] * need_kwh, 2),
+            "cost": round(best["avg"] * need_kwh, 2), "sun_pct": sun_pct,
             "cost_now": None if (p := price_now(hass, sensor, rows)) is None else round(p * need_kwh, 2)},
-        "forecast": [{"start": r["start"].isoformat(), "end": r["end"].isoformat(), "price": round(r["price"], 4)}
+        "forecast": [{"start": r["start"].isoformat(), "end": r["end"].isoformat(), "price": round(r["price"], 4),
+                      "sun_kw": round(r["sun_kw"], 2), "sun_share": round(1 - r["share"], 2)}
                      for r in upcoming],
+        "solar": bool(sun),
         "found": bool(rows),
     }
 
