@@ -37,6 +37,7 @@ from .room_switches import never_off, switches_for
 from .texts import text
 from .const import CONF_COVERS, CONF_MEDIA_PLAYERS, DOMAIN, SIGNAL_CONFIG_UPDATED
 from .announce import async_announce
+from .nspanel import nspanel_message
 from .control import rc_call
 from .rooms import anyone_home, managed_areas, room_fans, room_lights, room_locks, supports_kelvin
 
@@ -296,6 +297,7 @@ class SmokeManager:
                 await self._call("media_player", "media_stop", {ATTR_ENTITY_ID: playing})
             # Every speaker that takes part in announcements (Omroepen).
             await async_announce(self.hass, text(self.hass, "smoke_spoken", room=where), kind="smoke")
+        nspanel_message(self.hass, "smoke", text(self.hass, "smoke_spoken", room=where))
         vacuums = sorted({v for r in rooms for v in r.get("vacuums", []) or [] if v})
         if self.action("vacuum") and vacuums:
             await self._call("vacuum", "return_to_base", {ATTR_ENTITY_ID: vacuums})

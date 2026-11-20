@@ -37,6 +37,7 @@ from .rooms import anyone_home, household_persons, managed_areas, presence_allow
 from .slots import hm_minutes
 from .smoke import smoke_active
 from .announce import async_announce, room_occupied
+from .nspanel import nspanel_message
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -191,6 +192,7 @@ class DoorbellManager:
                     await self._call("media_player", "media_pause", {ATTR_ENTITY_ID: playing})
             if bell.get("announce"):
                 await async_announce(self.hass, text(self.hass, "doorbell_spoken", room=where), occupied_only=True, kind="doorbell")
+        nspanel_message(self.hass, "doorbell", text(self.hass, "doorbell_notify", room=where))
         if bell.get("notify", True):
             note = text(self.hass, "doorbell_notify", room=where)
             camera = bell.get("camera")

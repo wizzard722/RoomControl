@@ -25,6 +25,24 @@
           "description": "Alleen deze ruimten (leeg: alle)."
         }
       }
+    },
+    "nspanel_message": {
+      "name": "Bericht op NSPanels",
+      "description": "Toon een bericht op de NSPanels (NSPanel Easy) die in RoomControl gekozen zijn; het verdwijnt na een tijdje weer.",
+      "fields": {
+        "message": {
+          "name": "Bericht",
+          "description": "De tekst die getoond wordt."
+        },
+        "label": {
+          "name": "Label",
+          "description": "De titel erboven."
+        },
+        "seconds": {
+          "name": "Seconden",
+          "description": "Hoe lang het blijft staan (0: tot het volgende; leeg: zoals ingesteld in RoomControl)."
+        }
+      }
     }
   },
   "entity": {

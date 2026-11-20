@@ -41,6 +41,12 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - *Keep charging sessions* (EV charger card) sets how many days they are kept (default 365, 0 = forever). A session that was running when Home Assistant restarted carries on.
 - The cheapest time covers all the energy the charge needs (to full), and the Energy price card shows that energy, the **cost of this charge** at the cheapest time and what charging right now would cost. Car messages may use `{cost}`.
 
+### Messages on NSPanels (NSPanel Easy)
+- New card **NSPanels** in the general settings (shown when Home Assistant has NSPanel Easy panels: the ESPHome action `<panel>_notification_show`).
+- RoomControl can show its messages on all panels, or only on the ones you pick: alarm messages, car charging messages, smoke alarm, doorbell and announcements (Omroepen), each on or off.
+- A message disappears again after the time you set (default 60 s; 0 = it stays until the next one). A newer message restarts that time. **Test** shows a test message.
+- New action **roomcontrol.nspanel_message** (message, label, seconds) for your own automations.
+
 ### Power per phase next to each floor
 - With *Group rooms by floor* on and the **Energy** card set up, each floor heading on the Rooms page now shows the power of that floor per phase, separately: **L1 · L2 · L3** (with 1 phase: L1 only).
 - It is the sum of the rooms on that floor that are on that phase (their light bundles, switches and meters). A phase without any room on that floor shows "—"; rooms without a phase don't count.

@@ -23,6 +23,7 @@ from .learn import LearnStore
 from .smoke import SmokeManager
 from .doorbell import DoorbellManager
 from .announce import async_announce
+from .nspanel import async_clear as nspanel_clear, async_show as nspanel_show, chosen_panels, found_panels, nspanel_message, stop_timers as nspanel_stop
 from .texts import default_texts
 from .vacuums import VacuumManager
 from .control import FullControl, rc_call
@@ -110,6 +111,22 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_alarm_test)
     websocket_api.async_register_command(hass, ws_energy_status)
     websocket_api.async_register_command(hass, ws_ev_test)
+    websocket_api.async_register_command(hass, ws_nspanel)
+
+    async def _nspanel_service(call: ServiceCall) -> ServiceResponse:
+        panels = await nspanel_show(
+            hass, call.data.get("label") or "RoomControl", call.data["message"], call.data.get("seconds"))
+        return {"panels": panels}
+
+    hass.services.async_register(
+        DOMAIN, "nspanel_message", _nspanel_service,
+        schema=vol.Schema({
+            vol.Required("message"): str,
+            vol.Optional("label"): str,
+            vol.Optional("seconds"): vol.Coerce(float),
+        }),
+        supports_response=SupportsResponse.OPTIONAL,
+    )
     websocket_api.async_register_command(hass, ws_call_service)
     websocket_api.async_register_command(hass, ws_get_debug)
     websocket_api.async_register_command(hass, ws_forget_learned)
@@ -123,6 +140,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         if isinstance(areas, str):
             areas = [areas]
         players = await async_announce(hass, call.data["message"], areas or None)
+        nspanel_message(hass, "announce", call.data["message"])
         return {"players": players}
 
     hass.services.async_register(
@@ -319,6 +337,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             room_switches.stop()
         if (energy := _data(hass).pop("energy", None)) is not None:
             energy.stop()
+        nspanel_stop(hass)
         if (memory := _data(hass).pop("memory", None)) is not None:
             await memory.async_stop()
     return unloaded
@@ -525,6 +544,7 @@ async def ws_announce(
 ) -> None:
     """Panel test message: speak it on the speakers that take part now."""
     players = await async_announce(hass, msg["message"], msg.get("areas"))
+    nspanel_message(hass, "announce", msg["message"])
     connection.send_result(msg["id"], {"players": players})
 
 
@@ -578,6 +598,26 @@ def ws_energy_status(
     """Power per room and phase, and whether the car is charging."""
     energy = _data(hass).get("energy")
     connection.send_result(msg["id"], energy.status() if energy else {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/nspanel", vol.Optional("action", default="list"): vol.In(["list", "test", "clear"]),
+     vol.Optional("message"): str}
+)
+@websocket_api.async_response
+async def ws_nspanel(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Panel: the NSPanels found; "test" shows a message on the chosen ones."""
+    if msg["action"] == "test":
+        shown = await nspanel_show(hass, "RoomControl", msg.get("message") or "Test")
+        connection.send_result(msg["id"], {"shown": shown, "found": found_panels(hass)})
+        return
+    if msg["action"] == "clear":
+        await nspanel_clear(hass)
+    connection.send_result(msg["id"], {"found": found_panels(hass), "chosen": chosen_panels(hass)})
 
 
 @websocket_api.websocket_command(

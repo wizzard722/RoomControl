@@ -55,6 +55,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.components import persistent_notification
 
 from .announce import announce_tts
+from .nspanel import nspanel_message
 from .person_notify import person_notify_service
 from .const import (
     ALARM_TRANSITIONAL,
@@ -711,6 +712,8 @@ class AlarmAutomation:
             if (legacy := cfg.get("notify") or "").startswith("notify.") and legacy not in services:
                 services.append(legacy)  # older: one service for every message
         result = {"services": services, "ha": bool(ha), "skipped": skipped, "no_device": no_device}
+        if not test:
+            nspanel_message(self.hass, "alarm", message)
         if not services and not ha:
             return result
         title = "Alarm Systeem (test)" if test else "Alarm Systeem"

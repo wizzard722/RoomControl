@@ -25,6 +25,7 @@ from homeassistant.util import dt as dt_util
 
 from .announce import async_announce
 from .const import DOMAIN
+from .nspanel import nspanel_message
 from .person_notify import person_notify_service
 
 _LOGGER = logging.getLogger(__name__)
@@ -321,6 +322,8 @@ async def async_send(hass: HomeAssistant, cfg: dict[str, Any], message: str, tes
                 "notify", service.split(".", 1)[1], {"title": title, "message": message}, blocking=False)
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("EV message to %s failed: %s", service, err)
+    if not test:
+        nspanel_message(hass, "ev", message)
     if n.get("ha", True):
         persistent_notification.async_create(hass, message, title=title, notification_id=f"{DOMAIN}_ev")
         result["ha"] = True

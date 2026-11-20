@@ -10,3 +10,24 @@ announce:
       selector:
         area:
           multiple: true
+
+nspanel_message:
+  fields:
+    message:
+      required: true
+      example: "De was is klaar"
+      selector:
+        text:
+    label:
+      required: false
+      example: "Wasmachine"
+      selector:
+        text:
+    seconds:
+      required: false
+      example: 60
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: s

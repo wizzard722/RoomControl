@@ -25,6 +25,24 @@
           "description": "Only these areas (empty: all)."
         }
       }
+    },
+    "nspanel_message": {
+      "name": "Message on NSPanels",
+      "description": "Show a message on the NSPanels (NSPanel Easy) chosen in RoomControl; it disappears again after a while.",
+      "fields": {
+        "message": {
+          "name": "Message",
+          "description": "The text shown."
+        },
+        "label": {
+          "name": "Label",
+          "description": "The title above it."
+        },
+        "seconds": {
+          "name": "Seconds",
+          "description": "How long it stays (0: until the next one; empty: as set in RoomControl)."
+        }
+      }
     }
   },
   "entity": {
