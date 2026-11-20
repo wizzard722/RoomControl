@@ -30,8 +30,8 @@ The user approved this layout; new screens and settings follow it.
      `plain` grey), title, and a **one-line summary of the current
      settings** when closed (e.g. "Dim-niveau 1% · Alles dim 23:00–07:00"),
      chevron on the right;
-   - open card: blue border, body below a divider; the first card is open
-     by default;
+   - open card: blue border, body below a divider; on a room's settings
+     every card starts closed (the user asked for this);
    - search matches title + summary + keywords (`…kw_<id>` texts) and shows
      the matching cards opened;
    - hide cards that don't apply (no curtains → no Curtains card);

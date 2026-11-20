@@ -7,6 +7,9 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### Switches card under Light
 - In a room's settings the **Switches** card now sits right under the **Light** card, so the lamps and devices of a room are together.
 
+### Room settings open with every card closed
+- A room's settings no longer open with the Light card unfolded: every card starts closed, showing only its one-line summary. Opening another room also starts closed. A search still unfolds the matching cards.
+
 ---
 
 ## 1.18.0b14 (beta)
