@@ -17,6 +17,12 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - What you change is kept, an emptied field too. **Restore defaults** puts a state back to its defaults.
 - When the alarm stops sounding (from *Sensor tripped* or *Alarm sounds* to another state), a siren that is still playing is stopped.
 
+### Fixed: renamed rooms are picked up right away
+When you rename an area in Home Assistant, RoomControl now follows at once:
+- **Panel**: room cards, the room page, Layout and every list show the new name. Before, they kept the name from when the room was first set up.
+- **Entity IDs** made from the old name get the new one, e.g. `light.roomcontrol_slaapkamer_plafond` → `light.roomcontrol_grote_slaapkamer_plafond`. An ID you chose yourself is left alone, and so is one whose new ID is already taken.
+- The room's **device** and the entities' **names** update straight away.
+
 ---
 
 ## 1.18.0b9 (beta)

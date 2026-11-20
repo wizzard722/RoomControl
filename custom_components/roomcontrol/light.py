@@ -245,6 +245,29 @@ def _unique_id(area_id: str) -> str:
     return f"{DOMAIN}_{area_id}"
 
 
+@callback
+def _rename_room_entity_ids(hass: HomeAssistant, entry_id: str, device_id: str, old: str, new: str) -> None:
+    """A room was renamed: entity IDs made from its old name
+    (<domain>.roomcontrol_<old>…) get the new name; an ID the user chose
+    (not starting with roomcontrol_<old>) is left alone."""
+    old_slug, new_slug = slugify(old), slugify(new)
+    if not old_slug or not new_slug or old_slug == new_slug:
+        return
+    ent_reg = er.async_get(hass)
+    prefix = f"{DOMAIN}_{old_slug}"
+    for ent in list(er.async_entries_for_device(ent_reg, device_id, include_disabled_entities=True)):
+        if ent.config_entry_id != entry_id:
+            continue
+        domain, object_id = ent.entity_id.split(".", 1)
+        if object_id != prefix and not object_id.startswith(f"{prefix}_"):
+            continue
+        wanted = f"{domain}.{DOMAIN}_{new_slug}{object_id[len(prefix):]}"
+        if ent_reg.async_get(wanted) is not None or hass.states.get(wanted) is not None:
+            continue  # taken: leave this one
+        _LOGGER.info("Room renamed: %s → %s", ent.entity_id, wanted)
+        ent_reg.async_update_entity(ent.entity_id, new_entity_id=wanted)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -298,11 +321,16 @@ async def async_setup_entry(
         if action in ("create", "remove"):
             _sync_rooms()
         elif action == "update":
+            # The area was renamed: the room's device, its entity IDs and every
+            # name RoomControl shows follow right away.
             dev_reg = dr.async_get(hass)
             device = dev_reg.async_get_device(identifiers={(DOMAIN, area_id)})
             area = area_reg.async_get_area(area_id)
-            if area and device:
+            if area and device and device.name != area.name:
+                old = device.name or ""
                 dev_reg.async_update_device(device.id, name=area.name)
+                _rename_room_entity_ids(hass, entry.entry_id, device.id, old, area.name)
+            async_dispatcher_send(hass, SIGNAL_CONFIG_UPDATED)
 
     entry.async_on_unload(hass.bus.async_listen(ar.EVENT_AREA_REGISTRY_UPDATED, _on_area_event))
 
