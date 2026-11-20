@@ -1,5 +1,16 @@
 # Release notes
 
+## 1.18.0b16 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Energy and EV charger: Home Assistant's own sensor picker
+- The sensor fields in the **Energy** and **EV charger** cards (consumed and returned power per phase, solar panels, home battery, battery level, charging state and plug) now use Home Assistant's own entity picker. It searches and sorts by itself and shows the name, entity ID, area and device of each sensor.
+- Every sensor can still be chosen, also one without a unit.
+- If that picker isn't available in your browser, RoomControl falls back to its own search field and list.
+
+---
+
 ## 1.18.0b15 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
