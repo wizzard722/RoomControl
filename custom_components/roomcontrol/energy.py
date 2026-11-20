@@ -17,6 +17,8 @@ General setting "energy":
 Room options: "phase": "L1" | "L2" | "L3" (3 phases only) and
 "power": {"bundle:<group id>" | "switch:<entity>": {"sensor": entity} | {"watts": n}};
 a light bundle may instead have one sensor per lamp: {"sensors": {lamp: sensor}}.
+Energy (kWh) sensors per lamp / switch: {"energy": {entity: sensor | "none"}}
+(without a choice: the kWh sensor on the same device); kept for later use.
 
 A light bundle counts its watts times the brightness of its lamps that are
 on; a switch its watts when on; a power sensor counts as it is.
@@ -69,8 +71,9 @@ def _num(value: Any, default: float) -> float:
 
 
 @callback
-def auto_power_sensor(hass: HomeAssistant, entity_id: str) -> str | None:
-    """The power sensor (in W) on the same device as this lamp or switch, if any."""
+def auto_sensor(hass: HomeAssistant, entity_id: str, unit: str = "w") -> str | None:
+    """A sensor in this unit ("w": power, "kwh": energy) on the same device
+    as this lamp or switch, if any."""
     ent_reg = er.async_get(hass)
     entry = ent_reg.async_get(entity_id)
     if entry is None or not entry.device_id:
@@ -80,10 +83,44 @@ def auto_power_sensor(hass: HomeAssistant, entity_id: str) -> str | None:
         if other.domain != "sensor" or other.disabled_by:
             continue
         st = hass.states.get(other.entity_id)
-        unit = str((st.attributes.get("unit_of_measurement") if st else None) or other.unit_of_measurement or "").lower()
-        if unit == "w":
+        have = str((st.attributes.get("unit_of_measurement") if st else None) or other.unit_of_measurement or "").lower()
+        if have == unit:
             found.append(other.entity_id)
     return sorted(found)[0] if found else None
+
+
+@callback
+def auto_power_sensor(hass: HomeAssistant, entity_id: str) -> str | None:
+    """The power sensor (W) on the same device as this lamp or switch."""
+    return auto_sensor(hass, entity_id, "w")
+
+
+@callback
+def energy_sensors(hass: HomeAssistant, conf: dict[str, Any], entities: list[str]) -> dict[str, str]:
+    """The energy (kWh) sensor per lamp / switch: chosen ("energy": {entity:
+    sensor | "none"}), else matched on the same device. Kept for features
+    that count consumption over time."""
+    chosen = conf.get("energy") or {}
+    out: dict[str, str] = {}
+    for entity in entities:
+        pick = chosen.get(entity)
+        if pick == "none":
+            continue
+        if pick or (pick := auto_sensor(hass, entity, "kwh")):
+            out[entity] = pick
+    return out
+
+
+def _kwh(hass: HomeAssistant, entity: str | None) -> float | None:
+    st = hass.states.get(entity) if entity else None
+    try:
+        value = float(st.state) if st is not None else None
+    except (TypeError, ValueError):
+        return None
+    if value is None:
+        return None
+    unit = str(st.attributes.get("unit_of_measurement") or "kWh").lower()
+    return value / 1000 if unit == "wh" else value
 
 
 @callback
@@ -125,8 +162,11 @@ def room_parts(hass: HomeAssistant, room: dict[str, Any]) -> list[dict[str, Any]
             on = [s for s in on if s is not None and s.state == STATE_ON]
             level = (sum((s.attributes.get("brightness") or 255) for s in on) / (255 * len(on))) if on else 0
             watts, source = (_num(conf.get("watts"), 0) * level if on else 0.0), "watts"
+        energy = energy_sensors(hass, conf, lamps)
+        kwh = [v for v in (_kwh(hass, x) for x in energy.values()) if v is not None]
         out.append({"key": key, "kind": "bundle", "name": (group.get("name") or "").strip() or f"#{index + 1}",
-                    "watts": watts, "source": source, "auto": auto, "sensors": per_lamp})
+                    "watts": watts, "source": source, "auto": auto, "sensors": per_lamp,
+                    "energy": energy, "kwh": round(sum(kwh), 3) if kwh else None})
     for sw in room_switches(room):
         key = f"switch:{sw['entity_id']}"
         conf = power.get(key) or {}
@@ -142,9 +182,12 @@ def room_parts(hass: HomeAssistant, room: dict[str, Any]) -> list[dict[str, Any]
             st = hass.states.get(sw["entity_id"])
             watts, source = (_num(conf.get("watts"), 0) if st is not None and st.state == STATE_ON else 0.0), "watts"
         st = hass.states.get(sw["entity_id"])
+        energy = energy_sensors(hass, conf, [sw["entity_id"]])
+        kwh = _kwh(hass, energy.get(sw["entity_id"]))
         out.append({"key": key, "kind": "switch",
                     "name": (st.attributes.get("friendly_name") if st else None) or sw["entity_id"],
-                    "watts": watts, "source": source, "auto": auto})
+                    "watts": watts, "source": source, "auto": auto,
+                    "energy": energy, "kwh": None if kwh is None else round(kwh, 3)})
     return out
 
 

@@ -1,5 +1,16 @@
 # Release notes
 
+## 1.18.0b18 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Room power: energy (kWh) sensors per lamp and switch
+- In a room's **Power** card, every lamp of a light bundle and every switch now also has an **Energy (kWh)** field, next to its power (W).
+- Like the power sensor, it is matched automatically when the lamp or switch has a kWh sensor on the same device ("Matched automatically – change it if it isn't right"). You can change or clear it.
+- The field shows the meter reading now. RoomControl keeps these links for later features, such as consumption per day or per room; the power (W) is still what the current use and the car's estimate are calculated from.
+
+---
+
 ## 1.18.0b17 (beta)
 
 Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
