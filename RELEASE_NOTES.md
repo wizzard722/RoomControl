@@ -10,8 +10,9 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - Every time slot (light bundles, motion sensors, All dim, locks and the alarm's time slots) can be **Normal**, **Vacation (both)**, **Vacation at home** or **Vacation elsewhere**. During a vacation the slots for that kind apply; when a bundle has none, its normal slots keep applying. Existing "Vacation" slots count for both kinds.
 - The slot editors show which vacation is on ("vacation elsewhere is on"), and the switch's attributes show `vacation_kind`.
 
-### Switches: stay off after "nobody home"
+### Switches: stay off after "nobody home", and off during a vacation
 - A switch that goes off when nobody is home (Armed Away) has a new option **Back on when someone comes home**: *Yes* (default, as before) or *No, stays off*. A switch set to stay off is not switched back on at Disarmed / Armed Home or when someone comes home.
+- New moments under **Off at**: **Vacation at home** and **Vacation elsewhere**. The switch goes off when that vacation starts and back on when vacation ends or changes to a kind it isn't set for (only switches RoomControl switched off; a switch that may never go off stays on). When nobody is home at that moment, a switch that also goes off for *Nobody home* stays off until someone comes home.
 
 ### One "Motion" sensor per room
 - Every room with motion sensors gets a binary sensor **Motion** ("Beweging") on its device (RoomControl › room › Sensors), e.g. `binary_sensor.roomcontrol_woonkamer_beweging`. It combines all the room's motion sensors: on while any of them sees motion.
