@@ -1,7 +1,8 @@
 """Switches that belong to a room (espresso machine, fridge, freezer, TV …).
 
 Room option "switches": [{"entity_id": "switch.x", "may_off": bool (default
-True), "off_on": ["all_off", "nobody_home", "smoke"]}].
+True), "off_on": ["all_off", "nobody_home", "smoke"], "back_on": bool
+(default True: after "nobody home", back on when someone is home again)}].
 
 A switch that may go off is switched off by RoomControl at the moments
 chosen for it (default: All off, nobody home and smoke):
@@ -45,6 +46,7 @@ def room_switches(room: dict[str, Any] | None) -> list[dict[str, Any]]:
         out.append({
             "entity_id": item["entity_id"],
             "may_off": item.get("may_off", True) is not False,
+            "back_on": item.get("back_on", True) is not False,
             "off_on": list(dict.fromkeys("nobody_home" if m == "armed_away" else m for m in off_on if m in (*OFF_MOMENTS, "armed_away")))
             if isinstance(off_on, list) else list(DEFAULT_OFF_ON),
         })
@@ -105,7 +107,8 @@ async def async_switch_off(hass: HomeAssistant, switches: list[str], why: str) -
 
 
 class RoomSwitches:
-    """Nobody home: the chosen switches go off, and back on when someone is.
+    """Nobody home: the chosen switches go off, and back on when someone is
+    (each switch set to "back_on"; one set not to stays off).
 
     With an alarm panel (general settings): off at Armed Away, back on at
     Disarmed or Armed Home. Without one: off when the last person of the
@@ -184,7 +187,14 @@ class RoomSwitches:
         """Someone home again: what RoomControl switched off goes back on."""
         todo, self.switched_off = self.switched_off, []
         self._keep()
-        todo = [s for s in todo if self.hass.states.get(s) is not None]
+        # Only the switches set to come back on (a switch set to stay off stays off).
+        stay_off = {
+            sw["entity_id"]
+            for room in self.hass.data.get(DOMAIN, {}).get("rooms", [])
+            for sw in room_switches(room)
+            if not sw["back_on"]
+        }
+        todo = [s for s in todo if self.hass.states.get(s) is not None and s not in stay_off]
         if not todo:
             return
         _LOGGER.debug("Room switches back on (%s): %s", why, todo)
