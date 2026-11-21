@@ -33,6 +33,10 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### Fan: "off" can be 1%
 - New choice in a room's **Fan** card: **"Off" means** *Off* (as before) or *1%*. With 1%, every time RoomControl (or the room's fan entity) would switch the fans off they go to 1% instead, e.g. ventilation that must keep running a little. At smoke the fans still switch off completely. The card's summary shows "off = 1%".
 
+### All dim: follow the alarm *or* time slots
+- **General settings › Dim** now has one choice, **What switches All dim**: *Follow the alarm* (Armed Home → on, Disarmed → off; the default when there is an alarm panel) or *Time slots*. Only one of the two is active; the time slots show (and count) only when *Time slots* is chosen, and they stay stored when you switch to the alarm.
+- Without an alarm panel it is always the time slots. An older setting with "follow the alarm" switched off becomes *Time slots*. The matching toggle on the Alarm page (Armed Home / Disarmed) sets the same choice.
+
 ### One "Motion" sensor per room
 - Every room with motion sensors gets a binary sensor **Motion** ("Beweging") on its device (RoomControl › room › Sensors), e.g. `binary_sensor.roomcontrol_woonkamer_beweging`. It combines all the room's motion sensors: on while any of them sees motion.
 - Attributes: the sensors, which see motion now (`motion_now`) and when the last motion was (`last_motion`). A sensor that is unavailable is skipped.

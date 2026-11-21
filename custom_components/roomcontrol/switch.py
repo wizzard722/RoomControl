@@ -236,10 +236,28 @@ SETTING_ALL_DIM_WINDOW = "all_dim_window"  # older: one {"start", "end"} window,
 SETTING_ALL_DIM_FOLLOWS_ALARM = "all_dim_follows_alarm"  # armed home → all dim, disarmed → all back (default on)
 
 
+SETTING_ALL_DIM_MODE = "all_dim_mode"  # "alarm" | "slots": what switches All dim (one of the two)
+
+
+def all_dim_mode(settings: dict[str, Any]) -> str:
+    """What switches All dim by itself: "alarm" (follows the alarm: Armed
+    Home → on, Disarmed → off) or "slots" (its time slots). One of the two;
+    the alarm by default when there is an alarm panel. Older settings: the
+    alarm unless "all_dim_follows_alarm" was switched off."""
+    has_alarm = bool(settings.get(SETTING_ALARM_ENTITY))
+    mode = settings.get(SETTING_ALL_DIM_MODE)
+    if mode in ("alarm", "slots"):
+        return mode if mode == "slots" or has_alarm else "slots"
+    return "alarm" if has_alarm and settings.get(SETTING_ALL_DIM_FOLLOWS_ALARM, True) is not False else "slots"
+
+
 def all_dim_slots(hass: HomeAssistant) -> list[dict[str, Any]]:
     """The time slots in which "Alles dim" is on by itself (an older single
-    window counts as one slot on every day)."""
+    window counts as one slot on every day); none while All dim follows the
+    alarm (the slots stay stored)."""
     settings = hass.data.get(DOMAIN, {}).get("settings", {})
+    if all_dim_mode(settings) != "slots":
+        return []
     slots = settings.get(SETTING_ALL_DIM_SLOTS)
     if isinstance(slots, list):
         return [x for x in slots if isinstance(x, dict)]
@@ -334,7 +352,7 @@ class AllDimSwitch(RestoreEntity, SwitchEntity):
     @callback
     def _setup_alarm(self) -> None:
         settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
-        alarm = settings.get(SETTING_ALARM_ENTITY) if settings.get(SETTING_ALL_DIM_FOLLOWS_ALARM, True) else None
+        alarm = settings.get(SETTING_ALARM_ENTITY) if all_dim_mode(settings) == "alarm" else None
         if alarm == self._alarm_watching:
             return
         if self._alarm_unsub:
@@ -396,7 +414,7 @@ class AllDimSwitch(RestoreEntity, SwitchEntity):
             want = inside
         settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
         alarm = self._alarm_now()
-        follows = bool(settings.get(SETTING_ALL_DIM_FOLLOWS_ALARM, True) and settings.get(SETTING_ALARM_ENTITY))
+        follows = all_dim_mode(settings) == "alarm"
         self._alarm_applied = not follows or alarm is not None
         if follows and alarm in (ALARM_ARMED_HOME, ALARM_DISARMED):
             want = alarm == ALARM_ARMED_HOME  # follows the alarm: its state now decides
