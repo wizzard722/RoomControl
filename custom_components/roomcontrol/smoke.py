@@ -234,7 +234,7 @@ class SmokeManager:
         if self._switches_were_on:
             # The devices that were on before the smoke go on again.
             switches, self._switches_were_on = self._switches_were_on, []
-            self.hass.async_create_task(self._call("switch", "turn_on", {ATTR_ENTITY_ID: switches}))
+            self.hass.async_create_task(self._turn(switches, True))
         async_dispatcher_send(self.hass, SIGNAL_SMOKE)
         # Rooms, locks etc. look again at what they should do now.
         async_dispatcher_send(self.hass, SIGNAL_CONFIG_UPDATED)
@@ -246,6 +246,15 @@ class SmokeManager:
             "areas": list(self.areas),
             "smoke_now": [d for d in self.detectors() if (st := self.hass.states.get(d)) is not None and st.state == "on"],
         }
+
+    async def _turn(self, entities: list[str], on: bool) -> None:
+        """Switches (and remotes) on / off, each with its own domain."""
+        from .room_switches import async_turn  # noqa: PLC0415
+
+        try:
+            await async_turn(self.hass, entities, on)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("Smoke: switching %s failed: %s", entities, err)
 
     async def _call(self, domain: str, service: str, data: dict[str, Any]) -> None:
         try:
@@ -280,7 +289,7 @@ class SmokeManager:
             self._switches_were_on = [
                 x for x in switches if (st := self.hass.states.get(x)) is not None and st.state == "on"
             ]
-            await self._call("switch", "turn_off", {ATTR_ENTITY_ID: switches})
+            await self._turn(switches, False)
         covers = sorted({c for r in rooms for c in r.get(CONF_COVERS, []) or [] if c})
         if self.action("covers") and covers:
             await self._call("cover", "open_cover", {ATTR_ENTITY_ID: covers})

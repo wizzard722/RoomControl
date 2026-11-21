@@ -1,6 +1,7 @@
 """Switches that belong to a room (espresso machine, fridge, freezer, TV …).
 
-Room option "switches": [{"entity_id": "switch.x", "may_off": bool (default
+Room option "switches": [{"entity_id": "switch.x" | "remote.x" (e.g. an
+NVIDIA Shield), "may_off": bool (default
 True), "off_on": ["all_off", "nobody_home", "smoke"], "back_on": bool
 (default True: after "nobody home", back on when someone is home again)}].
 
@@ -37,13 +38,25 @@ _LOGGER = logging.getLogger(__name__)
 CONF_SWITCHES = "switches"
 OFF_MOMENTS = ("all_off", "nobody_home", "smoke", "vacation_home", "vacation_away")
 DEFAULT_OFF_ON = ["all_off", "nobody_home", "smoke"]
+SWITCH_DOMAINS = ("switch.", "remote.")  # what a room's Switches may hold
+CONF_MEDIA_OFF_AWAY = "media_off_away"  # room option: media players off when nobody is home
+MEDIA_IDLE = ("off", "standby", "unavailable", "unknown")
+
+
+async def async_turn(hass: HomeAssistant, entities: list[str], on: bool) -> None:
+    """Switch these on / off, each with its own domain (switch, remote)."""
+    by_domain: dict[str, list[str]] = {}
+    for entity in entities:
+        by_domain.setdefault(entity.split(".", 1)[0], []).append(entity)
+    for domain, ids in by_domain.items():
+        await hass.services.async_call(domain, "turn_on" if on else "turn_off", {ATTR_ENTITY_ID: ids}, blocking=True)
 
 
 def room_switches(room: dict[str, Any] | None) -> list[dict[str, Any]]:
     """The room's switches, with their defaults filled in."""
     out = []
     for item in (room or {}).get(CONF_SWITCHES, []) or []:
-        if not isinstance(item, dict) or not str(item.get("entity_id", "")).startswith("switch."):
+        if not isinstance(item, dict) or not str(item.get("entity_id", "")).startswith(SWITCH_DOMAINS):
             continue
         off_on = item.get("off_on")
         out.append({
@@ -87,7 +100,8 @@ def log_switches(hass: HomeAssistant, switches: list[str], kind: str, reason: st
     """Note it in each room's "What happened" (the room light's log)."""
     entities = hass.data.get(DOMAIN, {}).get("entities", {})
     for room in hass.data.get(DOMAIN, {}).get("rooms", []):
-        mine = [s for s in switches if s in {sw["entity_id"] for sw in room_switches(room)}]
+        own = {sw["entity_id"] for sw in room_switches(room)} | set(room.get("media_players", []) or [])
+        mine = [s for s in switches if s in own]
         light = entities.get(room.get("area_id"))
         if not mine or light is None or not hasattr(light, "_debug"):
             continue
@@ -104,7 +118,7 @@ async def async_switch_off(hass: HomeAssistant, switches: list[str], why: str) -
     _LOGGER.debug("Room switches off (%s): %s", why, todo)
     log_switches(hass, todo, "off", f"switches_{why.replace(' ', '_')}")
     try:
-        await hass.services.async_call("switch", "turn_off", {ATTR_ENTITY_ID: todo}, blocking=True)
+        await async_turn(hass, todo, False)
     except Exception:  # noqa: BLE001
         _LOGGER.warning("Could not switch off %s (%s)", todo, why)
 
@@ -172,7 +186,7 @@ class RoomSwitches:
             _LOGGER.debug("Room switches back on (vacation over): %s", back)
             log_switches(self.hass, back, "on", "switches_vacation_over")
             try:
-                await self.hass.services.async_call("switch", "turn_on", {ATTR_ENTITY_ID: back}, blocking=True)
+                await async_turn(self.hass, back, True)
             except Exception:  # noqa: BLE001
                 _LOGGER.warning("Could not switch %s back on (vacation over)", back)
 
@@ -220,8 +234,29 @@ class RoomSwitches:
             return st is not None and st.state == "armed_away"
         return bool(household_persons(self.hass)) and not anyone_home(self.hass)
 
+    async def async_media_off(self, why: str) -> None:
+        """Nobody home: the media players of rooms set to "media_off_away" off."""
+        from .const import CONF_MEDIA_PLAYERS  # noqa: PLC0415
+
+        managed = managed_areas(self.hass)
+        players = [
+            p for room in self.hass.data.get(DOMAIN, {}).get("rooms", [])
+            if room.get("area_id") in managed and room.get(CONF_MEDIA_OFF_AWAY)
+            for p in room.get(CONF_MEDIA_PLAYERS, []) or []
+            if p and (st := self.hass.states.get(p)) is not None and st.state not in MEDIA_IDLE
+        ]
+        if not players:
+            return
+        _LOGGER.debug("Media players off (%s): %s", why, players)
+        log_switches(self.hass, players, "off", "media_nobody_home")
+        try:
+            await self.hass.services.async_call("media_player", "turn_off", {ATTR_ENTITY_ID: players}, blocking=True)
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Could not switch media players %s off (%s)", players, why)
+
     async def async_away(self, why: str) -> None:
         """Nobody home: off, remembering which were on."""
+        await self.async_media_off(why)
         todo = [
             s for s in switches_for(self.hass, "nobody_home")
             if s not in never_off(self.hass) and (st := self.hass.states.get(s)) is not None and st.state == "on"
@@ -250,6 +285,6 @@ class RoomSwitches:
         _LOGGER.debug("Room switches back on (%s): %s", why, todo)
         log_switches(self.hass, todo, "on", "switches_back")
         try:
-            await self.hass.services.async_call("switch", "turn_on", {ATTR_ENTITY_ID: todo}, blocking=True)
+            await async_turn(self.hass, todo, True)
         except Exception:  # noqa: BLE001
             _LOGGER.warning("Could not switch %s back on (%s)", todo, why)

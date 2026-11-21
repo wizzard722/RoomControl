@@ -14,6 +14,10 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 - A switch that goes off when nobody is home (Armed Away) has a new option **Back on when someone comes home**: *Yes* (default, as before) or *No, stays off*. A switch set to stay off is not switched back on at Disarmed / Armed Home or when someone comes home.
 - New moments under **Off at**: **Vacation at home** and **Vacation elsewhere**. The switch goes off when that vacation starts and back on when vacation ends or changes to a kind it isn't set for (only switches RoomControl switched off; a switch that may never go off stays on). When nobody is home at that moment, a switch that also goes off for *Nobody home* stays off until someone comes home.
 
+### Media players off when nobody is home; remotes as switches
+- New option per room in **Media & announcements**: **Off when nobody is home**. At Armed Away (or when the last person leaves) the room's media players that are on are switched off; they are not switched back on.
+- A room's **Switches** can now also hold **remotes** (`remote.*`), e.g. an NVIDIA Shield: they show among the switches to add, switch on and off from the Overview, and follow the same moments (All off, nobody home, smoke, vacation) and options.
+
 ### One "Motion" sensor per room
 - Every room with motion sensors gets a binary sensor **Motion** ("Beweging") on its device (RoomControl › room › Sensors), e.g. `binary_sensor.roomcontrol_woonkamer_beweging`. It combines all the room's motion sensors: on while any of them sees motion.
 - Attributes: the sensors, which see motion now (`motion_now`) and when the last motion was (`last_motion`). A sensor that is unavailable is skipped.

@@ -471,6 +471,7 @@ PANEL_SERVICES = {
     "cover": ("open_cover", "close_cover", "stop_cover", "set_cover_position"),
     "lock": ("lock", "unlock", "open"),
     "switch": ("turn_on", "turn_off"),  # a room's switches (room → Switches)
+    "remote": ("turn_on", "turn_off"),  # a room's switches can be remotes (e.g. an NVIDIA Shield)
 }
 
 
@@ -508,7 +509,7 @@ async def ws_call_service(
     if not ids or any(e not in known and e not in own for e in ids):
         connection.send_error(msg["id"], "not_found", "Not a lamp, curtain, lock or switch of a RoomControl room")
         return
-    if domain == "switch" and service == "turn_off" and (blocked := never_off(hass) & set(ids)):
+    if domain in ("switch", "remote") and service == "turn_off" and (blocked := never_off(hass) & set(ids)):
         connection.send_error(msg["id"], "not_allowed", f"{', '.join(sorted(blocked))} may never go off")
         return
     data = {k: v for k, v in msg["data"].items() if k != "entity_id"}
