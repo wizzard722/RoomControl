@@ -59,6 +59,7 @@ from .rooms import managed_areas
 SETTING_ENERGY = "energy"
 SIGNAL_ENERGY = "roomcontrol_energy"  # sent after each check (every 30 s)
 PHASES = ("L1", "L2", "L3")
+CHARGE_EFFICIENCY = 0.9  # of the power drawn, this much ends up in the battery
 CHARGING_STATES = {"charging", "on", "true", "laden", "bezig met laden"}
 
 
@@ -325,6 +326,10 @@ class Energy:
         self.priced = False  # a price was known for (part of) this session
         self.soc_from: float | None = None
         self.soc_last: float | None = None
+        # The car's battery level sensor (e.g. Audi Connect) updates only now
+        # and then: what was charged since its last update, to estimate it.
+        self.kwh_since_soc = 0.0
+        self._soc_seen: tuple[str, str] | None = None
         self._last: datetime | None = None
         self.sessions: list[dict[str, Any]] = []
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.ev_sessions")
@@ -423,6 +428,12 @@ class Energy:
         if ids != self._sun_for or (ids and (self._sun_at is None or dt_util.utcnow() - self._sun_at > timedelta(minutes=15))):
             self._sun_for, self._sun_at = ids, dt_util.utcnow()
             self.hass.async_create_task(self.async_refresh_sun())
+        cfg = _cfg(self.hass)
+        new_reading = False
+        if (st := self.hass.states.get(cfg.get("soc_sensor") or "")) is not None:
+            seen = (st.state, st.last_updated.isoformat())
+            if seen != self._soc_seen:
+                self._soc_seen, new_reading = seen, True  # a new reading from the car
         status = self.status()
         car = status.get("car") or {}
         now = dt_util.utcnow()
@@ -436,6 +447,7 @@ class Energy:
                 hours = (now - self._last).total_seconds() / 3600
                 kwh = car["kw"] * hours
                 self.charged_kwh += kwh
+                self.kwh_since_soc += kwh
                 grid = self.grid_share(status, kwh, hours)
                 self.grid_kwh += grid
                 self.solar_kwh += kwh - grid
@@ -453,6 +465,9 @@ class Energy:
             if soc is not None:
                 self.soc_last = soc
             self._end_session(now)
+        if new_reading:
+            # What was charged up to now is in the car's new reading.
+            self.kwh_since_soc = 0.0
         if car:
             # The charged kWh as it is now (the status was made before adding).
             car = {**car, "charged_kwh": round(self.charged_kwh, 1) if self.charging_since else car.get("charged_kwh"),
@@ -643,9 +658,15 @@ class Energy:
         battery = _num(cfg.get("battery_kwh"), 8.8)
         # Charging: the estimate when it is plausible, else the charger's maximum.
         kw = (est_kw if est_kw is not None and est_kw >= from_kw else _num(cfg.get("charger_max_kw"), 3.7)) if charging else 0.0
+        # The battery level now: the car's last reading plus what went in since
+        # (charging losses of about 10% left out).
+        soc_est = None
+        if soc is not None:
+            soc_est = round(min(100.0, soc + self.kwh_since_soc * CHARGE_EFFICIENCY / battery * 100), 1) if battery else soc
+        soc_at = st.last_updated.isoformat() if (st := hass.states.get(cfg.get("soc_sensor") or "")) is not None else None
         full_at = None
-        if charging and soc is not None and kw:
-            hours = max(0.0, (100 - soc) / 100 * battery / kw)
+        if charging and soc_est is not None and kw:
+            hours = max(0.0, (100 - soc_est) / 100 * battery / kw)
             full_at = (dt_util.now() + timedelta(hours=hours)).isoformat()
         out["car"] = {
             "name": (cfg.get("car_name") or "").strip(),
@@ -653,8 +674,9 @@ class Energy:
             "charging": bool(charging), "kw": round(kw, 2) if kw else 0.0,
             "estimate_kw": None if est_kw is None else round(est_kw, 2),
             "from_sensor": charging_state is not None,
-            "soc": soc, "battery_kwh": battery,
-            "kwh": None if soc is None else round(soc / 100 * battery, 1),
+            "soc": soc, "battery_kwh": battery, "soc_est": soc_est, "soc_at": soc_at,
+            "kwh_since_soc": round(self.kwh_since_soc, 2),
+            "kwh": None if soc_est is None else round(soc_est / 100 * battery, 1),
             "plugged": plugged, "full_at": full_at,
             "since": self.charging_since.isoformat() if self.charging_since else None,
             "charged_kwh": round(self.charged_kwh, 1) if self.charging_since else None,

@@ -184,6 +184,12 @@
           },
           "last_session_cost": {
             "name": "Cost last session"
+          },
+          "battery_level_estimate": {
+            "name": "Battery level (estimate)"
+          },
+          "battery_level_at": {
+            "name": "Battery level from the car at"
           }
         }
       }

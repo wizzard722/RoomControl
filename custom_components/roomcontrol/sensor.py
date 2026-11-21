@@ -170,6 +170,8 @@ class EvChargingSensor(SensorEntity):
                 "charging": bool(car.get("charging")),
                 "car": car.get("name") or None,
                 "battery_level": car.get("soc"),
+                "battery_level_estimate": car.get("soc_est"),
+                "battery_level_at": car.get("soc_at"),
                 "battery_kwh": car.get("kwh"),
                 "battery_size_kwh": car.get("battery_kwh"),
                 "plugged_in": car.get("plugged"),

@@ -184,6 +184,12 @@
           },
           "last_session_cost": {
             "name": "Kosten laatste laadbeurt"
+          },
+          "battery_level_estimate": {
+            "name": "Accuniveau (schatting)"
+          },
+          "battery_level_at": {
+            "name": "Accuniveau van de auto om"
           }
         }
       }
