@@ -13,6 +13,10 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### Switches: stay off after "nobody home"
 - A switch that goes off when nobody is home (Armed Away) has a new option **Back on when someone comes home**: *Yes* (default, as before) or *No, stays off*. A switch set to stay off is not switched back on at Disarmed / Armed Home or when someone comes home.
 
+### One "Motion" sensor per room
+- Every room with motion sensors gets a binary sensor **Motion** ("Beweging") on its device (RoomControl › room › Sensors), e.g. `binary_sensor.roomcontrol_woonkamer_beweging`. It combines all the room's motion sensors: on while any of them sees motion.
+- Attributes: the sensors, which see motion now (`motion_now`) and when the last motion was (`last_motion`). A sensor that is unavailable is skipped.
+
 ### Energy: help for Enphase Envoy (and other net meters)
 - The energy settings explain per phase what belongs where: **Consumed** is what the house takes from the grid (a sensor that goes negative while returning, like Enphase's *Net Power Consumption*, is fine: then leave **Returned** empty); **Returned** only when your meter gives it separately as a positive value; not the house's total use.
 - A warning shows when a phase looks set up the wrong way round, e.g. Enphase *Power Consumption* (total use) as Consumed together with *Net Power Consumption* as Returned: that counted the sun twice and made the car's charging estimate wrong. For Enphase: Consumed = *Net Power Consumption*, Returned = empty, Solar = *Power Production*.
