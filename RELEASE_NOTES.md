@@ -27,6 +27,9 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### Motion sensors: time slots always in view
 - A room's **Motion & presence** card now always shows its motion sensors in full, each with its **Time slots** row (the same editor as light bundles: name, days, start, end, Normal / Vacation kinds, + Time slot). Before, they only showed after opening the sensor list, so they were easy to miss.
 
+### Grace period: your setting plus what was learned
+- With **Smart › Adaptive grace period** on, the grace period slider now shows both parts: **your setting** (blue, still set with the slider) and the **learned** extra time (purple, striped) on top, with the total, e.g. "Your setting 5:00 · Learned +1:30 = 6:30 min". The lights use the total, as before.
+
 ### One "Motion" sensor per room
 - Every room with motion sensors gets a binary sensor **Motion** ("Beweging") on its device (RoomControl › room › Sensors), e.g. `binary_sensor.roomcontrol_woonkamer_beweging`. It combines all the room's motion sensors: on while any of them sees motion.
 - Attributes: the sensors, which see motion now (`motion_now`) and when the last motion was (`last_motion`). A sensor that is unavailable is skipped.
