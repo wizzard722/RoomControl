@@ -514,6 +514,28 @@ class LampGroupLight(LightEntity):
             await room.async_call_lamps("turn_off", self._lamps)
 
 
+FAN_STORE_KEY = f"{DOMAIN}.fans_on"
+
+
+def keep_fans_applied(hass: HomeAssistant) -> None:
+    """Remember which fans RoomControl has on (across restarts)."""
+    store = hass.data[DOMAIN].get("fan_store")
+    if store is None:
+        return
+    applied = hass.data[DOMAIN].get("fan_applied", {})
+    store.async_delay_save(lambda: {"on": [list(k) for k in applied]}, 2)
+
+
+async def async_load_fans_applied(hass: HomeAssistant) -> None:
+    """At start-up: the fans RoomControl had on before the restart."""
+    from homeassistant.helpers.storage import Store  # noqa: PLC0415
+
+    store = Store(hass, 1, FAN_STORE_KEY)
+    hass.data[DOMAIN]["fan_store"] = store
+    data = await store.async_load() or {}
+    hass.data[DOMAIN]["fan_restored"] = {tuple(k) for k in data.get("on", []) if isinstance(k, list) and k}
+
+
 class RoomControlLight(LightEntity):
     """Controls all lights of one room (area) as a single entity."""
 
@@ -2480,6 +2502,17 @@ class RoomControlLight(LightEntity):
         acts = fan_activities(self.hass)
         act = acts.get(key)
         motion = any(r._fan_motion_enabled() and r._own_motion() for r in rooms)
+        restored: set[FanKey] = self.hass.data[DOMAIN].setdefault("fan_restored", set())
+        if act is None and key in restored:
+            restored.discard(key)
+            on = [st for f in key if (st := self.hass.states.get(f)) is not None and st.state == STATE_ON]
+            if on and not motion:
+                # RoomControl had these fans on before Home Assistant restarted:
+                # the activity is gone, so run on from now and switch them off.
+                pct = next((int(p) for st in on if isinstance(p := st.attributes.get("percentage"), (int, float))), 1)
+                act = acts[key] = FanActivity(since=dt_util.utcnow(), steps=[], pct=pct)
+                self.hass.data[DOMAIN].setdefault("fan_applied", {})[key] = pct
+                _LOGGER.debug("%s: fans %s still on after a restart, running on", self.entity_id, key)
         if motion:
             if act is None:
                 steps = next((st for r in rooms if r._fan_motion_enabled() and (st := r._fan_steps())), [])
@@ -2634,6 +2667,7 @@ class RoomControlLight(LightEntity):
             if r._fan_temp_pct is not None and set(r._fans()) & set(fans)
         ]
         applied: dict[FanKey, int] = self.hass.data[DOMAIN].setdefault("fan_applied", {})
+        before = set(applied)
         if speeds:
             target = max(speeds)
             if applied.get(key) == target:
@@ -2652,6 +2686,8 @@ class RoomControlLight(LightEntity):
             else:
                 _LOGGER.debug("%s: fans %s off", self.entity_id, fans)
                 call = ("turn_off", {ATTR_ENTITY_ID: fans})
+        if set(applied) != before:
+            keep_fans_applied(self.hass)
         self.hass.async_create_task(self.hass.services.async_call("fan", call[0], call[1], blocking=True))
 
     @callback

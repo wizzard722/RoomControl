@@ -1,5 +1,13 @@
 # Release notes
 
+## 2.1.1
+
+### Fixed: fan kept running after a restart
+- RoomControl kept the fan's activity (switched on by motion, then run-on, then off) only in memory. When Home Assistant restarted while the fan was running (e.g. after an update), RoomControl no longer knew it had switched the fan on, so the fan never went off. It now remembers across restarts which fans it has on: a fan still running after a restart without motion runs on for the run-on time and then switches off (or goes to 1% with that option).
+- Note: with *On by temperature* the fan keeps running while the temperature is at or above the limit; the Fan card says so ("the fan runs because of the temperature").
+
+---
+
 ## 2.1.0
 
 ### Two kinds of vacation: at home and elsewhere

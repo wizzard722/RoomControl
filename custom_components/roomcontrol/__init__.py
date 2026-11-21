@@ -265,6 +265,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await cover_memory.async_load()
     cover_memory.start()
     _data(hass)["cover_memory"] = cover_memory  # before the platforms: cover/sensor read it
+    from .light import async_load_fans_applied  # noqa: PLC0415
+
+    await async_load_fans_applied(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     clocks.start()
     locks.start()
