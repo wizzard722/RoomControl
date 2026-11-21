@@ -1,8 +1,6 @@
 # Release notes
 
-## 2.1.0b1 (beta)
-
-Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+## 2.1.0
 
 ### Two kinds of vacation: at home and elsewhere
 - Vacation is now **Off**, **At home** or **Elsewhere** (General settings › Vacation; also the new **Vakantie** select on the General device: `select.roomcontrol_generiek_vakantie_soort`, options off / home / away). The *Vakantie* switch still switches vacation on and off.
