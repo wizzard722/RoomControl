@@ -3987,7 +3987,7 @@ _vacuumPerson(e){return(this.settings.vacuum_persons??this.settings.persons).inc
         white-space: nowrap;
       }
 
-      .ov-tile:has(.ov-w) > .ov-tile-name {
+      .ov-tile:has(.ov-w, .ov-tr) > .ov-tile-name {
         padding-top: 4px;
       }
 
@@ -4013,8 +4013,18 @@ _vacuumPerson(e){return(this.settings.vacuum_persons??this.settings.persons).inc
         color: var(--success-color, #2e7d32);
       }
 
-      .ov-w ~ .ov-lock {
-        top: 36px;
+      .ov-tr {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .ov-tr .ov-w,
+      .ov-tr .ov-lock {
+        position: static;
       }
 
       .ov-act-hint {
@@ -7480,8 +7490,7 @@ _vacuumPerson(e){return(this.settings.vacuum_persons??this.settings.persons).inc
           </div>`})}${n.map(e=>{let n=this.hass.states[e.entity_id],r=n?.state===`on`,i=e.may_off===!1;return F`
           <button class="ov-tile dev ${r?`on`:``}" aria-pressed=${r?`true`:`false`} ?disabled=${!n} title=${i&&r?V(`switches.always_on`,t):``}
             @click=${()=>{n&&(i&&r||H(this.hass,e.entity_id.split(`.`)[0],r?`turn_off`:`turn_on`,{entity_id:e.entity_id}).catch(()=>{}))}}>
-            ${W2?this._ovBadge(W2[`switch:${e.entity_id}`],r):L}
-            ${i?F`<ha-icon class="ov-lock" icon="mdi:lock-outline" aria-label=${V(`switches.always_on`,t)}></ha-icon>`:L}
+            ${i?F`<span class="ov-tr">${F`<ha-icon class="ov-lock" icon="mdi:lock-outline" aria-label=${V(`switches.always_on`,t)}></ha-icon>`}${W2?this._ovBadge(W2[`switch:${e.entity_id}`],r):L}</span>`:W2?this._ovBadge(W2[`switch:${e.entity_id}`],r):L}
             <ha-icon icon=${n?.attributes.icon??(r?`mdi:power-plug`:`mdi:power-plug-off-outline`)}></ha-icon>
             <span class="ov-tile-name">${n?.attributes.friendly_name??e.entity_id}</span>
             <span class="ov-tile-val">${n?V(r?`card.on`:`card.off`,t):V(`switches.missing`,t)}${i?` · ${V(`switches.always_on_short`,t)}`:``}</span>
