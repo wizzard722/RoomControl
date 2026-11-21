@@ -60,6 +60,7 @@ SETTING_ENERGY = "energy"
 SIGNAL_ENERGY = "roomcontrol_energy"  # sent after each check (every 30 s)
 PHASES = ("L1", "L2", "L3")
 CHARGE_EFFICIENCY = 0.9  # of the power drawn, this much ends up in the battery
+SOC_BRIDGE_MAX = 10.0  # percent points: a car reading further below the estimate wins
 CHARGING_STATES = {"charging", "on", "true", "laden", "bezig met laden"}
 
 
@@ -330,6 +331,7 @@ class Energy:
         # and then: what was charged since its last update, to estimate it.
         self.kwh_since_soc = 0.0
         self._soc_seen: tuple[str, str] | None = None
+        self._soc_value: float | None = None  # the car's previous reading
         self._last: datetime | None = None
         self.sessions: list[dict[str, Any]] = []
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.ev_sessions")
@@ -466,8 +468,7 @@ class Energy:
                 self.soc_last = soc
             self._end_session(now)
         if new_reading:
-            # What was charged up to now is in the car's new reading.
-            self.kwh_since_soc = 0.0
+            self._take_reading(cfg, soc)
         if car:
             # The charged kWh as it is now (the status was made before adding).
             car = {**car, "charged_kwh": round(self.charged_kwh, 1) if self.charging_since else car.get("charged_kwh"),
@@ -528,6 +529,22 @@ class Energy:
             "session_kwh": round(self.charged_kwh, 3),
             "checked_at": dt_util.utcnow().isoformat(),
         }
+
+    def _take_reading(self, cfg: dict[str, Any], soc: float | None) -> None:
+        """The car sent a new battery level. A level at or above what RoomControl
+        estimated counts as it is. One below it is mostly the car reporting late:
+        the estimate then stays where it was (no jump back) and only the part the
+        car has not reported yet stays estimated — unless they differ by more
+        than SOC_BRIDGE_MAX, then the car is right."""
+        battery = _num(cfg.get("battery_kwh"), 8.8)
+        before = None
+        if self._soc_value is not None and battery:
+            before = min(100.0, self._soc_value + self.kwh_since_soc * CHARGE_EFFICIENCY / battery * 100)
+        self._soc_value = soc
+        if soc is None or before is None or soc >= before or before - soc > SOC_BRIDGE_MAX:
+            self.kwh_since_soc = 0.0
+        else:
+            self.kwh_since_soc = (before - soc) / 100 * battery / CHARGE_EFFICIENCY
 
     def history(self) -> dict[str, Any]:
         """Totals for today (the running session included), this month, the

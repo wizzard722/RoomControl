@@ -6,6 +6,7 @@
 - The car's battery level sensor (e.g. Audi Connect) updates only a few times. RoomControl now adds what it calculated was charged since the car's last reading (about 90% of the power drawn ends up in the battery), so the battery level and the progress bar keep moving while charging.
 - The progress bar shows the car's own reading in green and the estimated part charged since in a lighter, striped green, with a legend ("64% from the car · 11:44", "+8% charged since (estimate)"); the number shows "≈ 72%". As soon as the car sends a new reading, that reading counts again. The time to full and the kWh in the battery use the estimate too.
 - The *Car charging* sensor has new attributes **Battery level (estimate)** and **Battery level from the car at**.
+- A new reading from the car is handled as follows: a level **at or above** the estimate counts as it is and the estimated part starts again from 0. A level **below** the estimate is mostly the car reporting late: the shown level then doesn't jump back, and only the part the car hasn't reported yet stays estimated. When the car's level is more than 10 points below the estimate, the car is right.
 
 ---
 
