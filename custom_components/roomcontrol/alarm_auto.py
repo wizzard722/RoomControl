@@ -517,7 +517,7 @@ class AlarmAutomation:
                 self._rearm_timer = None
                 self._rearm_at = None
                 self._rearm_who = []
-                if self.arrive_lights():
+                if self.arrive_lights() and self.arrive_lights_go_off():
                     self._log("arrive_lights_off")
                     self._arrive_lights(False)
                 again = self.slot_now()
@@ -826,7 +826,7 @@ class AlarmAutomation:
         if self._away_timer is not None and self._away_at is not None:
             add(self._away_at, "away", "", self.away_target())
         if self._rearm_timer is not None and self._rearm_at is not None:
-            if self.arrive_lights():
+            if self.arrive_lights() and self.arrive_lights_go_off():
                 add(self._rearm_at, "arrive_lights_off", "", None)
             if slot := self.slot_now():
                 add(self._rearm_at, "rearm", slot.get("name") or "", slot.get("state"))

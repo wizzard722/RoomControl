@@ -5,6 +5,7 @@
 ### Fixed: coming home switched off lamps of a running time slot
 - When the wait time after someone came home (or *Home later*) ended, RoomControl switched the rooms' lamps off again, also lamps of a light bundle whose own time slot was still running. Those lamps now stay on, like lamps held by the evening slot or lux control.
 - The coming-home card on the Rooms page only says "Then lamps off" when at least one lamp will actually go off; otherwise it says "Wait time is running".
+- The descriptions say so too: the wait time setting (Alarm › Automatic › Someone comes home), the room option *Keep on for Home later*, and the alarm's *Coming up* and log ("Lamps outside a time slot off after coming home"), which only list it when lamps will go off.
 
 ---
 
