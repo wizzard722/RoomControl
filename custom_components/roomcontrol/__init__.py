@@ -71,11 +71,30 @@ async def _async_save(
     """Update rooms and/or settings, persist to .storage and notify entities."""
     data = _data(hass)
     if rooms is not None:
+        _without_motion(hass, data.get("rooms", []), rooms)
         data["rooms"] = rooms
     if settings is not None:
         data["settings"] = {**DEFAULT_SETTINGS, **settings}
     await data["store"].async_save({"rooms": data["rooms"], "settings": data["settings"]})
     async_dispatcher_send(hass, SIGNAL_CONFIG_UPDATED)
+
+
+def _without_motion(hass: HomeAssistant, old: list[dict[str, Any]], new: list[dict[str, Any]]) -> None:
+    """A room whose last motion sensor was removed: its learned grace period
+    is forgotten and Smart › adaptive grace period goes off (it learns from
+    motion)."""
+    from .const import CONF_ADAPTIVE_GRACE  # noqa: PLC0415
+    from .rooms import room_motion_sensors  # noqa: PLC0415
+
+    before = {r.get("area_id"): bool(room_motion_sensors(r)) for r in old or [] if isinstance(r, dict)}
+    for room in new:
+        area = room.get("area_id") if isinstance(room, dict) else None
+        if not area or not before.get(area) or room_motion_sensors(room):
+            continue
+        room.pop(CONF_ADAPTIVE_GRACE, None)
+        if (learn := _data(hass).get("learn")) is not None:
+            learn.forget(area, "grace_extra")
+        _LOGGER.info("RoomControl: %s has no motion sensors any more: learned grace period forgotten", area)
 
 
 async def _async_save_rooms(hass: HomeAssistant, rooms: list[dict[str, Any]]) -> None:

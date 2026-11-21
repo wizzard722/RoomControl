@@ -21,6 +21,9 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### Overview: lock next to the power badge
 - On a switch tile that may never go off, the lock now sits to the left of the power badge, on the same line, instead of below it.
 
+### Last motion sensor removed: learned grace period forgotten
+- When a room's last motion sensor is removed, RoomControl forgets the grace period it learned for that room and switches **Smart › Adaptive grace period** off (it learns from motion, so without sensors it can't).
+
 ### One "Motion" sensor per room
 - Every room with motion sensors gets a binary sensor **Motion** ("Beweging") on its device (RoomControl › room › Sensors), e.g. `binary_sensor.roomcontrol_woonkamer_beweging`. It combines all the room's motion sensors: on while any of them sees motion.
 - Attributes: the sensors, which see motion now (`motion_now`) and when the last motion was (`last_motion`). A sensor that is unavailable is skipped.
