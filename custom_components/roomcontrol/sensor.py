@@ -142,30 +142,80 @@ class EvChargingSensor(SensorEntity):
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._refresh))
         self._refresh()
 
-    def _car(self) -> dict[str, Any] | None:
+    def _status(self) -> dict[str, Any]:
         energy = self.hass.data.get(DOMAIN, {}).get("energy")
-        return (energy.status().get("car") if energy is not None else None) or None
+        return energy.status() if energy is not None else {}
 
     @callback
     def _refresh(self, *_: Any) -> None:
-        car = self._car()
+        status = self._status()
+        car = status.get("car") or None
         self._attr_available = car is not None
         self._attr_native_value = (car.get("kw") or 0.0) if car else None
         self._attr_icon = "mdi:car-electric" if car and car.get("charging") else "mdi:car"
-        self._attr_extra_state_attributes = {} if not car else {
-            "charging": car.get("charging"),
-            "car": car.get("name") or None,
-            "battery_level": car.get("soc"),
-            "battery_kwh": car.get("kwh"),
-            "battery_size_kwh": car.get("battery_kwh"),
-            "full_at": car.get("full_at"),
-            "charging_since": car.get("since"),
-            "charged_kwh": car.get("charged_kwh"),
-            "estimate_kw": car.get("estimate_kw"),
-            "from_car": car.get("from_sensor"),
-            "plugged_in": car.get("plugged"),
-            "room": car.get("room"),
-            "phase": car.get("phase"),
-        }
+        if not car:
+            self._attr_extra_state_attributes = {}
+        else:
+            price = status.get("price") or {}
+            best = price.get("cheapest") or {}
+            hist = status.get("history") or {}
+            today, month, year = hist.get("today") or {}, hist.get("month") or {}, hist.get("days365") or {}
+            last = next((r for r in hist.get("sessions") or [] if not r.get("running")), None) or {}
+            room = car.get("room")
+            from homeassistant.helpers import area_registry as ar  # noqa: PLC0415
+
+            area = ar.async_get(self.hass).async_get_area(room) if room else None
+            self._attr_extra_state_attributes = {
+                # The car now
+                "charging": bool(car.get("charging")),
+                "car": car.get("name") or None,
+                "battery_level": car.get("soc"),
+                "battery_kwh": car.get("kwh"),
+                "battery_size_kwh": car.get("battery_kwh"),
+                "plugged_in": car.get("plugged"),
+                "full_at": car.get("full_at"),
+                # This charging session
+                "charging_since": car.get("since"),
+                "charged_kwh": car.get("charged_kwh") or 0.0,
+                "solar_kwh": car.get("solar_kwh") or 0.0,
+                "grid_kwh": car.get("grid_kwh") or 0.0,
+                "cost": car.get("cost"),
+                "price_kwh": car.get("price_kwh"),
+                # How it is worked out
+                "estimate_kw": car.get("estimate_kw"),
+                "from_car": bool(car.get("from_sensor")),
+                "phase_power_w": car.get("phase_watts"),
+                "room": area.name if area else room,
+                "phase": car.get("phase"),
+                # Energy price and the cheapest time to charge
+                "price_now": price.get("now"),
+                "needed_kwh": price.get("kwh"),
+                "needed_hours": price.get("hours"),
+                "cheapest_start": best.get("start"),
+                "cheapest_end": best.get("end"),
+                "cheapest_price": best.get("avg"),
+                "cheapest_cost": best.get("cost"),
+                "cheapest_sun_pct": best.get("sun_pct"),
+                "ready_by": price.get("ready_by"),
+                # Charged
+                "today_kwh": today.get("kwh", 0.0),
+                "today_cost": today.get("cost"),
+                "month_sessions": month.get("count", 0),
+                "month_kwh": month.get("kwh", 0.0),
+                "month_solar_kwh": month.get("solar_kwh", 0.0),
+                "month_grid_kwh": month.get("grid_kwh", 0.0),
+                "month_cost": month.get("cost"),
+                "month_saved": month.get("saved"),
+                "year_kwh": year.get("kwh", 0.0),
+                "year_cost": year.get("cost"),
+                "year_saved": year.get("saved"),
+                "last_session_end": last.get("end"),
+                "last_session_kwh": last.get("kwh"),
+                "last_session_cost": last.get("cost"),
+            }
+            # Leave out what does not apply (no such sensor or setting).
+            self._attr_extra_state_attributes = {
+                k: v for k, v in self._attr_extra_state_attributes.items() if v is not None
+            }
         if self.hass is not None and self.entity_id:
             self.async_write_ha_state()

@@ -100,6 +100,90 @@
           },
           "phase": {
             "name": "Phase"
+          },
+          "solar_kwh": {
+            "name": "Charged from the sun"
+          },
+          "grid_kwh": {
+            "name": "Charged from the grid"
+          },
+          "cost": {
+            "name": "Cost this session"
+          },
+          "price_kwh": {
+            "name": "Price per kWh now"
+          },
+          "phase_power_w": {
+            "name": "House on the charger's phase"
+          },
+          "price_now": {
+            "name": "Energy price now"
+          },
+          "needed_kwh": {
+            "name": "Needed to full"
+          },
+          "needed_hours": {
+            "name": "Hours needed to full"
+          },
+          "cheapest_start": {
+            "name": "Cheapest time from"
+          },
+          "cheapest_end": {
+            "name": "Cheapest time until"
+          },
+          "cheapest_price": {
+            "name": "Cheapest average price"
+          },
+          "cheapest_cost": {
+            "name": "Cost at the cheapest time"
+          },
+          "cheapest_sun_pct": {
+            "name": "Expected sun at the cheapest time"
+          },
+          "ready_by": {
+            "name": "Charged by"
+          },
+          "today_kwh": {
+            "name": "Charged today"
+          },
+          "today_cost": {
+            "name": "Cost today"
+          },
+          "month_sessions": {
+            "name": "Sessions this month"
+          },
+          "month_kwh": {
+            "name": "Charged this month"
+          },
+          "month_solar_kwh": {
+            "name": "From the sun this month"
+          },
+          "month_grid_kwh": {
+            "name": "From the grid this month"
+          },
+          "month_cost": {
+            "name": "Cost this month"
+          },
+          "month_saved": {
+            "name": "Saved this month"
+          },
+          "year_kwh": {
+            "name": "Charged in 365 days"
+          },
+          "year_cost": {
+            "name": "Cost in 365 days"
+          },
+          "year_saved": {
+            "name": "Saved in 365 days"
+          },
+          "last_session_end": {
+            "name": "Last session ended"
+          },
+          "last_session_kwh": {
+            "name": "Last session"
+          },
+          "last_session_cost": {
+            "name": "Cost last session"
           }
         }
       }

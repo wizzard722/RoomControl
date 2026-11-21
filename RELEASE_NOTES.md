@@ -7,6 +7,10 @@
 - A warning shows when a phase looks set up the wrong way round, e.g. Enphase *Power Consumption* (total use) as Consumed together with *Net Power Consumption* as Returned: that counted the sun twice and made the car's charging estimate wrong. For Enphase: Consumed = *Net Power Consumption*, Returned = empty, Solar = *Power Production*.
 - The sun/grid split of charging also works with one signed net sensor per phase.
 
+### "Car charging" sensor: all values as attributes
+- The *Car charging* sensor on the General device now carries everything RoomControl knows, with names in your language: the car (charging, battery level and kWh, battery size, charging cable, full at), this session (since, kWh, from the sun and from the grid, cost, price per kWh), how it is worked out (estimate, from the car, the house on the charger's phase, room by name, phase), the energy price and the cheapest time to charge (price now, kWh and hours needed, from–until, average price, cost, expected sun, charged by), and the totals (today, this month with sun/grid, cost and savings, 365 days, last session).
+- Values that don't apply (no such sensor or setting) are left out.
+
 ---
 
 ## 2.0.1

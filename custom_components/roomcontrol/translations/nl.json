@@ -100,6 +100,90 @@
           },
           "phase": {
             "name": "Fase"
+          },
+          "solar_kwh": {
+            "name": "Geladen van de zon"
+          },
+          "grid_kwh": {
+            "name": "Geladen van het net"
+          },
+          "cost": {
+            "name": "Kosten deze laadbeurt"
+          },
+          "price_kwh": {
+            "name": "Prijs per kWh nu"
+          },
+          "phase_power_w": {
+            "name": "Huis op de fase van de lader"
+          },
+          "price_now": {
+            "name": "Energieprijs nu"
+          },
+          "needed_kwh": {
+            "name": "Nodig tot vol"
+          },
+          "needed_hours": {
+            "name": "Uren nodig tot vol"
+          },
+          "cheapest_start": {
+            "name": "Goedkoopste tijd vanaf"
+          },
+          "cheapest_end": {
+            "name": "Goedkoopste tijd tot"
+          },
+          "cheapest_price": {
+            "name": "Goedkoopste gemiddelde prijs"
+          },
+          "cheapest_cost": {
+            "name": "Kosten in de goedkoopste tijd"
+          },
+          "cheapest_sun_pct": {
+            "name": "Verwachte zon in de goedkoopste tijd"
+          },
+          "ready_by": {
+            "name": "Klaar om"
+          },
+          "today_kwh": {
+            "name": "Vandaag geladen"
+          },
+          "today_cost": {
+            "name": "Kosten vandaag"
+          },
+          "month_sessions": {
+            "name": "Laadbeurten deze maand"
+          },
+          "month_kwh": {
+            "name": "Deze maand geladen"
+          },
+          "month_solar_kwh": {
+            "name": "Deze maand van de zon"
+          },
+          "month_grid_kwh": {
+            "name": "Deze maand van het net"
+          },
+          "month_cost": {
+            "name": "Kosten deze maand"
+          },
+          "month_saved": {
+            "name": "Bespaard deze maand"
+          },
+          "year_kwh": {
+            "name": "Geladen in 365 dagen"
+          },
+          "year_cost": {
+            "name": "Kosten in 365 dagen"
+          },
+          "year_saved": {
+            "name": "Bespaard in 365 dagen"
+          },
+          "last_session_end": {
+            "name": "Laatste laadbeurt geëindigd"
+          },
+          "last_session_kwh": {
+            "name": "Laatste laadbeurt"
+          },
+          "last_session_cost": {
+            "name": "Kosten laatste laadbeurt"
           }
         }
       }
