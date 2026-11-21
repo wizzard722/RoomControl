@@ -357,7 +357,7 @@ class AlarmAutomation:
         cfg = self.cfg()
         if not cfg.get("slots_on", True):
             return None
-        slots = mode_slots(cfg.get("slots") or [], bool(self.hass.data.get(DOMAIN, {}).get("vacation")))
+        slots = mode_slots(cfg.get("slots") or [], self.hass.data.get(DOMAIN, {}).get("vacation"))
         if not slots:
             return None
         from .switch import _sun_phase
@@ -786,7 +786,7 @@ class AlarmAutomation:
 
         home = self.anyone_home()
         if cfg.get("slots_on", True):
-            vacation = bool(self.hass.data.get(DOMAIN, {}).get("vacation"))
+            vacation = self.hass.data.get(DOMAIN, {}).get("vacation")
             ends_to = None
             if cfg.get("outside", "disarm") == "disarm":
                 ends_to = "disarmed" if home else (self.away_target() if cfg.get("away_on", True) else None)

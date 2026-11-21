@@ -2,7 +2,8 @@
 
 A slot: {"days": [0..6] (Monday = 0), "start": {"type": "time", "time":
 "HH:MM"} | {"type": "dusk"} | {"type": "dark"}, "end": {"type": "time",
-"time": "HH:MM"} | {"type": "sunrise"}, "holiday": "normal" | "vacation"}.
+"time": "HH:MM"} | {"type": "sunrise"}, "holiday": "normal" | "vacation" (any
+vacation) | "vacation_home" | "vacation_away"}.
 A slot that ends before it starts (or at sunrise) runs past midnight into
 the next day.
 """
@@ -53,12 +54,27 @@ def slot_part(slot: dict[str, Any], now: datetime, phase: str, sun_down: bool) -
     return None
 
 
-def mode_slots(slots: list[Any], vacation: bool) -> list[dict[str, Any]]:
-    """The slots that count now: normal ones; during vacation the vacation
-    slots — or, when there are none, the normal ones."""
+def is_vacation_slot(slot: dict[str, Any]) -> bool:
+    return str(slot.get("holiday") or "") in ("vacation", "only", "vacation_home", "vacation_away")
+
+
+def slot_fits(slot: dict[str, Any], vacation: Any) -> bool:
+    """A vacation slot that applies in this vacation ("home" / "away"):
+    "vacation" (older "only") in both, "vacation_home" / "vacation_away" in one."""
+    holiday = str(slot.get("holiday") or "")
+    if holiday in ("vacation", "only"):
+        return True
+    kind = "home" if vacation is True else vacation
+    return holiday == f"vacation_{kind}"
+
+
+def mode_slots(slots: list[Any], vacation: Any) -> list[dict[str, Any]]:
+    """The slots that count now: normal ones; during a vacation (False /
+    "home" = at home / "away" = elsewhere; True counts as "home") the
+    vacation slots for that kind of vacation — or, when there are none, the
+    normal ones."""
     slots = [s for s in slots or [] if isinstance(s, dict)]
-    is_vacation = lambda s: s.get("holiday") in ("vacation", "only")  # noqa: E731 ("only": older)
-    normal = [s for s in slots if not is_vacation(s)]
+    normal = [s for s in slots if not is_vacation_slot(s)]
     if vacation:
-        return [s for s in slots if is_vacation(s)] or normal
+        return [s for s in slots if is_vacation_slot(s) and slot_fits(s, vacation)] or normal
     return normal

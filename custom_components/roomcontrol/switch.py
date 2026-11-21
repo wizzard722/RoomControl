@@ -265,7 +265,7 @@ def _sun_phase(hass: HomeAssistant) -> tuple[str, bool]:
 
 def all_dim_active(hass: HomeAssistant) -> bool:
     """One of the All dim time slots runs now (vacation slots in vacation mode)."""
-    slots = mode_slots(all_dim_slots(hass), bool(hass.data.get(DOMAIN, {}).get("vacation")))
+    slots = mode_slots(all_dim_slots(hass), hass.data.get(DOMAIN, {}).get("vacation"))
     if not slots:
         return False
     phase, sun_down = _sun_phase(hass)
@@ -607,8 +607,14 @@ class AnnounceSwitch(SwitchEntity):
 
 
 class VacationSwitch(RestoreEntity, SwitchEntity):
-    """Vacation: bundles' time slots "only during vacation" run, those "not
-    during vacation" don't (e.g. staying up later). Kept across restarts."""
+    """Vacation: time slots for vacation run instead of the normal ones.
+    Two kinds: at home ("home") and elsewhere ("away"). hass.data "vacation"
+    holds False, "home" or "away". Switched on here or by the alarm (Armed
+    Vacation), the kind follows the distance (general setting
+    "vacation_auto_kind", default on): elsewhere when even the closest person
+    is further than "vacation_far_km" (default 100) from home, else at home.
+    Chosen with the "Vakantie" select it stays as chosen until vacation ends.
+    Kept across restarts."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -628,13 +634,19 @@ class VacationSwitch(RestoreEntity, SwitchEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         # by_alarm: switched on because the alarm went to Armed Vacation.
-        return {"roomcontrol_vacation": True, "by_alarm": bool(getattr(self, "_by_alarm", False))}
+        return {"roomcontrol_vacation": True, "by_alarm": bool(getattr(self, "_by_alarm", False)),
+                "vacation_kind": self.hass.data.get(DOMAIN, {}).get("vacation") or None,
+                "kind_chosen": bool(getattr(self, "_chosen", False))}
 
     async def async_added_to_hass(self) -> None:
         last = await self.async_get_last_state()
         self._by_alarm = bool(last is not None and last.state == "on" and last.attributes.get("by_alarm"))
+        self._chosen = bool(last is not None and last.state == "on" and last.attributes.get("kind_chosen"))
+        self.hass.data.setdefault(DOMAIN, {})["vacation_switch"] = self
         if last is not None and last.state == "on":
-            self._set(True, self._by_alarm)
+            kind = last.attributes.get("vacation_kind")
+            self._set(True, self._by_alarm, kind if self._chosen and kind in ("home", "away") else None)
+        self.async_on_remove(async_track_time_interval(self.hass, self._recheck_kind, timedelta(minutes=5)))
         self._unsub_alarm: CALLBACK_TYPE | None = None
         self._watch_alarm()
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._watch_alarm))
@@ -691,13 +703,47 @@ class VacationSwitch(RestoreEntity, SwitchEntity):
         elif new.state != "armed_vacation" and old.state == "armed_vacation" and self.is_on:
             self._set(False)
 
+    def auto_kind(self) -> str:
+        """Elsewhere when even the closest person is further than the set
+        distance from home; else at home (also when the distance is unknown)."""
+        settings = self._settings()
+        if settings.get("vacation_auto_kind") is False:
+            return "home"
+        far = settings.get("vacation_far_km")
+        far = float(far) if isinstance(far, (int, float)) else 100.0
+        alarm = self.hass.data.get(DOMAIN, {}).get("alarm")
+        km = alarm.distance_km() if alarm is not None else None
+        return "away" if km is not None and km > far else "home"
+
     @callback
-    def _set(self, on: bool, by_alarm: bool = False) -> None:
+    def _recheck_kind(self, *_: Any) -> None:
+        """While on and not chosen by hand: follow the distance."""
+        if self.is_on and not self._chosen and (kind := self.auto_kind()) != self.hass.data.get(DOMAIN, {}).get("vacation"):
+            self._set(True, self._by_alarm)
+
+    @callback
+    def _set(self, on: bool, by_alarm: bool = False, kind: str | None = None) -> None:
         self._by_alarm = on and by_alarm
-        self.hass.data.setdefault(DOMAIN, {})["vacation"] = on
+        if not on:
+            self._chosen = False
+        elif kind in ("home", "away"):
+            self._chosen = True
+        elif not self._chosen or not self.is_on:
+            self._chosen = False
+        current = self.hass.data.get(DOMAIN, {}).get("vacation")
+        value = (kind if kind in ("home", "away") else (current if self._chosen and current else self.auto_kind())) if on else False
+        self.hass.data.setdefault(DOMAIN, {})["vacation"] = value
         if self.entity_id:
             self.async_write_ha_state()
         async_dispatcher_send(self.hass, SIGNAL_VACATION)
+
+    @callback
+    def set_mode(self, mode: str) -> None:
+        """"off", "home" or "away" (the Vakantie select)."""
+        if mode == "off":
+            self._set(False)
+        elif mode in ("home", "away"):
+            self._set(True, self._by_alarm if self.is_on else False, mode)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         self._set(True)

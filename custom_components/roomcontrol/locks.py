@@ -115,7 +115,7 @@ class LockManager:
         """When the lock goes on lock next by its times (None: no times on)."""
         if lock.get("slots_enabled") is False:
             return None
-        vacation = bool(self.hass.data.get(DOMAIN, {}).get("vacation"))
+        vacation = self.hass.data.get(DOMAIN, {}).get("vacation")
         local = dt_util.as_local(now)
         for offset in range(8):
             day = local + timedelta(days=offset)
@@ -156,7 +156,7 @@ class LockManager:
         if lock.get("slots_enabled") is False:
             return None
         since = max(since, now - CATCH_UP_MAX)
-        vacation = bool(self.hass.data.get(DOMAIN, {}).get("vacation"))
+        vacation = self.hass.data.get(DOMAIN, {}).get("vacation")
         local_now, local_since = dt_util.as_local(now), dt_util.as_local(since)
         latest: datetime | None = None
         day = local_since.date()
@@ -213,7 +213,7 @@ class LockManager:
             return []
         now = dt_util.as_local(now)
         t = now.hour * 60 + now.minute
-        vacation = bool(self.hass.data.get(DOMAIN, {}).get("vacation"))
+        vacation = self.hass.data.get(DOMAIN, {}).get("vacation")
         entries = mode_slots(lock.get("slots", []), vacation)
         today = now.date().isoformat()
         due = []

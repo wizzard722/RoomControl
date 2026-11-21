@@ -799,12 +799,9 @@ class RoomControlLight(LightEntity):
         """The slots that count now: normal ones; during vacation (the
         "Vakantie" switch) the bundle's vacation slots — or, when it has none,
         its normal slots."""
-        slots = [s for s in self._bopt(lamp, "slots", []) or [] if isinstance(s, dict)]
-        is_vacation = lambda s: s.get("holiday") in ("vacation", "only")  # noqa: E731 ("only": older)
-        normal = [s for s in slots if not is_vacation(s)]
-        if self.hass.data.get(DOMAIN, {}).get("vacation"):
-            return [s for s in slots if is_vacation(s)] or normal
-        return normal
+        from .slots import mode_slots  # noqa: PLC0415
+
+        return mode_slots(self._bopt(lamp, "slots", []) or [], self.hass.data.get(DOMAIN, {}).get("vacation"))
 
     def _own_active(self) -> list[str]:
         """Lamps of bundles with own times whose slot is running now."""
@@ -1458,7 +1455,7 @@ class RoomControlLight(LightEntity):
         if self.follows_dim and self._members:
             from .switch import all_dim_slots  # here: avoids an import cycle
 
-            vacation = bool(self.hass.data.get(DOMAIN, {}).get("vacation"))
+            vacation = self.hass.data.get(DOMAIN, {}).get("vacation")
             slot_events(mode_slots(all_dim_slots(self.hass), vacation), "all_dim_on", "all_dim_off", None, [])
         # Alarm clocks of this room.
         clocks = self.hass.data.get(DOMAIN, {}).get("clocks")
@@ -2079,7 +2076,7 @@ class RoomControlLight(LightEntity):
         slots = motion_slots(self.hass, sensor)
         if slots is None:
             return True
-        slots = mode_slots(slots, bool(self.hass.data.get(DOMAIN, {}).get("vacation")))
+        slots = mode_slots(slots, self.hass.data.get(DOMAIN, {}).get("vacation"))
         now, phase = dt_util.as_local(dt_util.now()), self._phase()
         return any(self._slot_part(slot, now, phase) is not None for slot in slots)
 

@@ -187,6 +187,17 @@
           }
         }
       }
-    }
+    },
+    "select": {
+      "vacation": {
+        "name": "Vakantie",
+        "state": {
+          "off": "Uit",
+          "home": "Thuis",
+          "away": "Elders"
+        }
+      }
+    },
+    "switch": {}
   }
 }

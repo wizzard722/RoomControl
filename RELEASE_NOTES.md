@@ -1,6 +1,14 @@
 # Release notes
 
-## 2.0.2
+## 2.1.0b1 (beta)
+
+Beta: please test and report issues on the [issue tracker](https://github.com/wizzard722/RoomControl/issues).
+
+### Two kinds of vacation: at home and elsewhere
+- Vacation is now **Off**, **At home** or **Elsewhere** (General settings › Vacation; also the new **Vakantie** select on the General device: `select.roomcontrol_generiek_vakantie_soort`, options off / home / away). The *Vakantie* switch still switches vacation on and off.
+- **Kind follows the distance** (on by default): vacation switched on here, with the switch or by the alarm (Armed Vacation) is *elsewhere* when even the closest person is further than **Elsewhere from** (default 100 km, settable) from home, else *at home*; it is checked again every 5 minutes. Choosing a kind yourself keeps it until vacation ends.
+- Every time slot (light bundles, motion sensors, All dim, locks and the alarm's time slots) can be **Normal**, **Vacation (both)**, **Vacation at home** or **Vacation elsewhere**. During a vacation the slots for that kind apply; when a bundle has none, its normal slots keep applying. Existing "Vacation" slots count for both kinds.
+- The slot editors show which vacation is on ("vacation elsewhere is on"), and the switch's attributes show `vacation_kind`.
 
 ### Energy: help for Enphase Envoy (and other net meters)
 - The energy settings explain per phase what belongs where: **Consumed** is what the house takes from the grid (a sensor that goes negative while returning, like Enphase's *Net Power Consumption*, is fine: then leave **Returned** empty); **Returned** only when your meter gives it separately as a positive value; not the house's total use.
