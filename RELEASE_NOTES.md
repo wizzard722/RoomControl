@@ -1,5 +1,13 @@
 # Release notes
 
+## 2.1.3
+
+### Fixed: coming home switched off lamps of a running time slot
+- When the wait time after someone came home (or *Home later*) ended, RoomControl switched the rooms' lamps off again, also lamps of a light bundle whose own time slot was still running. Those lamps now stay on, like lamps held by the evening slot or lux control.
+- The coming-home card on the Rooms page only says "Then lamps off" when at least one lamp will actually go off; otherwise it says "Wait time is running".
+
+---
+
 ## 2.1.2
 
 ### Car: battery level between the car's updates

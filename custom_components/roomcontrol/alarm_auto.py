@@ -456,6 +456,14 @@ class AlarmAutomation:
         """Persons for whom the "Later thuis" rooms' lamps are on after coming home."""
         return self.hass.data.setdefault(DOMAIN, {}).setdefault("arrive_active", set())
 
+    def arrive_lights_go_off(self) -> bool:
+        """At the end of the wait time, would any lamp go off? Not when every lamp
+        that is on is held (e.g. its light bundle's time slot still runs)."""
+        for entity in self.hass.data.get(DOMAIN, {}).get("entities", {}).values():
+            if getattr(entity, "_late_pending", False) and hasattr(entity, "late_home_off_lamps") and entity.late_home_off_lamps():
+                return True
+        return False
+
     @callback
     def _arrive_lights(self, on: bool, person: str | None = None) -> None:
         """Lamps of the rooms set for "Later thuis" on (it is dark) or off again.
@@ -751,7 +759,7 @@ class AlarmAutomation:
             "until": self._rearm_at.isoformat(),
             "who": ", ".join(self._rearm_who),
             "count": len(self._rearm_who),
-            "lights": bool(self.arrive_lights()),
+            "lights": bool(self.arrive_lights()) and self.arrive_lights_go_off(),
             "state": slot.get("state") if slot else None,
         }
 

@@ -1630,6 +1630,13 @@ class RoomControlLight(LightEntity):
             data.get("late_home_active") or data.get("arrive_active")
         )
 
+    def late_home_off_lamps(self) -> list[str]:
+        """The lamps that go off when "Later thuis" / the arrival time ends:
+        those on, except lamps held by a running time slot of their light
+        bundle, the evening slot or lux control."""
+        held = set(self._evening_lamps()) | set(self._lux_lamps_now()) | set(self._own_active())
+        return [e for e in self._members if (st := self.hass.states.get(e)) is not None and st.state == STATE_ON and e not in held]
+
     @callback
     def _on_late_home(self) -> None:
         """A "Later thuis" switch changed (or the sun set). Switched on and the
@@ -1653,9 +1660,7 @@ class RoomControlLight(LightEntity):
         if not self._late_pending:
             return
         self._late_pending = False
-        held = set(self._evening_lamps()) | set(self._lux_lamps_now())
-        is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
-        lamps = [e for e in self._members if is_on(e) and e not in held]
+        lamps = self.late_home_off_lamps()
         if lamps and not (self._any_motion() and presence_allows(self.hass, self._room)):
             self._auto_off("late home: arrived", lamps=lamps)
         self._check_idle()
