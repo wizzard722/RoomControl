@@ -24,6 +24,9 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### Last motion sensor removed: learned grace period forgotten
 - When a room's last motion sensor is removed, RoomControl forgets the grace period it learned for that room and switches **Smart › Adaptive grace period** off (it learns from motion, so without sensors it can't).
 
+### Motion sensors: time slots always in view
+- A room's **Motion & presence** card now always shows its motion sensors in full, each with its **Time slots** row (the same editor as light bundles: name, days, start, end, Normal / Vacation kinds, + Time slot). Before, they only showed after opening the sensor list, so they were easy to miss.
+
 ### One "Motion" sensor per room
 - Every room with motion sensors gets a binary sensor **Motion** ("Beweging") on its device (RoomControl › room › Sensors), e.g. `binary_sensor.roomcontrol_woonkamer_beweging`. It combines all the room's motion sensors: on while any of them sees motion.
 - Attributes: the sensors, which see motion now (`motion_now`) and when the last motion was (`last_motion`). A sensor that is unavailable is skipped.
