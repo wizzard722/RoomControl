@@ -124,11 +124,18 @@ class RoomFan(FanEntity):
         else:
             await self._call("turn_on")
 
+    async def _off(self) -> None:
+        """Off; with the room option "fan_off_min" (off = 1%) to 1% instead."""
+        if (stored_room(self.hass, self.area_id) or {}).get("fan_off_min"):
+            await self._call("set_percentage", percentage=1)
+        else:
+            await self._call("turn_off")
+
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._call("turn_off")
+        await self._off()
 
     async def async_set_percentage(self, percentage: int) -> None:
         if percentage == 0:
-            await self._call("turn_off")
+            await self._off()
         else:
             await self._call("set_percentage", percentage=percentage)

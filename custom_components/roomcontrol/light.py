@@ -2645,8 +2645,13 @@ class RoomControlLight(LightEntity):
             was_applied = applied.pop(key, None) is not None
             if not force_off and (not was_applied or self._manual):
                 return
-            _LOGGER.debug("%s: fans %s off", self.entity_id, fans)
-            call = ("turn_off", {ATTR_ENTITY_ID: fans})
+            if self._room.get("fan_off_min"):
+                # Option "off = 1%": e.g. ventilation that must never stop fully.
+                _LOGGER.debug("%s: fans %s to 1%% (off)", self.entity_id, fans)
+                call = ("set_percentage", {ATTR_ENTITY_ID: fans, "percentage": 1})
+            else:
+                _LOGGER.debug("%s: fans %s off", self.entity_id, fans)
+                call = ("turn_off", {ATTR_ENTITY_ID: fans})
         self.hass.async_create_task(self.hass.services.async_call("fan", call[0], call[1], blocking=True))
 
     @callback

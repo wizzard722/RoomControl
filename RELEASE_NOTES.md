@@ -30,6 +30,9 @@ Beta: please test and report issues on the [issue tracker](https://github.com/wi
 ### Grace period: your setting plus what was learned
 - With **Smart › Adaptive grace period** on, the grace period slider now shows both parts: **your setting** (blue, still set with the slider) and the **learned** extra time (purple, striped) on top, with the total, e.g. "Your setting 5:00 · Learned +1:30 = 6:30 min". The lights use the total, as before.
 
+### Fan: "off" can be 1%
+- New choice in a room's **Fan** card: **"Off" means** *Off* (as before) or *1%*. With 1%, every time RoomControl (or the room's fan entity) would switch the fans off they go to 1% instead, e.g. ventilation that must keep running a little. At smoke the fans still switch off completely. The card's summary shows "off = 1%".
+
 ### One "Motion" sensor per room
 - Every room with motion sensors gets a binary sensor **Motion** ("Beweging") on its device (RoomControl › room › Sensors), e.g. `binary_sensor.roomcontrol_woonkamer_beweging`. It combines all the room's motion sensors: on while any of them sees motion.
 - Attributes: the sensors, which see motion now (`motion_now`) and when the last motion was (`last_motion`). A sensor that is unavailable is skipped.
