@@ -85,6 +85,7 @@ from .const import (
     CONF_FAN_TEMP_SPEED,
     FAN_TEMP_HYSTERESIS,
     CONF_FAN_RUN_ON,
+    CONF_FULL_CONTROL,
     FAN_RUN_ON_MAX,
     VERSION,
     ALARM_ARMED_HOME,
@@ -515,6 +516,8 @@ class LampGroupLight(LightEntity):
 
 
 FAN_STORE_KEY = f"{DOMAIN}.fans_on"
+FAN_CONTROL_GRACE = 15  # s after a RoomControl fan command before full control checks
+FAN_CONTROL_TOLERANCE = 3  # percent
 
 
 def keep_fans_applied(hass: HomeAssistant) -> None:
@@ -2609,6 +2612,7 @@ class RoomControlLight(LightEntity):
 
     @callback
     def _setup_fan_temp(self) -> None:
+        self._setup_fan_control()
         config = self._fan_temp_config()
         self._track("fan_temp", [config[0]] if config else [], self._on_fan_temp_change)
         # Nobody home → the fan stays off; someone comes home → temperature counts again.
@@ -2688,6 +2692,96 @@ class RoomControlLight(LightEntity):
                 call = ("turn_off", {ATTR_ENTITY_ID: fans})
         if set(applied) != before:
             keep_fans_applied(self.hass)
+        self.hass.data[DOMAIN].setdefault("fan_cmd_at", {})[key] = dt_util.utcnow()
+        self.hass.async_create_task(self.hass.services.async_call("fan", call[0], call[1], blocking=True))
+
+    # ── fan: full control ──────────────────────────────────────────────────
+
+    def _fan_desired(self) -> int | None:
+        """The speed RoomControl wants for this room's fans now (None = off):
+        the highest of the shared activity and the rooms' temperature control."""
+        fans = self._fans()
+        key = fan_key(fans)
+        if not key:
+            return None
+        act = fan_activities(self.hass).get(key)
+        speeds = [act.pct] if act is not None and act.pct is not None else []
+        speeds += [
+            r._fan_temp_pct for r in self._fan_rooms()
+            if r._fan_temp_pct is not None and set(r._fans()) & set(fans)
+        ]
+        return max(speeds) if speeds else None
+
+    @callback
+    def _setup_fan_control(self) -> None:
+        """Full control (room option, as for lamps and curtains): the fans only follow RoomControl."""
+        on = bool(self._room.get(CONF_FULL_CONTROL)) and bool(self._fans())
+        self._track("fan_control", self._fans() if on else [], self._on_fan_state)
+        tick = self._tracks.get("fan_control_tick")
+        if on and tick is None:
+            self._tracks["fan_control_tick"] = ((), async_track_time_interval(
+                self.hass, self._fan_enforce_cb, timedelta(minutes=1)))
+        elif not on and tick is not None:
+            tick[1]()
+            del self._tracks["fan_control_tick"]
+
+    @callback
+    def _on_fan_state(self, _event: Event) -> None:
+        # Give a command of RoomControl a moment to arrive before checking.
+        async_call_later(self.hass, FAN_CONTROL_GRACE, self._fan_enforce_cb)
+
+    @callback
+    def _fan_enforce_cb(self, _now: Any = None) -> None:
+        # A @callback: Home Assistant runs it in the event loop.
+        self._fan_enforce()
+
+    @callback
+    def _fan_enforce(self) -> None:
+        """Full control: a fan in a different state than RoomControl wants is
+        put back (not during manual control or smoke; at most a few times a minute)."""
+        if not self._room.get(CONF_FULL_CONTROL) or self._manual or smoke_active(self.hass):
+            return
+        fans = self._fans()
+        if not fans:
+            return
+        data = self.hass.data[DOMAIN]
+        last = data.setdefault("fan_cmd_at", {}).get(fan_key(fans))
+        now = dt_util.utcnow()
+        if last is not None and (now - last).total_seconds() < FAN_CONTROL_GRACE:
+            return
+        want = self._fan_desired()
+        off_pct = 1 if self._room.get("fan_off_min") else None
+        target = want if want is not None else off_pct
+        wrong: list[str] = []
+        for fan in fans:
+            st = self.hass.states.get(fan)
+            if st is None or st.state in ("unavailable", "unknown"):
+                continue
+            pct = st.attributes.get("percentage")
+            is_on = st.state == STATE_ON
+            if target is None:
+                if is_on:
+                    wrong.append(fan)
+            elif not is_on or (isinstance(pct, (int, float)) and abs(pct - target) > FAN_CONTROL_TOLERANCE):
+                wrong.append(fan)
+        if not wrong:
+            return
+        reverts = [t for t in data.setdefault("fan_reverts", {}).get(fan_key(fans), []) if (now - t).total_seconds() < 60]
+        if len(reverts) >= 5:
+            _LOGGER.warning("Fan full control: %s keeps changing; not putting it back again for now", wrong)
+            return
+        data["fan_reverts"][fan_key(fans)] = [*reverts, now]
+        data["fan_cmd_at"][fan_key(fans)] = now
+        applied = data.setdefault("fan_applied", {})
+        if target is None:
+            applied.pop(fan_key(fans), None)
+            call = ("turn_off", {ATTR_ENTITY_ID: wrong})
+        else:
+            if want is not None:
+                applied[fan_key(fans)] = want
+            call = ("set_percentage", {ATTR_ENTITY_ID: wrong, "percentage": target})
+        _LOGGER.debug("%s: fan full control, %s back to %s", self.entity_id, wrong, target if target is not None else "off")
+        self._dbg("info", "fan_corrected", fans=wrong, to=target if target is not None else 0)
         self.hass.async_create_task(self.hass.services.async_call("fan", call[0], call[1], blocking=True))
 
     @callback

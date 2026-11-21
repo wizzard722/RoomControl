@@ -6,6 +6,9 @@
 - RoomControl kept the fan's activity (switched on by motion, then run-on, then off) only in memory. When Home Assistant restarted while the fan was running (e.g. after an update), RoomControl no longer knew it had switched the fan on, so the fan never went off. It now remembers across restarts which fans it has on: a fan still running after a restart without motion runs on for the run-on time and then switches off (or goes to 1% with that option).
 - Note: with *On by temperature* the fan keeps running while the temperature is at or above the limit; the Fan card says so ("the fan runs because of the temperature").
 
+### Full control now includes the fan
+- With a room's **Full control by RoomControl** switched on, the room's fans only follow RoomControl too: when a fan is in a different state than RoomControl wants (its motion steps, temperature control, or off / 1%), it is put back — checked whenever the fan changes and every minute. Not during manual control (Take over) or smoke, and at most 5 corrections a minute. A correction shows in the room's "What happened".
+
 ---
 
 ## 2.1.0
