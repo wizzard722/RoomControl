@@ -6,6 +6,10 @@
 - RoomControl kept the fan's activity (switched on by motion, then run-on, then off) only in memory. When Home Assistant restarted while the fan was running (e.g. after an update), RoomControl no longer knew it had switched the fan on, so the fan never went off. It now remembers across restarts which fans it has on: a fan still running after a restart without motion runs on for the run-on time and then switches off (or goes to 1% with that option).
 - Note: with *On by temperature* the fan keeps running while the temperature is at or above the limit; the Fan card says so ("the fan runs because of the temperature").
 
+### Car charging: the power decides
+- Charging is now detected from the power: as soon as the estimate on the charger's phase is at or above **Charging from**, the car counts as charging, even when the car's own sensor (e.g. Audi Connect, often minutes late) still says it isn't. Before, a set charging sensor overruled the power. The car's sensor can still add to it (it says charging while the estimate is low).
+- New **debug** button (bug icon) on the EV charger page: **What RoomControl knows** — why it does or doesn't see charging, and every value that goes into it: the phase sensors with their state, unit and last change, the house on the charger's phase, the rooms subtracted, the estimate, the limit, the charger maximum, the car's charging, cable and battery level sensors, the running session and when it was last checked.
+
 ### Full control now includes the fan
 - With a room's **Full control by RoomControl** switched on, the room's fans only follow RoomControl too: when a fan is in a different state than RoomControl wants (its motion steps, temperature control, or off / 1%), it is put back — checked whenever the fan changes and every minute. Not during manual control (Take over) or smoke, and at most 5 corrections a minute. A correction shows in the room's "What happened".
 

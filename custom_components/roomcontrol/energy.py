@@ -476,6 +476,44 @@ class Energy:
         net_kw = (sum(used) - sum(b or 0 for b in back)) / 1000  # the house's import from the grid now
         return min(kwh, max(0.0, net_kw) * hours)
 
+    def _debug(self, cfg: dict[str, Any], phase: str, phase_w: Any, on_phase: list[tuple[str, float]],
+               est_kw: Any, from_kw: float, car_says: Any, plugged: Any, soc: Any) -> dict[str, Any]:
+        """Everything that goes into "is the car charging?", for the panel's debug view."""
+        hass = self.hass
+
+        def ent(entity: str | None) -> dict[str, Any] | None:
+            if not entity:
+                return None
+            st = hass.states.get(entity)
+            return {"entity": entity, "state": st.state if st else "missing",
+                    "unit": st.attributes.get("unit_of_measurement") if st else None,
+                    "name": st.attributes.get("friendly_name") if st else None,
+                    "changed": st.last_changed.isoformat() if st else None}
+
+        three = int(_num(cfg.get("phases"), 1)) == 3
+        return {
+            "phases": 3 if three else 1,
+            "charger_phase": phase,
+            "consumed": ent((cfg.get("phase_sensors") or {}).get(phase)),
+            "returned": ent((cfg.get("produced_sensors") or {}).get(phase)),
+            "solar": ent((cfg.get("solar_sensors") or {}).get(phase)) or ent(cfg.get("solar_sensor")),
+            "battery": ent(cfg.get("battery_sensor")),
+            "house_on_phase_w": phase_w,
+            "rooms_on_phase": [{"area": a, "watts": w} for a, w in on_phase],
+            "estimate_kw": est_kw,
+            "charge_from_kw": from_kw,
+            "charger_max_kw": _num(cfg.get("charger_max_kw"), 3.7),
+            "car_charging_sensor": ent(cfg.get("charging_sensor")),
+            "car_says_charging": car_says,
+            "plug_sensor": ent(cfg.get("plug_sensor")),
+            "plugged": plugged,
+            "soc_sensor": ent(cfg.get("soc_sensor")),
+            "soc": soc,
+            "session_since": self.charging_since.isoformat() if self.charging_since else None,
+            "session_kwh": round(self.charged_kwh, 3),
+            "checked_at": dt_util.utcnow().isoformat(),
+        }
+
     def history(self) -> dict[str, Any]:
         """Totals for today (the running session included), this month, the
         last 30 and 365 days, and the sessions of the last 365 days, newest
@@ -595,7 +633,13 @@ class Energy:
         if (st := hass.states.get(cfg.get("plug_sensor") or "")) is not None and st.state not in ("unknown", "unavailable"):
             plugged = str(st.state).lower() in ("on", "connected", "plugged", "true", "locked")
         from_kw = _num(cfg.get("charge_from_kw"), 1.2)
-        charging = charging_state if charging_state is not None else (est_kw is not None and est_kw >= from_kw)
+        # The power drawn decides (the car's own sensor, e.g. Audi Connect, is
+        # often minutes late): above the limit the car is charging. The car's
+        # sensor can only add to that (it says charging while the estimate is low).
+        by_power = est_kw is not None and est_kw >= from_kw
+        charging = by_power or charging_state is True
+        why = ("power" if by_power else "car") if charging else (
+            "no_phase_sensor" if phase_w is None else "below_limit")
         battery = _num(cfg.get("battery_kwh"), 8.8)
         # Charging: the estimate when it is plausible, else the charger's maximum.
         kw = (est_kw if est_kw is not None and est_kw >= from_kw else _num(cfg.get("charger_max_kw"), 3.7)) if charging else 0.0
@@ -620,6 +664,8 @@ class Energy:
             "price_kwh": self.price_kwh(),
             "phase_watts": phase_w, "phase_detail": detail.get(charger_phase) or {},
             "minus": [{"area": a, "watts": w} for a, w in on_phase],
+            "why": why, "from_kw": from_kw, "car_says": charging_state,
+            "debug": self._debug(cfg, charger_phase, phase_w, on_phase, est_kw, from_kw, charging_state, plugged, soc),
         }
         if cfg.get("price_sensor"):
             out["price"] = price_status(hass, cfg, out["car"], self.sun)
