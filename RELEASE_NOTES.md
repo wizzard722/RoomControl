@@ -1,5 +1,14 @@
 # Release notes
 
+## 2.0.2
+
+### Energy: help for Enphase Envoy (and other net meters)
+- The energy settings explain per phase what belongs where: **Consumed** is what the house takes from the grid (a sensor that goes negative while returning, like Enphase's *Net Power Consumption*, is fine: then leave **Returned** empty); **Returned** only when your meter gives it separately as a positive value; not the house's total use.
+- A warning shows when a phase looks set up the wrong way round, e.g. Enphase *Power Consumption* (total use) as Consumed together with *Net Power Consumption* as Returned: that counted the sun twice and made the car's charging estimate wrong. For Enphase: Consumed = *Net Power Consumption*, Returned = empty, Solar = *Power Production*.
+- The sun/grid split of charging also works with one signed net sensor per phase.
+
+---
+
 ## 2.0.1
 
 ### Fixed: Zonneplan quarter-hour prices were not read

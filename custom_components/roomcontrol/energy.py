@@ -462,15 +462,17 @@ class Energy:
 
     @staticmethod
     def grid_share(status: dict[str, Any], kwh: float, hours: float) -> float:
-        """The part of these kWh that came from the grid. Without solar or a
-        home battery (no returned power measured): all of it."""
+        """The part of these kWh that came from the grid: at most what the
+        house as a whole takes from the grid (consumed − returned, over all
+        phases) during that time."""
         detail = status.get("phase_detail") or {}
         used = [d.get("consumed") for d in detail.values()]
         if not used or any(u is None for u in used):
             return kwh
         back = [d.get("produced") for d in detail.values()]
-        if all(b is None for b in back):
-            return kwh
+        # "Consumed" may be a signed net sensor (negative while returning, e.g.
+        # Enphase's "Net Power Consumption") with no separate "returned" sensor;
+        # without solar the house's import always covers the car: all grid.
         net_kw = (sum(used) - sum(b or 0 for b in back)) / 1000  # the house's import from the grid now
         return min(kwh, max(0.0, net_kw) * hours)
 
