@@ -2528,7 +2528,7 @@ class RoomControlLight(LightEntity):
         act = acts.get(key)
         motion = any(r._fan_motion_enabled() and r._own_motion() for r in rooms)
         restored: dict[FanKey, dict[str, Any]] = self.hass.data[DOMAIN].setdefault("fan_restored", {})
-        restarted = False
+        resume_off_at: datetime | None = None
         if act is None and key in restored:
             info = restored.pop(key) or {}
             on = [st for f in key if (st := self.hass.states.get(f)) is not None and st.state == STATE_ON]
@@ -2536,7 +2536,7 @@ class RoomControlLight(LightEntity):
                 # RoomControl had these fans on before Home Assistant restarted:
                 # carry on with that activity (its start, the step reached and
                 # its speed); with motion the remaining steps follow, without it
-                # the fans go off right away (no run-on).
+                # the rest of the run-on time and then off.
                 now_pct = next((int(p) for st in on if isinstance(p := st.attributes.get("percentage"), (int, float))), 1)
                 since = dt_util.parse_datetime(info.get("since") or "") or dt_util.utcnow()
                 steps = next((st for r in rooms if r._fan_motion_enabled() and (st := r._fan_steps())), [])
@@ -2544,7 +2544,8 @@ class RoomControlLight(LightEntity):
                 pct = int(info["pct"]) if isinstance(info.get("pct"), (int, float)) else now_pct
                 act = acts[key] = FanActivity(since=since, steps=steps, pct=pct, step=min(step, len(steps)))
                 self.hass.data[DOMAIN].setdefault("fan_applied", {})[key] = pct
-                restarted = True
+                # The run-on time that was running (none stored: a full run-on from now).
+                resume_off_at = dt_util.parse_datetime(info.get("off_at") or "")
                 _LOGGER.debug("%s: fans %s still on after a restart, activity resumed at step %s", self.entity_id, key, act.step)
         if motion:
             if act is None:
@@ -2560,9 +2561,10 @@ class RoomControlLight(LightEntity):
             # No motion in any of the rooms: no more steps, run on, then off.
             act.cancel_steps()
             run_on = max((r._fan_run_on() for r in rooms if r._fan_motion_enabled()), default=0)
-            if restarted:
-                # After a restart without motion: no run-on, the fans go off right away.
-                run_on = 0
+            if resume_off_at is not None:
+                # After a restart: the rest of the run-on time first (a little if
+                # it passed meanwhile), then off.
+                run_on = max(5, int((resume_off_at - dt_util.utcnow()).total_seconds()))
             act.off_at = dt_util.utcnow() + timedelta(seconds=run_on)
 
             @callback
