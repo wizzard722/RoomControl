@@ -1639,20 +1639,24 @@ class RoomControlLight(LightEntity):
         _LOGGER.debug("%s: turning on %s (%s)", self.entity_id, lamps, reason)
         self.hass.async_create_task(self._async_call("turn_on", lamps=lamps, levels=levels))
 
+    def _late_lamps(self) -> list[str]:
+        """Lamps kept on for "Later thuis": per light bundle (bundle option
+        "late_home"); a bundle without its own choice, and a lamp outside a
+        bundle, follow the older room option."""
+        return self._lamps_where(CONF_LATE_HOME, bool(self._room.get(CONF_LATE_HOME)))
+
     def _late_home_holds(self) -> bool:
-        """A "Later thuis" switch is on and this room keeps its bundles on for it."""
+        """A "Later thuis" switch is on and this room keeps (some of) its bundles on for it."""
         data = self.hass.data.get(DOMAIN, {})
         # Also right after someone came home in the dark (alarm → Someone comes home).
-        return bool(self._room.get(CONF_LATE_HOME)) and bool(
-            data.get("late_home_active") or data.get("arrive_active")
-        )
+        return bool(data.get("late_home_active") or data.get("arrive_active")) and bool(self._late_lamps())
 
     def late_home_off_lamps(self) -> list[str]:
         """The lamps that go off when "Later thuis" / the arrival time ends:
         those on, except lamps held by a running time slot of their light
         bundle, the evening slot or lux control."""
         held = set(self._evening_lamps()) | set(self._lux_lamps_now()) | set(self._own_active())
-        return [e for e in self._members if (st := self.hass.states.get(e)) is not None and st.state == STATE_ON and e not in held]
+        return [e for e in self._late_lamps() if (st := self.hass.states.get(e)) is not None and st.state == STATE_ON and e not in held]
 
     @callback
     def _on_late_home(self) -> None:
@@ -1664,7 +1668,7 @@ class RoomControlLight(LightEntity):
             if not self._late_on_done and not self._manual and self._sun_down():
                 self._late_on_done = True
                 off = [
-                    e for e in self._members
+                    e for e in self._late_lamps()
                     if (st := self.hass.states.get(e)) is not None and st.state not in (STATE_ON, "unavailable", "unknown")
                 ]
                 if off:
@@ -1688,10 +1692,14 @@ class RoomControlLight(LightEntity):
     def _auto_off(self, reason: str, lamps: list[str] | None = None) -> None:
         lamps = list(self._members) if lamps is None else [e for e in lamps if e in self._members]
         if lamps and not self._manual and self._late_home_holds():
-            # Someone comes home later: the bundles stay on until they are home.
-            self._late_pending = True
-            self._dbg("blocked", reason, lamps, why="late_home")
-            return
+            # Someone comes home later: the bundles set for it stay on until they are home.
+            kept = [e for e in lamps if e in set(self._late_lamps())]
+            if kept:
+                self._late_pending = True
+                self._dbg("blocked", reason, kept, why="late_home")
+                lamps = [e for e in lamps if e not in kept]
+                if not lamps:
+                    return
         if not lamps or self._manual:
             if lamps and self._manual:
                 self._dbg("blocked", reason, lamps, why="manual")

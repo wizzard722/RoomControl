@@ -10,6 +10,10 @@
 ### Fan: activity continues after a restart
 - RoomControl now remembers the fan's activity across restarts: when it started, the step reached, the speed and the end of the run-on time. After a restart with motion the fan carries on from there and the remaining steps follow (no start over at step 1); without motion it first finishes the run-on time that was left (or a full run-on when none was running yet) and then switches off (or goes to 1% with that option). The room shows the step and the time left again right away.
 
+### Home later per light bundle
+- *Home later* is now set per light bundle instead of for the whole room: in a light bundle, under **Extra**, choose **On for Home later**. Only those light bundles go on in the dark while a *Home later* button is on, stay on until that person is home, and then go off (unless their time slot is still running). Other light bundles in the same room follow the normal rules.
+- The room's *Motion & presence* card now lists which light bundles stay on for it. Rooms that had the old room option keep working: their light bundles start with it on until you change them.
+
 ---
 
 ## 2.1.3
