@@ -521,12 +521,22 @@ FAN_CONTROL_TOLERANCE = 3  # percent
 
 
 def keep_fans_applied(hass: HomeAssistant) -> None:
-    """Remember which fans RoomControl has on (across restarts)."""
+    """Remember which fans RoomControl has on and their activity (since,
+    step reached, speed, run-on end) across restarts."""
     store = hass.data[DOMAIN].get("fan_store")
     if store is None:
         return
-    applied = hass.data[DOMAIN].get("fan_applied", {})
-    store.async_delay_save(lambda: {"on": [list(k) for k in applied]}, 2)
+
+    def data() -> dict[str, Any]:
+        applied = hass.data[DOMAIN].get("fan_applied", {})
+        acts = {
+            ",".join(k): {"since": a.since.isoformat(), "step": a.step, "pct": a.pct,
+                          "off_at": a.off_at.isoformat() if a.off_at else None}
+            for k, a in fan_activities(hass).items()
+        }
+        return {"on": [list(k) for k in applied], "acts": acts}
+
+    store.async_delay_save(data, 2)
 
 
 async def async_load_fans_applied(hass: HomeAssistant) -> None:
@@ -536,7 +546,14 @@ async def async_load_fans_applied(hass: HomeAssistant) -> None:
     store = Store(hass, 1, FAN_STORE_KEY)
     hass.data[DOMAIN]["fan_store"] = store
     data = await store.async_load() or {}
-    hass.data[DOMAIN]["fan_restored"] = {tuple(k) for k in data.get("on", []) if isinstance(k, list) and k}
+    acts = data.get("acts") if isinstance(data.get("acts"), dict) else {}
+    restored: dict[FanKey, dict[str, Any]] = {
+        tuple(k): {} for k in data.get("on", []) if isinstance(k, list) and k
+    }
+    for joined, info in acts.items():
+        if isinstance(info, dict) and joined:
+            restored[tuple(joined.split(","))] = info
+    hass.data[DOMAIN]["fan_restored"] = restored
 
 
 class RoomControlLight(LightEntity):
@@ -2510,17 +2527,25 @@ class RoomControlLight(LightEntity):
         acts = fan_activities(self.hass)
         act = acts.get(key)
         motion = any(r._fan_motion_enabled() and r._own_motion() for r in rooms)
-        restored: set[FanKey] = self.hass.data[DOMAIN].setdefault("fan_restored", set())
+        restored: dict[FanKey, dict[str, Any]] = self.hass.data[DOMAIN].setdefault("fan_restored", {})
+        resume_off_at: datetime | None = None
         if act is None and key in restored:
-            restored.discard(key)
+            info = restored.pop(key) or {}
             on = [st for f in key if (st := self.hass.states.get(f)) is not None and st.state == STATE_ON]
-            if on and not motion:
+            if on:
                 # RoomControl had these fans on before Home Assistant restarted:
-                # the activity is gone, so run on from now and switch them off.
-                pct = next((int(p) for st in on if isinstance(p := st.attributes.get("percentage"), (int, float))), 1)
-                act = acts[key] = FanActivity(since=dt_util.utcnow(), steps=[], pct=pct)
+                # carry on with that activity (its start, the step reached and
+                # its speed); with motion the remaining steps follow, without it
+                # the run-on time (what was left of it) and then off.
+                now_pct = next((int(p) for st in on if isinstance(p := st.attributes.get("percentage"), (int, float))), 1)
+                since = dt_util.parse_datetime(info.get("since") or "") or dt_util.utcnow()
+                steps = next((st for r in rooms if r._fan_motion_enabled() and (st := r._fan_steps())), [])
+                step = int(info["step"]) if isinstance(info.get("step"), int) else 0
+                pct = int(info["pct"]) if isinstance(info.get("pct"), (int, float)) else now_pct
+                act = acts[key] = FanActivity(since=since, steps=steps, pct=pct, step=min(step, len(steps)))
                 self.hass.data[DOMAIN].setdefault("fan_applied", {})[key] = pct
-                _LOGGER.debug("%s: fans %s still on after a restart, running on", self.entity_id, key)
+                resume_off_at = dt_util.parse_datetime(info.get("off_at") or "")
+                _LOGGER.debug("%s: fans %s still on after a restart, activity resumed at step %s", self.entity_id, key, act.step)
         if motion:
             if act is None:
                 steps = next((st for r in rooms if r._fan_motion_enabled() and (st := r._fan_steps())), [])
@@ -2535,6 +2560,9 @@ class RoomControlLight(LightEntity):
             # No motion in any of the rooms: no more steps, run on, then off.
             act.cancel_steps()
             run_on = max((r._fan_run_on() for r in rooms if r._fan_motion_enabled()), default=0)
+            if resume_off_at is not None:
+                # After a restart: what was left of the run-on time (a little if it passed meanwhile).
+                run_on = max(5, int((resume_off_at - dt_util.utcnow()).total_seconds()))
             act.off_at = dt_util.utcnow() + timedelta(seconds=run_on)
 
             @callback
@@ -2545,6 +2573,7 @@ class RoomControlLight(LightEntity):
             _LOGGER.debug("%s: no motion, fans %s off in %ss", self.entity_id, key, run_on)
         else:
             return
+        keep_fans_applied(self.hass)
         if write:
             self._fan_notify()
 
@@ -2574,6 +2603,7 @@ class RoomControlLight(LightEntity):
         if act.pct is None or pct > act.pct:
             act.pct = pct
         _LOGGER.debug("%s: fan step %s (%s%%)", self.entity_id, act.step, act.pct)
+        keep_fans_applied(self.hass)
         if not self._manual:
             self._fan_apply()
         self._fan_notify()
@@ -2591,6 +2621,7 @@ class RoomControlLight(LightEntity):
             return
         act.cancel_all()
         _LOGGER.debug("%s: fan activity ended for %s", self.entity_id, key)
+        keep_fans_applied(self.hass)
         if act.pct is not None:
             self._fan_apply(list(key), force_off=True)
 
