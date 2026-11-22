@@ -1,5 +1,14 @@
 # Release notes
 
+## 2.1.4
+
+### Fan: step and time left
+- The fan line in a room now shows which step the fan is in ("step 2 of 3") while it runs on motion, or "by temperature" when the temperature keeps it on.
+- As soon as nobody is in the room any more, it counts down how long the fan stays on: "still on for 3:42 (until 20:45)", updated every second.
+- The room's **Overview** shows the same as a chip while the fan runs: "Fan · 67% · step 2 of 3 · 3:42 left".
+
+---
+
 ## 2.1.3
 
 ### Fixed: coming home switched off lamps of a running time slot
