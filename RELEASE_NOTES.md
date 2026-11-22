@@ -8,7 +8,7 @@
 - The room's **Overview** shows the same as a chip while the fan runs: "Fan · 67% · step 2 of 3 · 3:42 left".
 
 ### Fan: activity continues after a restart
-- RoomControl now remembers the fan's activity across restarts: when it started, the step reached, the speed and the end of the run-on time. After a restart the fan carries on from there: with motion the remaining steps follow (no start over at step 1), without motion it runs on for what was left of the run-on time and then switches off. The room shows the step again right away.
+- RoomControl now remembers the fan's activity across restarts: when it started, the step reached and the speed. After a restart with motion the fan carries on from there and the remaining steps follow (no start over at step 1); without motion the fan switches off right away (or goes to 1% with that option), without a run-on. The room shows the step again right away.
 
 ---
 
