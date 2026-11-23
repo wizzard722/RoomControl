@@ -11,6 +11,9 @@ chosen for it (default: All off, nobody home and smoke):
 - "nobody_home": nobody home: the alarm goes to Armed Away (without an alarm
                  panel: the last person leaves); back on at Disarmed or
                  Armed Home (someone comes home);
+- "room_away":   every person linked to the room (room → Motion &
+                 presence) has left the house, also while others are still
+                 home; back on when one of them is home again (with back_on);
 - "smoke":       a smoke alarm (back on at All safe, see smoke.py);
 - "vacation_home" / "vacation_away": while vacation at home / elsewhere is
                  on (switch.py "Vakantie"); back on when it ends or changes
@@ -31,12 +34,12 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SETTING_ALARM_ENTITY, SIGNAL_CONFIG_UPDATED, SIGNAL_VACATION
-from .rooms import anyone_home, household_persons, managed_areas
+from .rooms import anyone_home, household_persons, managed_areas, room_persons
 
 _LOGGER = logging.getLogger(__name__)
 
 CONF_SWITCHES = "switches"
-OFF_MOMENTS = ("all_off", "nobody_home", "smoke", "vacation_home", "vacation_away")
+OFF_MOMENTS = ("all_off", "nobody_home", "room_away", "smoke", "vacation_home", "vacation_away")
 DEFAULT_OFF_ON = ["all_off", "nobody_home", "smoke"]
 SWITCH_DOMAINS = ("switch.", "remote.")  # what a room's Switches may hold
 CONF_MEDIA_OFF_AWAY = "media_off_away"  # room option: media players off when nobody is home
@@ -139,14 +142,18 @@ class RoomSwitches:
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.switches_off")
         self.switched_off: list[str] = []
         self.vacation_off: list[str] = []  # switched off for a vacation
+        self.room_off: dict[str, list[str]] = {}  # area: switched off because the room's persons left
+        self._track_rooms: CALLBACK_TYPE | None = None
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
         self.switched_off = [s for s in data.get("off", []) if isinstance(s, str)]
         self.vacation_off = [s for s in data.get("vacation_off", []) if isinstance(s, str)]
+        room_off = data.get("room_off") if isinstance(data.get("room_off"), dict) else {}
+        self.room_off = {a: [s for s in v if isinstance(s, str)] for a, v in room_off.items() if isinstance(v, list)}
 
     def _keep(self) -> None:
-        self._store.async_delay_save(lambda: {"off": self.switched_off, "vacation_off": self.vacation_off}, 1)
+        self._store.async_delay_save(lambda: {"off": self.switched_off, "vacation_off": self.vacation_off, "room_off": self.room_off}, 1)
 
     @callback
     def start(self) -> None:
@@ -198,6 +205,9 @@ class RoomSwitches:
         if self._track:
             self._track()
             self._track = None
+        if self._track_rooms:
+            self._track_rooms()
+            self._track_rooms = None
 
     def _alarm(self) -> str | None:
         return self.hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_ALARM_ENTITY) or None
@@ -211,6 +221,73 @@ class RoomSwitches:
         ids = [alarm] if alarm else list(household_persons(self.hass))
         if ids:
             self._track = async_track_state_change_event(self.hass, ids, self._on_change)
+        if self._track_rooms:
+            self._track_rooms()
+            self._track_rooms = None
+        persons = sorted({p for _area, ps in self._away_rooms() for p in ps})
+        if persons:
+            self._track_rooms = async_track_state_change_event(self.hass, persons, self._on_room_person)
+
+    def _away_rooms(self) -> list[tuple[str, list[str]]]:
+        """(area, its persons) for rooms with a switch set to "room_away"."""
+        managed = managed_areas(self.hass)
+        out = []
+        for room in self.hass.data.get(DOMAIN, {}).get("rooms", []):
+            area = room.get("area_id")
+            persons = room_persons(self.hass, room)
+            if area in managed and persons and switches_for(self.hass, "room_away", area):
+                out.append((area, persons))
+        return out
+
+    @callback
+    def _on_room_person(self, event: Event) -> None:
+        new, old = event.data.get("new_state"), event.data.get("old_state")
+        if new is None or old is None or (new.state == "home") == (old.state == "home"):
+            return
+        person = event.data["entity_id"]
+        for area, persons in self._away_rooms():
+            if person not in persons:
+                continue
+            if new.state == "home":
+                self.hass.async_create_task(self.async_room_back(area))
+            elif not any((st := self.hass.states.get(p)) is not None and st.state == "home" for p in persons):
+                self.hass.async_create_task(self.async_room_away(area))
+
+    async def async_room_away(self, area: str) -> None:
+        """The room's persons all left: its "room_away" switches off."""
+        todo = [
+            s for s in switches_for(self.hass, "room_away", area)
+            if s not in never_off(self.hass) and (st := self.hass.states.get(s)) is not None and st.state == "on"
+        ]
+        if not todo:
+            return
+        self.room_off[area] = list(dict.fromkeys([*self.room_off.get(area, []), *todo]))
+        self._keep()
+        await async_switch_off(self.hass, todo, "room away")
+
+    async def async_room_back(self, area: str) -> None:
+        """One of the room's persons is home again: back on what went off for it
+        (not what is off because nobody is home or for a vacation)."""
+        todo = self.room_off.pop(area, [])
+        if not todo:
+            return
+        self._keep()
+        stay_off = {
+            sw["entity_id"]
+            for room in self.hass.data.get(DOMAIN, {}).get("rooms", [])
+            for sw in room_switches(room)
+            if not sw["back_on"]
+        }
+        todo = [s for s in todo if self.hass.states.get(s) is not None and s not in stay_off
+                and s not in self.vacation_off and s not in self.switched_off]
+        if not todo:
+            return
+        _LOGGER.debug("Room switches back on (room person home): %s", todo)
+        log_switches(self.hass, todo, "on", "switches_room_back")
+        try:
+            await async_turn(self.hass, todo, True)
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Could not switch %s back on (room person home)", todo)
 
     @callback
     def _on_change(self, event: Event) -> None:

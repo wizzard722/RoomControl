@@ -1,5 +1,16 @@
 # Release notes
 
+## 2.1.5
+
+### Full control: RoomControl lights work while the room's persons are away
+- With *Full control by RoomControl* on and the person linked to a room away, the room's RoomControl lights (the room light and its light bundles) could not be switched on: "lights are blocked (nobody home)". Switching by hand through these RoomControl entities now always works, so others in the house can switch the lamps on and off themselves. Switching outside RoomControl is still put back.
+- Automatic switching (motion, door, time slots, dusk) still waits until one of the room's persons is home. When the room's persons leave the house, the room's lamps go off, as before.
+
+### Switches: off when the room's persons leave
+- A room switch has a new moment to go off: **Persons of this room away**. It goes off as soon as every person linked to the room has left the house, also while others are still home, and with *Back on when someone comes home* it goes back on when one of them is home again. The choice shows only in rooms with linked persons.
+
+---
+
 ## 2.1.4
 
 ### Fan: step and time left

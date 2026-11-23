@@ -31,7 +31,6 @@ from homeassistant.components.light import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_ENTITY_ID, STATE_ON
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, State, callback
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -503,9 +502,9 @@ class LampGroupLight(LightEntity):
         room = self._room_light()
         if room is None:
             return
-        lamps = room.lamps_allowed(self._lamps)
-        if self._lamps and not lamps:
-            raise HomeAssistantError(f"{self.name}: lights are blocked (nobody home)")
+        # By hand through RoomControl: also when the room's persons are away
+        # (someone else in the house switches it); only automatic switching waits for them.
+        lamps = room.lamps_allowed(self._lamps, by_hand=True)
         data = {ATTR_BRIGHTNESS: kwargs[ATTR_BRIGHTNESS]} if ATTR_BRIGHTNESS in kwargs else {}
         await room.async_call_lamps("turn_on", lamps, **data, **_colour_request(kwargs))
 
@@ -886,10 +885,11 @@ class RoomControlLight(LightEntity):
             self._regulate_lux(force=True)
         return acted
 
-    def lamps_allowed(self, lamps: list[str]) -> list[str]:
-        """Of `lamps`, those that may be switched on now (by hand or automatically):
-        all of them when someone is home; during manual control always."""
-        if self._manual:
+    def lamps_allowed(self, lamps: list[str], by_hand: bool = False) -> list[str]:
+        """Of `lamps`, those that may be switched on now: all of them when
+        someone of the room is home; during manual control, and by hand
+        through RoomControl's own lights (room / light bundle), always."""
+        if self._manual or by_hand:
             return list(lamps)
         if not presence_allows(self.hass, self._room):
             return []
@@ -3459,11 +3459,7 @@ class RoomControlLight(LightEntity):
             )
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        lamps = self.lamps_allowed(list(self._members))
-        if self._members and not lamps:
-            raise HomeAssistantError(
-                f"{self.name or self.entity_id}: lights are blocked (nobody home)"
-            )
+        lamps = self.lamps_allowed(list(self._members), by_hand=True)
         data = {ATTR_BRIGHTNESS: kwargs[ATTR_BRIGHTNESS]} if ATTR_BRIGHTNESS in kwargs else {}
         await self._async_call("turn_on", lamps=lamps, **data, **_colour_request(kwargs))
 
