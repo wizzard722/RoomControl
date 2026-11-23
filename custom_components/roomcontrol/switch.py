@@ -10,7 +10,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -785,8 +784,8 @@ def late_home_active(hass: HomeAssistant) -> set[str]:
 class LateHomeSwitch(RestoreEntity, SwitchEntity):
     """Someone comes home later: rooms set for it keep their bundles on.
 
-    Can only be switched on while the person is not home; goes off by itself
-    as soon as they come home."""
+    Can be switched on and off at any time, also while the person is home;
+    goes off by itself when they come home (from away to home)."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -824,15 +823,18 @@ class LateHomeSwitch(RestoreEntity, SwitchEntity):
 
     async def async_added_to_hass(self) -> None:
         last = await self.async_get_last_state()
-        if last is not None and last.state == "on" and not self._home():
+        # On before the restart: on again, unless the person came home in between.
+        if last is not None and last.state == "on" and not (self._home() and not last.attributes.get("person_home")):
             self._active().add(self.person)
             async_dispatcher_send(self.hass, SIGNAL_LATE_HOME)  # rooms pick it up after a restart
         self._unsub = async_track_state_change_event(self.hass, [self.person], self._on_person)
         self.async_on_remove(self._unsub)
 
     @callback
-    def _on_person(self, _event: Any) -> None:
-        if self._home() and self.person in self._active():
+    def _on_person(self, event: Any) -> None:
+        old = event.data.get("old_state")
+        came_home = self._home() and (old is None or old.state != "home")
+        if came_home and self.person in self._active():
             # Home now: the switch goes off and the held rooms may go off.
             # A moment later, so the alarm's "someone comes home" (which may
             # keep the lamps on a while longer) is seen first: no flicker.
@@ -851,8 +853,6 @@ class LateHomeSwitch(RestoreEntity, SwitchEntity):
         async_dispatcher_send(self.hass, SIGNAL_LATE_HOME)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        if self._home():
-            raise HomeAssistantError(f"{self.name}: {self.person} is thuis; 'Later thuis' kan alleen als de persoon weg is")
         self._set(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:

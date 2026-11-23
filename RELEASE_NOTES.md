@@ -1,5 +1,14 @@
 # Release notes
 
+## 2.1.6
+
+### Home later: switch it whenever you want
+- The *Home later* button could not be used while the person was home: the button on the Rooms page was greyed out and switching the RoomControl switch gave an error. It can now be switched on and off at any time.
+- Switched on while the person is home, it stays on until they have left and come home again (or until you switch it off). It no longer switches itself off on a location update while the person is already home; only coming home (from away to home) switches it off.
+- After a restart it comes back on, unless the person came home in the meantime.
+
+---
+
 ## 2.1.5
 
 ### Full control: RoomControl lights work while the room's persons are away
