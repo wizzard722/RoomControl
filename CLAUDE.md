@@ -80,3 +80,29 @@ look as above), then build the chosen one in the panel.
 - **Always test every panel change at phone width** (360 px, with a
   viewport meta in the test page) as well as wide: nothing may stick out
   of its card, rows wrap instead. Report the phone-width result.
+- **Working agreement:** for a new request or problem, first give an
+  analysis (what happens, where in the code) and a proposal (with options
+  and a recommendation); build only after the user says so ("bouw").
+
+## Energy management (roadmap)
+
+Mockups A–I are on the Design canvas
+https://claude.ai/artifact/MhFGn75eCao84VQkeoZCqq (A dashboard, B planning,
+C saving coach, D sun & price + home battery plan, E monitoring & night
+mode, F bill & charging, G "does switching off pay?", H settings: energy
+contract + home battery + simulation, I device profile / learned use).
+
+Build order agreed with the user (each step: analysis + proposal first):
+1. Energy contract (H): dynamic tariffs, feed-in price and costs, net
+   metering until a date.
+2. Learning devices (I): profile per metered device (standby, running
+   power, cycles, programs named by the user, when, trend); watts of
+   devices/bundles without a meter learned from the phase jump at on/off,
+   used automatically (a fixed value the user enters always wins).
+3. Monitoring and night mode (E).
+4. Does switching off pay? (G).
+5. Planning and sun (B, D).
+6. Home battery and simulation (H, D): any battery (number, select+number,
+   or scripts), all values set by the user; defaults wear € 0.03/kWh,
+   reserve 20 %.
+7. Dashboard, coach and bill (A, C, F).
