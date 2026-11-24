@@ -864,7 +864,12 @@ class RoomControlLight(LightEntity):
         if self._manual or self._alarm_mode() == "home":
             return False
         if not presence_allows(self.hass, self._room):
-            return False
+            # Nobody home: only light bundles for "Later thuis" follow their slot.
+            late = set(self._late_lamps())
+            active &= late
+            previous = previous & late
+            if not active and not previous:
+                return False
         acted = False
         blocked = self._alarm_blocked()
         lux = set(self._lux_lamps_now())
@@ -892,8 +897,15 @@ class RoomControlLight(LightEntity):
         if self._manual or by_hand:
             return list(lamps)
         if not presence_allows(self.hass, self._room):
-            return []
+            # Nobody home: only light bundles for "Later thuis" in their time slot.
+            away = self._away_slot_lamps()
+            return [e for e in lamps if e in away]
         return list(lamps)
+
+    def _away_slot_lamps(self) -> set[str]:
+        """Nobody of the room home: lamps that still follow their time slot,
+        those of light bundles set for "Later thuis" whose slot runs."""
+        return set(self._late_lamps()) & set(self._own_active())
 
     def _follows_daylight(self) -> bool:
         return bool(self._daylight_lamps())
@@ -1338,7 +1350,8 @@ class RoomControlLight(LightEntity):
         ignores armed away (then it keeps following its time slots)."""
         if self._alarm_mode() != "away" or self._room.get(CONF_AWAY_FOLLOW_SCHEDULE):
             return set()
-        return {e for e in self._members if not self._bopt(e, CONF_AWAY_FOLLOW_SCHEDULE, False)}
+        late = set(self._late_lamps())  # light bundles for "Later thuis" follow their time slot
+        return {e for e in self._members if not self._bopt(e, CONF_AWAY_FOLLOW_SCHEDULE, False) and e not in late}
 
     def _evening_lamps(self) -> list[str]:
         """Bundles whose time slot runs burn at their level (the slot wins over
@@ -1714,17 +1727,21 @@ class RoomControlLight(LightEntity):
         """Time slot running and sun down: its bundles are
         always on — motion, the target lux etc. don't matter then. A bundle
         that is off (switched off by hand, a wall switch, …) goes on again.
-        Not during manual control, armed home/away or with nobody home."""
+        Not during manual control or armed home; with nobody home only light
+        bundles set for "Later thuis"."""
         phase = self._phase()
         if self._manual or self._alarm_mode() == "home" or phase == "light":
             return False
-        if not presence_allows(self.hass, self._room):
-            return False
+        away = not presence_allows(self.hass, self._room)
         # Donker: all of them; schemer: only bundles that are on from schemer.
+        # Nobody home: only light bundles for "Later thuis".
+        late = set(self._late_lamps()) if away else set()
         lamps = [
             e for e in self._evening_lamps()
-            if phase == "dark" or self._dusk_bundle(e)
+            if (phase == "dark" or self._dusk_bundle(e)) and (not away or e in late)
         ]
+        if not lamps:
+            return False
         is_on = lambda e: (st := self.hass.states.get(e)) is not None and st.state == STATE_ON  # noqa: E731
         off = [
             e for e in lamps
@@ -1790,7 +1807,9 @@ class RoomControlLight(LightEntity):
         if previous != key:
             self._dbg("info", "conditions", sun=key[0], home="yes" if present else "no")
         if was_present and not present:
-            self._auto_off("nobody home")
+            # Light bundles for "Later thuis" whose time slot runs stay on.
+            keep = self._away_slot_lamps()
+            self._auto_off("nobody home", lamps=[e for e in self._members if e not in keep])
             return True
         return False
 

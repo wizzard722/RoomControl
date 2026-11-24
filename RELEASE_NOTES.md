@@ -1,5 +1,20 @@
 # Release notes
 
+## 2.1.7
+
+### Home later: light bundles keep their time slot while nobody is home
+- When nobody of a room was home (or the alarm went to Armed Away), all its lamps went off, also light bundles set to *On for Home later* whose time slot was running. Those light bundles now follow their time slot while nobody is home: on when it starts (when dark), off when it ends.
+- When a *Home later* button is on, they also stay on after their time slot, until that person is home.
+- Other light bundles behave as before: off when nobody is home.
+
+### EV charging: fewer false "charging" alerts
+- With 3 phases, a room without a phase of its own was not subtracted from the charger's phase, so an appliance there could look like the car charging. RoomControl now also estimates the car as the whole house (all phases) − all rooms, and uses the lower of the two estimates.
+- Meters that report in kW (e.g. an oven's power sensor) were skipped as room meters; they now count (in W).
+- When a charging cable sensor is set and says the cable is not connected, the car is not counted as charging (unless the car itself says it is).
+- The charger's debug view shows per subtracted room what was measured (e.g. "Oven 2,400 W · Ceiling 125 W" or "nothing measured"), the rooms without a phase, and both estimates, so you can see which appliance is missing a meter.
+
+---
+
 ## 2.1.6
 
 ### Home later: switch it whenever you want

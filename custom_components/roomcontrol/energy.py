@@ -37,7 +37,9 @@ on; a switch its watts when on; a power sensor counts as it is.
 The house's use on a phase = consumed − returned (+ the solar panels' and the
 home battery's output on that phase, when their sensors are set; "all"
 spreads them evenly over the phases). The car ≈ the use on the charger's
-phase − the rooms on that phase.
+phase − the rooms on that phase; with 3 phases also at most the whole house
+(all phases) − all rooms, so a room without a phase of its own still counts.
+A charging cable sensor that says "not connected" means: not charging.
 """
 from __future__ import annotations
 
@@ -284,12 +286,12 @@ def room_meters(hass: HomeAssistant, room: dict[str, Any], parts: list[dict[str,
             continue
         st = hass.states.get(entry.entity_id)
         unit = str((st.attributes.get("unit_of_measurement") if st else None) or entry.unit_of_measurement or "").lower()
-        if unit not in ("w", "kwh"):
+        if unit not in ("w", "kw", "kwh"):
             continue
         key = f"meter:{entry.device_id or entry.entity_id}"
         group = groups.setdefault(key, {"w": [], "kwh": [], "names": [],
                                         "device": (device.name_by_user or device.name) if device else None})
-        group["w" if unit == "w" else "kwh"].append(entry.entity_id)
+        group["kwh" if unit == "kwh" else "w"].append(entry.entity_id)
         group["names"].append((st.attributes.get("friendly_name") if st else None) or entry.original_name or entry.entity_id)
     power = room.get("power") or {}
     out = []
@@ -651,7 +653,14 @@ class Energy:
             return out
         phase_w = phases.get(charger_phase)
         on_phase = [(a, r["watts"]) for a, r in rooms.items() if r["phase"] == charger_phase]
-        est_kw = None if phase_w is None else max(0.0, (phase_w - sum(w for _, w in on_phase)) / 1000)
+        est_phase = None if phase_w is None else max(0.0, (phase_w - sum(w for _, w in on_phase)) / 1000)
+        # The whole house − every room: catches a room whose phase is not set
+        # (it is then not on the charger's phase list). The lower one counts.
+        no_phase = [(a, r["watts"]) for a, r in rooms.items() if three and not r["phase"] and r["watts"]]
+        house_w = sum(v for v in phases.values() if v is not None) if phases and all(v is not None for v in phases.values()) else None
+        rooms_w = sum(r["watts"] for r in rooms.values())
+        est_total = None if house_w is None or not three else max(0.0, (house_w - rooms_w) / 1000)
+        est_kw = est_phase if est_total is None or est_phase is None else min(est_phase, est_total)
         soc = None
         if (st := hass.states.get(cfg.get("soc_sensor") or "")) is not None:
             try:
@@ -672,6 +681,9 @@ class Energy:
         charging = by_power or charging_state is True
         why = ("power" if by_power else "car") if charging else (
             "no_phase_sensor" if phase_w is None else "below_limit")
+        if charging and plugged is False and charging_state is not True:
+            # The charging cable is not connected: something else draws the power.
+            charging, why = False, "unplugged"
         battery = _num(cfg.get("battery_kwh"), 8.8)
         # Charging: the estimate when it is plausible, else the charger's maximum.
         kw = (est_kw if est_kw is not None and est_kw >= from_kw else _num(cfg.get("charger_max_kw"), 3.7)) if charging else 0.0
@@ -704,7 +716,15 @@ class Energy:
             "phase_watts": phase_w, "phase_detail": detail.get(charger_phase) or {},
             "minus": [{"area": a, "watts": w} for a, w in on_phase],
             "why": why, "from_kw": from_kw, "car_says": charging_state,
-            "debug": self._debug(cfg, charger_phase, phase_w, on_phase, est_kw, from_kw, charging_state, plugged, soc),
+            "debug": {**self._debug(cfg, charger_phase, phase_w, on_phase, est_kw, from_kw, charging_state, plugged, soc),
+                      "estimate_phase_kw": None if est_phase is None else round(est_phase, 3),
+                      "estimate_total_kw": None if est_total is None else round(est_total, 3),
+                      "house_total_w": None if house_w is None else round(house_w, 1),
+                      "rooms_total_w": round(rooms_w, 1),
+                      "rooms_no_phase": [{"area": a, "watts": w} for a, w in no_phase],
+                      "room_parts": {a: [{"name": x["name"], "watts": x["watts"], "source": x["source"]}
+                                         for x in rooms[a]["parts"] if x.get("watts")]
+                                     for a, _w in on_phase + no_phase}},
         }
         if cfg.get("price_sensor"):
             out["price"] = price_status(hass, cfg, out["car"], self.sun)
