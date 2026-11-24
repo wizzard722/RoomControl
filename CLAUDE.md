@@ -21,7 +21,7 @@ The user approved this layout; new screens and settings follow it.
 1. **Page head**: back button (and the HA menu button when `narrow`), page
    title, a status on the right (e.g. "Opgeslagen").
 2. **Tabs** where a page has views (room: Overzicht · Instellingen ·
-   Analyse; Overzicht first and default). Status chips may sit in the tab
+   Analyse · Debug; Overzicht first and default). Status chips may sit in the tab
    bar, right-aligned, wrapping on narrow screens.
 3. **Settings pages**: a search field on top ("Zoek een instelling,
    bijv. …"), then one **collapsible group card** per topic:

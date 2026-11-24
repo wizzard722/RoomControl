@@ -15,7 +15,6 @@ Each room light also runs the room's rules:
 """
 from __future__ import annotations
 
-from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timedelta
 import logging
@@ -144,6 +143,7 @@ from .vacuums import SIGNAL_VACUUM_ALARM
 from .texts import text
 from .vacuums import SIGNAL_VACUUM_UPDATED
 from .slots import chosen_modes, hm_minutes, mode_now, mode_slots, slot_part
+from .debug_log import DebugBuffer, winner
 from .devices import split_identifier
 from .rooms import (
     daylight_kelvin,
@@ -623,7 +623,7 @@ class RoomControlLight(LightEntity):
         # (sun phase, someone home) at the last evaluation
         self._conditions: tuple[str, bool] | None = None
         # Debug log: why bundles did or did not go on/off (newest last).
-        self._debug: deque[dict[str, Any]] = deque(maxlen=80)
+        self._debug = DebugBuffer(area_id)  # a week, saved per room (debug_log.py)
         # "Later thuis": an off was held back; do it once the person is home.
         self._late_pending = False
         self._late_was = "late_home"  # what held the lamps: "late_home" or "arrive"
@@ -1426,21 +1426,135 @@ class RoomControlLight(LightEntity):
                 names.append(name)
         return names
 
+    def _bundle_items(self, lamps: list[str] | set[str]) -> list[tuple[str, str, str]]:
+        """(key, name, first lamp) per light bundle these lamps are in; a lamp
+        outside a bundle is its own item (key: its entity id)."""
+        groups = self._room.get(CONF_GROUPS, []) or []
+        out: list[tuple[str, str, str]] = []
+        seen: set[str] = set()
+        for e in lamps:
+            for index, group in enumerate(groups):
+                if e in (group.get("lights") or []):
+                    key = f"group:{group.get('id') or index}"
+                    name = (group.get("name") or "").strip() or f"Lichtbundel {index + 1}"
+                    break
+            else:
+                st = self.hass.states.get(e) if self.hass else None
+                key, name = e, (st.attributes.get("friendly_name") if st else None) or e
+            if key not in seen:
+                seen.add(key)
+                out.append((key, name, e))
+        return out
+
+    def _rules_for(self, lamp: str) -> dict[str, Any]:
+        """The rules for this lamp's bundle right now: which apply ("on") and a
+        short detail per rule ("d"). For the debug log ("Regels")."""
+        on: list[str] = []
+        d: dict[str, Any] = {}
+        try:
+            if self._manual:
+                on.append("manual")
+                if self._manual_until is not None:
+                    d["manual"] = dt_util.as_local(self._manual_until).strftime("%H:%M")
+            if lamp in self._clock_lamps():
+                on.append("clock")
+            mode = self._alarm_mode()
+            if mode != "normal":
+                on.append("alarm")
+            d["alarm"] = mode
+            if self._late_pending and lamp in self._late_lamps():
+                on.append("arrive")
+            if lamp in self._own_lamps():
+                slot = self._own_slot_now(lamp)
+                if slot is not None:
+                    on.append("slot")
+                    start, end = slot.get("start") or {}, slot.get("end") or {}
+                    d["slot"] = {"name": slot.get("name") or "",
+                                 "start": start.get("time") if start.get("type", "time") == "time" else start.get("type"),
+                                 "end": end.get("time") if end.get("type", "time") == "time" else end.get("type")}
+            if lamp in self._lux_control_lamps():
+                lux, target = self._lux_now(), self._target_lux()
+                d["lux"] = {"lux": lux, "target": round(target) if target else 0}
+                if lamp in self._lux_lamps_now():
+                    on.append("lux")
+            if lamp in self._motion_lamps():
+                if self._any_motion():
+                    on.append("motion")
+                d["motion"] = "yes" if self._any_motion() else "no"
+            if presence_allows(self.hass, self._room):
+                on.append("home")
+            if self._sun_down():
+                on.append("sun")
+        except Exception:  # noqa: BLE001 - the log must never break switching
+            pass
+        return {"on": on, "d": d}
+
     @callback
     def _dbg(self, kind: str, reason: str, lamps: list[str] | set[str] | None = None, **detail: Any) -> None:
         """Remember a decision for the panel's debug log (kind: on, off, ignored,
-        blocked, adjust, info)."""
-        self._debug.append({
+        blocked, adjust, info, lock, door). `item=` names the item when there
+        are no lamps (e.g. a lock)."""
+        item = detail.pop("item", None)
+        entry: dict[str, Any] = {
             "at": dt_util.utcnow().isoformat(),
             "kind": kind,
             "reason": reason,
-            "bundles": self._bundle_names(lamps) if lamps is not None or kind in ("on", "off") else [],
+            "bundles": [],
+            "items": [item] if item else [],
+            **({"bundles": [detail["device"]]} if item and detail.get("device") else {}),
             **{k: v for k, v in detail.items() if v is not None},
-        })
+        }
+        if lamps is not None or kind in ("on", "off"):
+            items = self._bundle_items(list(self._members) if lamps is None else lamps)
+            entry["bundles"] = [name for _k, name, _e in items]
+            entry["items"] = [key for key, _n, _e in items]
+            if kind in ("on", "off", "adjust", "blocked") and items:
+                win = winner(kind, reason, detail.get("why"))
+                entry["rules"] = {key: {**self._rules_for(first), "win": win} for key, _n, first in items[:6]}
+        self._debug.append(entry)
 
-    def debug_log(self) -> list[dict[str, Any]]:
+    def debug_log(self, limit: int = 300, rules: bool = False) -> list[dict[str, Any]]:
         """The debug log, newest first."""
-        return list(reversed(self._debug))
+        return self._debug.newest(limit, rules)
+
+    def debug_items(self) -> list[dict[str, Any]]:
+        """What the debug tab can show a log of: light bundles, switches,
+        locks, then anything else the log names (devices, fans, ...)."""
+        from .room_switches import room_switches  # noqa: PLC0415
+
+        room = self._room
+        name_of = lambda e: ((st := self.hass.states.get(e)) and st.attributes.get("friendly_name")) or e  # noqa: E731
+        out: list[dict[str, Any]] = []
+        grouped: set[str] = set()
+        for index, group in enumerate(room.get(CONF_GROUPS, []) or []):
+            lamps = [e for e in group.get("lights", []) or [] if e in self._members]
+            if not lamps:
+                continue
+            grouped.update(lamps)
+            out.append({"key": f"group:{group.get('id') or index}", "kind": "bundle",
+                        "name": (group.get("name") or "").strip() or f"Lichtbundel {index + 1}", "entities": lamps})
+        for lamp in self._members:
+            if lamp not in grouped:
+                out.append({"key": lamp, "kind": "bundle", "name": name_of(lamp), "entities": [lamp]})
+        for sw in room_switches(room):
+            out.append({"key": sw["entity_id"], "kind": "switch", "name": name_of(sw["entity_id"]), "entities": [sw["entity_id"]]})
+        for mp in room.get("media_players", []) or []:
+            if mp:
+                out.append({"key": mp, "kind": "switch", "name": name_of(mp), "entities": [mp]})
+        for lock in room_locks(room):
+            out.append({"key": lock["entity_id"], "kind": "lock", "name": name_of(lock["entity_id"]), "entities": []})
+        known = {i["key"] for i in out}
+        for entry in reversed(self._debug.entries):
+            for key, name in zip(entry.get("items") or [], entry.get("bundles") or [], strict=False):
+                if key not in known:
+                    known.add(key)
+                    out.append({"key": key, "kind": "other", "name": name, "entities": []})
+        return out
+
+    def debug_day(self, day: int, item: str | None) -> dict[str, Any]:
+        """One day of the log for the debug tab, plus the counts per day."""
+        name = next((i["name"] for i in self.debug_items() if i["key"] == item), None) if item else None
+        return {"entries": self._debug.day(day, item, name), "counts": self._debug.counts(item, name)}
 
     def upcoming(self, hours: int = 24) -> list[dict[str, Any]]:
         """What RoomControl expects to do in this room in the next `hours`
@@ -1569,7 +1683,15 @@ class RoomControlLight(LightEntity):
                 wants = "motion"
             else:
                 wants = "nothing"
+            win = {"off_away": "alarm", "armed_home_no_motion": "alarm", "motion_1pct": "alarm", "on_slot": "slot",
+                   "lux": "lux", "motion": "motion"}.get(wants, "none")
+            if self._manual:
+                win = "manual"
+            elif first in self._clock_lamps():
+                win = "clock"
             bundles.append({
+                "key": f"group:{group.get('id') or index}",
+                "rules": {**self._rules_for(first), "win": win},
                 "name": (group.get("name") or "").strip() or f"Lichtbundel {index + 1}",
                 "on": any(is_on(e) for e in lamps),
                 "lux_control": first in lux_ctrl,
@@ -1856,7 +1978,7 @@ class RoomControlLight(LightEntity):
         new: State | None = event.data.get("new_state")
         if new is not None and old is not None and (new.state in DOOR_OPEN_STATES) != (old.state in DOOR_OPEN_STATES):
             self._dbg("door", "door_open" if new.state in DOOR_OPEN_STATES else "door_closed",
-                      device=new.attributes.get("friendly_name") or new.entity_id)
+                      device=new.attributes.get("friendly_name") or new.entity_id, item=new.entity_id)
         if new is None or new.state not in DOOR_OPEN_STATES:
             return
         if old is not None and old.state in DOOR_OPEN_STATES:
@@ -1883,7 +2005,8 @@ class RoomControlLight(LightEntity):
             return
         if new.state in ("locking", "unlocking", "opening"):
             return  # only where it ends up
-        self._dbg("lock", f"lock_state_{new.state}", device=new.attributes.get("friendly_name") or new.entity_id)
+        self._dbg("lock", f"lock_state_{new.state}", device=new.attributes.get("friendly_name") or new.entity_id,
+                  item=new.entity_id)
 
     # ── curtains ───────────────────────────────────────────────────────────
 
@@ -3338,7 +3461,6 @@ class RoomControlLight(LightEntity):
             "alarm_last_off": iso(self._alarm_last_off),
             "idle_off_at": iso(self._idle_off_at),
             "last_motion_at": iso(self._last_motion_at),
-            "debug": list(self._debug),
         }
 
     @callback
@@ -3371,7 +3493,7 @@ class RoomControlLight(LightEntity):
         self._alarm_last_off = when("alarm_last_off")
         self._idle_off_at = when("idle_off_at")
         self._last_motion_at = when("last_motion_at") or self._last_motion_at
-        for entry in data.get("debug") or []:
+        for entry in data.get("debug") or []:  # before 2.5.0 the log was kept here
             if isinstance(entry, dict):
                 self._debug.append(entry)
         self._dbg("info", "restart")
@@ -3379,6 +3501,7 @@ class RoomControlLight(LightEntity):
     async def async_added_to_hass(self) -> None:
         self.hass.data[DOMAIN].setdefault("entities", {})[self._area_id] = self
         self._restore_memory()
+        self.hass.async_create_task(self._debug.async_load(self.hass))
         self._subscribe()
         self._prev_motion_lamps = set(self._motion_lamps())
         self._prev_dim_lamps = self._dim_bundle_lamps()

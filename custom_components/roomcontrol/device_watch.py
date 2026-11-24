@@ -145,7 +145,8 @@ class DeviceWatch:
         light = self.hass.data.get(DOMAIN, {}).get("entities", {}).get(found[0]) if found else None
         if light is not None and hasattr(light, "_debug"):
             light._debug.append({"at": dt_util.utcnow().isoformat(), "kind": "info", "reason": f"device_{kind}",
-                                 "bundles": [self.learning.names.get(key, key)]})
+                                 "bundles": [self.learning.names.get(key, key)],
+                                 "items": [key.partition("|")[2] or key]})
         _LOGGER.debug("Device message (%s): %s", kind, message)
 
     # ── events ─────────────────────────────────────────────────────────────

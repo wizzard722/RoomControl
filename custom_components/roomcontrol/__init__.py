@@ -888,7 +888,13 @@ def ws_forget_learned(
 
 
 @websocket_api.websocket_command(
-    {vol.Required("type"): f"{DOMAIN}/get_debug", vol.Required("area_id"): str}
+    {
+        vol.Required("type"): f"{DOMAIN}/get_debug",
+        vol.Required("area_id"): str,
+        vol.Optional("day"): vol.All(int, vol.Range(min=0, max=6)),
+        vol.Optional("item"): vol.Any(str, None),
+        vol.Optional("limit"): vol.All(int, vol.Range(min=1, max=6000)),
+    }
 )
 @callback
 def ws_get_debug(
@@ -896,13 +902,20 @@ def ws_get_debug(
     connection: websocket_api.ActiveConnection,
     msg: dict[str, Any],
 ) -> None:
-    """A room's debug log: why bundles did or did not go on/off, newest first."""
+    """A room's debug log, newest first. With "day" (0 = today): that day's
+    log (of one "item") with the rules per decision, the items and the counts
+    per day (debug tab); without: the newest "limit" entries."""
     entity = _data(hass).get("entities", {}).get(msg["area_id"])
-    connection.send_result(msg["id"], {
-        "entries": entity.debug_log() if entity is not None else [],
-        "now": entity.debug_now() if entity is not None else None,
-        "upcoming": entity.upcoming() if entity is not None else [],
-    })
+    if entity is None:
+        connection.send_result(msg["id"], {"entries": [], "now": None, "upcoming": [], "items": [], "counts": []})
+        return
+    result: dict[str, Any] = {"now": entity.debug_now(), "upcoming": entity.upcoming()}
+    if "day" in msg:
+        result.update(entity.debug_day(msg["day"], msg.get("item") or None))
+        result["items"] = entity.debug_items()
+    else:
+        result["entries"] = entity.debug_log(msg.get("limit", 300))
+    connection.send_result(msg["id"], result)
 
 
 @websocket_api.websocket_command(

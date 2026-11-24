@@ -405,7 +405,8 @@ class OffPay:
                     if light is not None and hasattr(light, "_debug"):
                         st = self.hass.states.get(sw.get("entity_id"))
                         light._debug.append({"at": now.isoformat(), "kind": "info", "reason": "usage_schedule",
-                                             "bundles": [(st.attributes.get("friendly_name") if st else None) or sw.get("entity_id")]})
+                                             "bundles": [(st.attributes.get("friendly_name") if st else None) or sw.get("entity_id")],
+                                             "items": [sw.get("entity_id")]})
             new_rooms.append({**room, "switches": switches} if changed and switches != room.get("switches") else room)
         if changed:
             from . import _async_save  # noqa: PLC0415

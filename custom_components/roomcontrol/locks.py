@@ -110,7 +110,7 @@ class LockManager:
             return
         st = self.hass.states.get(entity_id)
         name = (st.attributes.get("friendly_name") if st else None) or entity_id
-        entity._dbg("lock", reason, device=name, **detail)
+        entity._dbg("lock", reason, device=name, item=entity_id, **detail)
 
     def next_time(self, lock: dict[str, Any], now: datetime) -> datetime | None:
         """When the lock goes on lock next by its times (None: no times on)."""

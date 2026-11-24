@@ -2,6 +2,16 @@
 
 ## 2.5.0
 
+### Debug tab
+- The room's debug log moved from the bug button in the page head to a new tab **Debug**, next to Overview · Settings · Analysis.
+- **Now**: chips with what counts at this moment (sun, someone home, alarm, motion, lux against the target lux, manual control).
+- **Why does this do what it does?**: pick a light bundle, switch, lock or the whole room.
+  - **Last week**: a bar per day with when it was on (from Home Assistant's history) and the hours on; tap a day to see its log.
+  - **Conclusion and rules**: for a light bundle, the rules in order (manual control, alarm clock, alarm, coming home, time slot, lux control, motion, someone home, sun) with ✓ applies, – does not apply and ★ the rule that decides. Tap a moment in the log to see the rules as they were at that moment.
+  - **Copy for bug report**: copies the item's log of that day with its rules, in English.
+- Repeated events (e.g. lux control adjusting every few minutes) are folded into one line with ×N, the time span and the range of levels and lux; tap to unfold.
+- The log is now kept for 7 days per room in its own file (it used to be the last 80 entries), and each decision keeps the weighing of the rules at that moment. *What happened* on the Overview folds repeats as well.
+
 ### Does switching off pay?
 - For every room switch with a power meter, its **Profile** (room → Power) now has **Does switching off pay?**:
   - **Kind of device**, guessed from its pattern and changeable: *Standby only* (TV, NAS), *Keeps warm* (boiler, espresso), *Cooling* (fridge, freezer: switching off is not advised) or *Task* (dishwasher, washing machine).

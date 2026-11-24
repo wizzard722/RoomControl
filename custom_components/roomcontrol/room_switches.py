@@ -117,7 +117,8 @@ def log_switches(hass: HomeAssistant, switches: list[str], kind: str, reason: st
         if not mine or light is None or not hasattr(light, "_debug"):
             continue
         names = [((st := hass.states.get(s)) and st.attributes.get("friendly_name")) or s for s in mine]
-        light._debug.append({"at": dt_util.utcnow().isoformat(), "kind": kind, "reason": reason, "bundles": names})
+        light._debug.append({"at": dt_util.utcnow().isoformat(), "kind": kind, "reason": reason,
+                             "bundles": names, "items": mine})
 
 
 async def async_switch_off(hass: HomeAssistant, switches: list[str], why: str) -> None:
