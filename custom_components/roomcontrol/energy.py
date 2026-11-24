@@ -259,7 +259,10 @@ def room_meters(hass: HomeAssistant, room: dict[str, Any], parts: list[dict[str,
     Room option "power": {"meter:<device id or sensor>": {"hidden": true} |
     {"sensor": W sensor | "none", "energy_sensor": kWh sensor | "none",
     "name": a name of the user's own}}. Without a name of its own the meter is
-    named after its sensors (meter_name)."""
+    named after its sensors (meter_name).
+    A meter can also be added by hand, any power sensor (in any area or none,
+    e.g. an oven's meter without a switch): "meter:<sensor>": {"sensor":
+    sensor, "added": true}; its device is then not found again automatically."""
     from .room_switches import room_switches  # here: avoids an import cycle
 
     area = room.get("area_id")
@@ -276,8 +279,38 @@ def room_meters(hass: HomeAssistant, room: dict[str, Any], parts: list[dict[str,
     for conf in (room.get("power") or {}).values():
         taken_sensors |= {conf.get("sensor")} | set((conf.get("sensors") or {}).values()) | set((conf.get("energy") or {}).values())
     groups: dict[str, dict[str, Any]] = {}
+    added = {
+        key: conf for key, conf in (room.get("power") or {}).items()
+        if key.startswith("meter:") and isinstance(conf, dict) and conf.get("added") and conf.get("sensor")
+    }
+    for key, conf in added.items():
+        entry = ent_reg.async_get(conf["sensor"])
+        device = dev_reg.async_get(entry.device_id) if entry is not None and entry.device_id else None
+        if device is not None:
+            taken_devices.add(device.id)  # its other sensors are not a meter of their own
+        st = hass.states.get(conf["sensor"])
+        kwh = [
+            e.entity_id for e in ent_reg.entities.values()
+            if device is not None and e.device_id == device.id and e.domain == "sensor"
+            and str(((s := hass.states.get(e.entity_id)) and s.attributes.get("unit_of_measurement")) or e.unit_of_measurement or "").lower() == "kwh"
+        ]
+        groups[key] = {"w": [conf["sensor"]], "kwh": kwh, "added": True,
+                       "names": [(st.attributes.get("friendly_name") if st else None) or conf["sensor"]],
+                       "device": (device.name_by_user or device.name) if device else None}
+    # Meters added by hand in another room count there, not here as well.
+    elsewhere: set[str] = set()
+    for other in hass.data.get(DOMAIN, {}).get("rooms", []):
+        if other.get("area_id") == area:
+            continue
+        for key, conf in (other.get("power") or {}).items():
+            if key.startswith("meter:") and isinstance(conf, dict) and conf.get("added") and conf.get("sensor"):
+                elsewhere.add(conf["sensor"])
+                if (e := ent_reg.async_get(conf["sensor"])) is not None and e.device_id:
+                    elsewhere.add(e.device_id)
     for entry in ent_reg.entities.values():
         if entry.domain != "sensor" or entry.disabled_by or entry.platform == DOMAIN:
+            continue
+        if entry.entity_id in elsewhere or (entry.device_id and entry.device_id in elsewhere):
             continue
         device = dev_reg.async_get(entry.device_id) if entry.device_id else None
         if (entry.area_id or (device.area_id if device else None)) != area:
@@ -289,6 +322,8 @@ def room_meters(hass: HomeAssistant, room: dict[str, Any], parts: list[dict[str,
         if unit not in ("w", "kw", "kwh"):
             continue
         key = f"meter:{entry.device_id or entry.entity_id}"
+        if key in added:
+            continue
         group = groups.setdefault(key, {"w": [], "kwh": [], "names": [],
                                         "device": (device.name_by_user or device.name) if device else None})
         group["kwh" if unit == "kwh" else "w"].append(entry.entity_id)
@@ -305,7 +340,7 @@ def room_meters(hass: HomeAssistant, room: dict[str, Any], parts: list[dict[str,
         e_sensor = None if e_sensor == "none" else e_sensor
         kwh = _kwh(hass, e_sensor)
         out.append({"key": key, "kind": "meter", "name": (conf.get("name") or "").strip() or group["name"],
-                    "found_name": group["name"], "hidden": bool(conf.get("hidden")),
+                    "found_name": group["name"], "hidden": bool(conf.get("hidden")), "added": bool(group.get("added")),
                     "watts": None if conf.get("hidden") else (_watts(hass, w_sensor) if w_sensor else 0.0),
                     "source": "sensor", "auto": not conf.get("sensor"), "sensor": w_sensor,
                     "energy_sensor": e_sensor, "kwh": None if kwh is None else round(kwh, 3),
