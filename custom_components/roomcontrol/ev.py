@@ -248,6 +248,18 @@ def cheapest(rows: list[dict[str, Any]], hours: float, now: datetime | None = No
     return best
 
 
+def avg_over(rows: list[dict[str, Any]], start: datetime, end: datetime) -> float | None:
+    """Time-weighted average "price" of `rows` from start to end (None: not covered)."""
+    total, covered = 0.0, 0.0
+    for r in rows:
+        o = (min(end, r["end"]) - max(start, r["start"])).total_seconds()
+        if o > 0:
+            total += r["price"] * o
+            covered += o
+    span = (end - start).total_seconds()
+    return total / covered if span > 0 and covered >= span - 1 else None
+
+
 def charge_hours(cfg: dict[str, Any], soc: float | None, battery_kwh: float, max_kw: float) -> float:
     """Hours needed to charge to full at the charger's maximum."""
     if max_kw <= 0:
@@ -275,8 +287,22 @@ def price_status(hass: HomeAssistant, cfg: dict[str, Any], car: dict[str, Any],
     for r in rows:
         r["sun_kw"] = sun_kw_at(sun, r["start"], r["end"]) if sun else 0.0
         r["share"] = grid_share(r["sun_kw"], base_kw, max_kw) if sun else 1.0
-    effective = [{**r, "price": r["price"] * r["share"]} for r in rows]
+    # What a kWh for the car costs per period: the grid part at the price you
+    # pay, the own-sun part at what it would have brought when fed in (the
+    # money you miss by using it yourself; with no feed-in price known: 0).
+    if sun:
+        from .tariff import market_rows, sell_at  # noqa: PLC0415
+
+        market = market_rows(hass)
+        for r in rows:
+            sell = sell_at(hass, r["start"], market) if r["share"] < 1 else 0.0
+            r["sell"] = sell if sell is not None else 0.0
+    effective = [{**r, "price": r["price"] * r["share"] + r.get("sell", 0.0) * (1 - r["share"])} for r in rows]
     best = cheapest(effective, hours, now, ready) if hours > 0 else None
+    need = timedelta(hours=hours)
+    tariff_avg = avg_over(rows, best["start"], best["end"]) if best is not None else None
+    now_avg = avg_over(effective, now, now + need) if hours > 0 else None
+    p_now = price_now(hass, sensor, rows)
     sun_pct = None
     if best is not None and sun:
         # The expected share of sun in that stretch (weighted by time).
@@ -291,15 +317,20 @@ def price_status(hass: HomeAssistant, cfg: dict[str, Any], car: dict[str, Any],
     upcoming = [r for r in rows if r["end"] > now and r["start"] < now + timedelta(hours=36)][:200]
     return {
         "sensor": sensor,
-        "now": price_now(hass, sensor, rows),
+        "now": p_now,
         "hours": round(hours, 2),
         "kwh": round(need_kwh, 2),
         "soc_known": car.get("soc") is not None,
+        "full": car.get("soc") is not None and hours <= 0,
         "ready_by": ready.isoformat() if ready else None,
         "cheapest": None if best is None else {
-            "start": best["start"].isoformat(), "end": best["end"].isoformat(), "avg": round(best["avg"], 4),
+            "start": best["start"].isoformat(), "end": best["end"].isoformat(),
+            # the price you pay in that stretch (the sun is shown apart, as sun_pct)
+            "avg": round(tariff_avg if tariff_avg is not None else best["avg"], 4),
+            # what the charge costs: grid kWh at the price you pay, own sun at the feed-in price
             "cost": round(best["avg"] * need_kwh, 2), "sun_pct": sun_pct,
-            "cost_now": None if (p := price_now(hass, sensor, rows)) is None else round(p * need_kwh, 2)},
+            "cost_now": round(now_avg * need_kwh, 2) if now_avg is not None
+            else None if p_now is None else round(p_now * need_kwh, 2)},
         "forecast": [{"start": r["start"].isoformat(), "end": r["end"].isoformat(), "price": round(r["price"], 4),
                       "sun_kw": round(r["sun_kw"], 2), "sun_share": round(1 - r["share"], 2)}
                      for r in upcoming],

@@ -2,6 +2,12 @@
 
 ## 2.5.0
 
+### EV charger fixes
+- **Cheapest time to charge** now shows the price you actually pay in that stretch; the expected sun is shown apart. It used to show a price with the sun already taken off (e.g. € 0.32 instead of € 0.35).
+- The cost of a charge now counts own sun at what it would have brought when fed in (the money you miss), not as free, and **charging now** is worked out the same way, so both costs compare fairly. Choosing the cheapest stretch uses the same sum.
+- With the car at 100 % the price card says "not needed, the car is full" instead of "no stretch long enough in the forecast".
+- On a phone the price card's labels no longer squeeze to one word per line or run under their values.
+
 ### Armed Home: Dim when not on motion
 - In a room's alarm card, **Not on motion** (Armed Home) has a new switch **Dim**: the light bundles that are on go to their Dim level instead of off, and a light bundle switched on while Armed Home burns at Dim. What is off stays off, motion still switches nothing on, light bundles that don't take part in Dim keep their level and the alarm clock keeps its own level. When Armed Home ends, every lamp gets back the brightness it would have had.
 
