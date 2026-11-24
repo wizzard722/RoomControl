@@ -1,5 +1,14 @@
 # Release notes
 
+## 2.3.1
+
+### Energy contract: Nord Pool, also when installed later
+- With the market price on **automatic**, RoomControl now finds a Nord Pool price sensor by itself when the price sensor has no price without tax, also when Nord Pool is installed later. Choosing one under *Market price sensor* still works and goes first.
+- Both Nord Pool integrations work: the one from HACS (prices in the sensor's attributes) and the one built into Home Assistant. For the built-in one RoomControl fetches today's and tomorrow's prices itself with its action (every half hour while they are missing, from 13:00 for tomorrow), converted from per MWh to per kWh; until then it uses the price now.
+- The card shows which market price sensor is used, and warns when it only gives the price now and no prices for the coming hours.
+
+---
+
 ## 2.3.0
 
 ### Energy contract

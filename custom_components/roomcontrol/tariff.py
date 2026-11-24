@@ -14,8 +14,8 @@ Inside the general setting "energy":
 With a dynamic contract a fed-in kWh brings the bare market price (no energy
 tax, no VAT), which can be negative. Where that price comes from:
  - "auto": the price sensor's own price without tax when it has one (e.g.
-   Zonneplan's "price_tax_excluded"), else a market price sensor when one
-   is chosen, else derived;
+   Zonneplan's "price_tax_excluded"), else the chosen market price sensor,
+   else a Nord Pool sensor found by itself (nordpool_prices.py), else derived;
  - "sensor": the chosen market price sensor (e.g. Nord Pool, ENTSO-e);
  - "derived": price you pay ÷ 1.21 − energy tax − markup (an approximation);
  - "fixed": a fixed amount per kWh (fixed contracts).
@@ -81,14 +81,44 @@ def market_rows(hass: HomeAssistant) -> tuple[list[dict[str, Any]], str | None]:
     if source == "auto" and cfg.get("price_sensor"):
         if rows := price_forecast(hass, cfg["price_sensor"], market=True):
             return rows, "price_sensor"
-    if source in ("auto", "sensor") and cfg.get("market_sensor"):
-        if rows := price_forecast(hass, cfg["market_sensor"]):
+    if source in ("auto", "sensor") and (sensor := market_sensor(hass)):
+        if rows := sensor_rows(hass, sensor):
             return rows, "market_sensor"
     if rows := buy_rows(hass):
         return [{**r, "price": _derive(r["price"], cfg)} for r in rows], "derived"
     if cfg.get("price_sensor") or isinstance(cfg.get("price_kwh"), (int, float)):
         return [], "derived"
     return [], None
+
+
+def market_sensor(hass: HomeAssistant) -> str | None:
+    """The market price sensor in use: the chosen one; with "automatic" and
+    none chosen, a Nord Pool sensor RoomControl finds by itself."""
+    from .nordpool_prices import find_sensor  # noqa: PLC0415
+
+    cfg = _cfg(hass)
+    source = cfg.get("market_source") if cfg.get("market_source") in MARKET_SOURCES else "auto"
+    if cfg.get("market_sensor"):
+        return cfg["market_sensor"]
+    return find_sensor(hass) if source == "auto" else None
+
+
+def sensor_rows(hass: HomeAssistant, sensor: str) -> list[dict[str, Any]]:
+    """A market price sensor's prices per period: from its attributes (e.g.
+    Nord Pool from HACS), the prices fetched for the built-in Nord Pool
+    integration, or else only the price now (its state)."""
+    from .ev import price_forecast, price_now  # noqa: PLC0415
+    from .nordpool_prices import cached_rows  # noqa: PLC0415
+
+    if rows := price_forecast(hass, sensor):
+        return rows
+    if rows := cached_rows(hass, sensor):
+        return rows
+    if (now_price := price_now(hass, sensor, [])) is not None:
+        now = dt_util.utcnow()
+        start = now.replace(minute=now.minute // 15 * 15, second=0, microsecond=0)
+        return [{"start": start, "end": start + timedelta(minutes=15), "price": now_price}]
+    return []
 
 
 def _at(rows: list[dict[str, Any]], when: datetime) -> float | None:
@@ -145,6 +175,8 @@ def status(hass: HomeAssistant) -> dict[str, Any]:
         "market": None if (m := _at(market, dt_util.utcnow())) is None else round(m, 4),
         "market_source": source,
         "sell": None if sell is None else round(sell, 4),
+        "market_sensor": market_sensor(hass) if source == "market_sensor" else None,
+        "market_periods": len(market),
         "periods": len(rows),
         "until": rows[-1]["end"].isoformat() if rows else None,
     }

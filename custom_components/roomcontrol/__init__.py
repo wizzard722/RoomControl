@@ -317,9 +317,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await device_learning.async_load()
     _data(hass)["device_learning"] = device_learning
 
+    from .nordpool_prices import NordPoolPrices  # noqa: PLC0415
+
+    nordpool = NordPoolPrices(hass)
+    _data(hass)["nordpool"] = nordpool
+
     @callback
     def _learning_start(_hass: HomeAssistant) -> None:
         device_learning.start()
+        nordpool.start()
 
     async_at_started(hass, _learning_start)
     clocks.start()
@@ -406,6 +412,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             clocks.shutdown()
         if (device_learning := _data(hass).pop("device_learning", None)) is not None:
             device_learning.shutdown()
+        if (nordpool := _data(hass).pop("nordpool", None)) is not None:
+            nordpool.shutdown()
         if (vacuums := _data(hass).pop("vacuums", None)) is not None:
             vacuums.stop()
         if (locks := _data(hass).pop("locks", None)) is not None:
