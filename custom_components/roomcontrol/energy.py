@@ -341,11 +341,16 @@ def room_meters(hass: HomeAssistant, room: dict[str, Any], parts: list[dict[str,
         kwh = _kwh(hass, e_sensor)
         out.append({"key": key, "kind": "meter", "name": (conf.get("name") or "").strip() or group["name"],
                     "found_name": group["name"], "hidden": bool(conf.get("hidden")), "added": bool(group.get("added")),
-                    "watts": None if conf.get("hidden") else (_watts(hass, w_sensor) if w_sensor else 0.0),
+                    # No power sensor (only kWh): unknown, it can't be subtracted.
+                    "watts": None if conf.get("hidden") or not w_sensor else _watts(hass, w_sensor),
+                    "no_power": not w_sensor,
                     "source": "sensor", "auto": not conf.get("sensor"), "sensor": w_sensor,
                     "energy_sensor": e_sensor, "kwh": None if kwh is None else round(kwh, 3),
                     "w_options": sorted(group["w"]), "kwh_options": sorted(group["kwh"])})
     return out
+
+
+CHARGE_CONFIRM = timedelta(seconds=90)
 
 
 class Energy:
@@ -355,6 +360,7 @@ class Energy:
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
         self._unsub: CALLBACK_TYPE | None = None
+        self._above_since: datetime | None = None  # the estimate went over the limit
         self.charging_since: datetime | None = None
         self.charged_kwh = 0.0
         self.cost = 0.0
@@ -712,10 +718,16 @@ class Energy:
         # The power drawn decides (the car's own sensor, e.g. Audi Connect, is
         # often minutes late): above the limit the car is charging. The car's
         # sensor can only add to that (it says charging while the estimate is low).
-        by_power = est_kw is not None and est_kw >= from_kw
+        above = est_kw is not None and est_kw >= from_kw
+        now = dt_util.utcnow()
+        self._above_since = (self._above_since or now) if above else None
+        # A short peak (an oven or kettle heating up, a meter that reports a
+        # little later than the phase sensor) is not the car: the estimate has
+        # to stay over the limit for CHARGE_CONFIRM before a session starts.
+        by_power = above and (self.charging_since is not None or now - self._above_since >= CHARGE_CONFIRM)
         charging = by_power or charging_state is True
         why = ("power" if by_power else "car") if charging else (
-            "no_phase_sensor" if phase_w is None else "below_limit")
+            "no_phase_sensor" if phase_w is None else "confirming" if above else "below_limit")
         if charging and plugged is False and charging_state is not True:
             # The charging cable is not connected: something else draws the power.
             charging, why = False, "unplugged"

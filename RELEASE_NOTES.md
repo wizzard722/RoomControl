@@ -12,6 +12,8 @@
 - Meters that report in kW (e.g. an oven's power sensor) were skipped as room meters; they now count (in W).
 - When a charging cable sensor is set and says the cable is not connected, the car is not counted as charging (unless the car itself says it is).
 - The charger's debug view shows per subtracted room what was measured (e.g. "Oven 2,400 W · Ceiling 125 W" or "nothing measured"), the rooms without a phase, and both estimates, so you can see which appliance is missing a meter.
+- A short peak is no longer taken for the car: the estimate has to stay above the limit for 1.5 minutes before a charging session (and its alert) starts. An oven or kettle heating up, or a meter that reports a little later than the phase sensor, no longer starts one. The debug view says "Not charging yet" meanwhile.
+- A meter (dummy switch) with only an energy (kWh) sensor and no power sensor counted as 0 W, so its appliance was never subtracted. It now shows "—" with a warning in the room's **Power** card, so you can choose its power sensor. Hidden meters are marked as not counted.
 
 ### Power: add a meter by hand
 - An appliance with a power meter but no switch (e.g. the oven) only counted when its sensor was in the room's area in Home Assistant. In a room's **Power** card you can now add any power sensor (W or kW) under *Meters* with **Add a meter (power sensor)…**, also one in another area or in none. It counts in the room's power and is subtracted for the car; its energy (kWh) sensor on the same device is found too. A meter added by hand is no longer counted automatically in another room, and can be removed again.
