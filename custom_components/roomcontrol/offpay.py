@@ -212,6 +212,8 @@ class OffPay:
         now = dt_util.utcnow()
         self._record_prices(now)
         self._run_trials(now)
+        if now.minute == 5:
+            self._auto_schedules(now)
         if now.minute == 0:
             self._save()
 
@@ -365,6 +367,50 @@ class OffPay:
         return {"off": f"{start_min // 60:02d}:{start_min % 60:02d}", "on": best["on"],
                 "net_day": round(best["net"], 3), "per_month": round(best["net"] * 30, 2),
                 "ready_by": conf.get("ready_by")}
+
+    # ── usage schedule, kept up to date (usage.py) ─────────────────────────
+
+    def _auto_schedules(self, now: datetime) -> None:
+        """Once a week: switches set to "auto_schedule" get the usage proposal as their slots."""
+        from .usage import usage  # noqa: PLC0415
+
+        week = dt_util.as_local(now).strftime("%G-W%V")
+        rooms = self.hass.data.get(DOMAIN, {}).get("rooms", [])
+        changed = False
+        new_rooms = []
+        for room in rooms:
+            power = room.get("power") or {}
+            switches = list(room.get("switches") or [])
+            for i, sw in enumerate(switches):
+                if not isinstance(sw, dict):
+                    continue
+                part = f"switch:{sw.get('entity_id')}"
+                key = f"{room.get('area_id')}|{part}"
+                learner = self.learning.learners.get(key)
+                if not (power.get(part) or {}).get("auto_schedule") or learner is None:
+                    continue
+                if learner.data.get("auto_week") == week:
+                    continue
+                learner.data["auto_week"] = week
+                result = usage(self, key)
+                if not result or not result.get("enough") or not result.get("proposal"):
+                    continue
+                off_on = sw.get("off_on") if isinstance(sw.get("off_on"), list) else ["all_off", "nobody_home", "smoke"]
+                new = {**sw, "off_on": [m for m in off_on if m not in ("slot", "night")] + ["slot"],
+                       "slots": result["proposal"]}
+                if new != sw:
+                    switches[i] = new
+                    changed = True
+                    light = self.hass.data.get(DOMAIN, {}).get("entities", {}).get(room.get("area_id"))
+                    if light is not None and hasattr(light, "_debug"):
+                        st = self.hass.states.get(sw.get("entity_id"))
+                        light._debug.append({"at": now.isoformat(), "kind": "info", "reason": "usage_schedule",
+                                             "bundles": [(st.attributes.get("friendly_name") if st else None) or sw.get("entity_id")]})
+            new_rooms.append({**room, "switches": switches} if changed and switches != room.get("switches") else room)
+        if changed:
+            from . import _async_save  # noqa: PLC0415
+
+            self.hass.async_create_task(_async_save(self.hass, rooms=new_rooms))
 
     # ── trial ──────────────────────────────────────────────────────────────
 

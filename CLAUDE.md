@@ -93,7 +93,7 @@ mode, F bill & charging, G "does switching off pay?", H settings: energy
 contract + home battery + simulation, I device profile / learned use).
 
 Build order agreed with the user (each step: analysis + proposal first):
-Done so far: 1 and 2 in 2.3.0 (Nord Pool in 2.3.1/2.3.2), 3 in 2.4.0, 4 in 2.5.0.
+Done so far: 1 and 2 in 2.3.0 (Nord Pool in 2.3.1/2.3.2), 3 in 2.4.0, 4 and 4b (learned use → time slots) in 2.5.0.
 1. Energy contract (H): dynamic tariffs, feed-in price and costs, net
    metering until a date.
 2. Learning devices (I): profile per metered device (standby, running

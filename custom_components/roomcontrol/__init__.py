@@ -737,7 +737,10 @@ def ws_devices(
         for device in devices:
             if "|switch:" in device["key"]:
                 try:
+                    from .usage import usage  # noqa: PLC0415
+
                     device["offpay"] = offpay.analysis(device["key"])
+                    device["usage"] = usage(offpay, device["key"])
                 except Exception as err:  # noqa: BLE001 - never break the panel
                     _LOGGER.warning("Off-pay analysis of %s failed: %s", device["key"], err)
             else:

@@ -11,6 +11,11 @@
 - The Switches card shows the result per rule next to each metered switch, e.g. "Night: costs € 2.65 per month · certain".
 - RoomControl now keeps the use per hour of metered devices, the buying price per hour (also from the price sensor's history) and when each switch was off and why (also from its history), for the last 60 days.
 
+### When devices are used, and switching to match
+- RoomControl now learns when a metered switch's device is used, per weekday and quarter of an hour over the last 6 weeks (for a device that keeps warm: real use only, not its keep-warm pulses). The **Profile** shows it, e.g. "Mon–Fri 06:30–08:00 · 17:30–19:00; Sat, Sun 08:30–10:00" (a quarter counts when it was used in at least 1 of 5 weeks; gaps under 2 hours stay on; a device that keeps warm comes on 30 minutes early).
+- **Proposal**: off outside those times, with what it would save per month (including catching up for devices that keep warm). **Apply as time slots** sets them on the switch (moment *Time slot*, replacing *Night*); **Keep up to date automatically** lets RoomControl update them once a week (noted in *What happened*).
+- Switched on by hand during one of its off time slots, a switch now stays on until its device has been idle for 30 minutes, then goes off again.
+
 ### Switches: off during a time slot
 - New moment **Time slot** under *Off with*: the switch goes off while one of its own time slots runs (the usual time slot editor, with Normal / Leave / Vacation) and back on when it ends (with *Back on when someone comes home*).
 

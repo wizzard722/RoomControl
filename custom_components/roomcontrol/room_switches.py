@@ -45,6 +45,7 @@ from .rooms import anyone_home, household_persons, managed_areas, room_persons
 _LOGGER = logging.getLogger(__name__)
 
 CONF_SWITCHES = "switches"
+IDLE_BACK_OFF = 30  # minutes at standby before a switch turned on by hand during its slot goes off again
 OFF_MOMENTS = ("all_off", "nobody_home", "room_away", "night", "slot", "smoke", "vacation_home", "vacation_away")
 DEFAULT_OFF_ON = ["all_off", "nobody_home", "smoke"]
 SWITCH_DOMAINS = ("switch.", "remote.")  # what a room's Switches may hold
@@ -155,6 +156,7 @@ class RoomSwitches:
         self.room_off: dict[str, list[str]] = {}  # area: switched off because the room's persons left
         self.night_off: list[str] = []  # switched off for the night (Armed Home)
         self.slot_off: list[str] = []  # switched off for one of their own time slots
+        self._idle_since: dict[str, float] = {}
         self._track_rooms: CALLBACK_TYPE | None = None
 
     async def async_load(self) -> None:
@@ -293,6 +295,11 @@ class RoomSwitches:
                 st = self.hass.states.get(entity)
                 if active and entity not in self.slot_off and st is not None and st.state == "on":
                     off.append(entity)
+                elif active and entity in self.slot_off and st is not None and st.state == "on":
+                    # Switched on by hand during the slot: on until it has been idle IDLE_BACK_OFF, then off again.
+                    if self._idle_minutes(room.get("area_id"), entity) >= IDLE_BACK_OFF:
+                        self.slot_off.remove(entity)
+                        off.append(entity)
                 elif not active and entity in self.slot_off:
                     self.slot_off.remove(entity)
                     if sw["back_on"] and entity not in self.switched_off and entity not in self.vacation_off:
@@ -305,6 +312,21 @@ class RoomSwitches:
             self.hass.async_create_task(async_turn(self.hass, back, True))
         if off or back:
             self._keep()
+
+    def _idle_minutes(self, area: str | None, entity: str) -> float:
+        """How long the switch's device has been at standby (its power meter);
+        0 while in use or without a meter."""
+        learning = self.hass.data.get(DOMAIN, {}).get("device_learning")
+        learner = learning.learners.get(f"{area}|switch:{entity}") if learning else None
+        if learner is None or learner.last is None:
+            return 0.0
+        idle = self._idle_since
+        t, w = learner.last
+        now = dt_util.utcnow().timestamp()
+        if learner.run is not None or w > learner.threshold():
+            idle.pop(entity, None)
+            return 0.0
+        return (now - idle.setdefault(entity, now)) / 60
 
     async def async_night(self) -> None:
         """Armed Home (the night): the "night" switches off, remembering which were on."""

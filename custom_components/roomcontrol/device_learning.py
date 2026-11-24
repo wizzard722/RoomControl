@@ -12,7 +12,9 @@ Per device (key "<area id>|<part key>", e.g. "keuken|switch:switch.vaatwasser"):
 - heat: how often a run started per weekday and hour;
 - days / months / hours: kWh per day (last 60), per month (last 24) and
   per local hour (last 60 days, "YYYY-MM-DDTHH"), for offpay.py;
-- kind: guessed from the pattern (guess_kind), the user's choice wins.
+- kind: guessed from the pattern (guess_kind), the user's choice wins;
+- use: per day the quarters of an hour it was in use (last USE_DAYS days),
+  for usage.py.
 
 A new device first replays the history Home Assistant still has of its
 power sensor (recorder), so it doesn't start from nothing. Kept in
@@ -43,6 +45,7 @@ PROGRAM_MIN = 3
 SIG_POINTS = 20
 MAX_GAP = 1800  # s: a longer gap (sensor away) is not counted as energy
 DAYS_KEPT = 60
+USE_DAYS = 42  # six weeks of use per quarter of an hour
 MONTHS_KEPT = 24
 
 
@@ -123,6 +126,7 @@ class Learner:
         d.setdefault("days", {})
         d.setdefault("months", {})
         d.setdefault("hours", {})
+        d.setdefault("use", {})  # "YYYY-MM-DD": {"all": [quarters], "big": [quarters]}
         self.last: tuple[float, float] | None = None  # (timestamp, W)
         self.run: dict[str, Any] | None = None  # {"start", "kwh", "samples", "below"}
 
@@ -210,12 +214,31 @@ class Learner:
         rw = self.data.get("run_w")
         self.data["run_w"] = round(avg_w if rw is None else rw + 0.2 * (avg_w - rw), 1)
         self.data["peak_w"] = round(max(self.data.get("peak_w") or 0.0, max(w for _, w in samples)), 1)
+        self._mark_use(run["start"], end, kwh)
         cycle = {"start": dt_util.utc_from_timestamp(run["start"]).isoformat(), "min": round(minutes, 1),
                  "kwh": round(kwh, 4), "prog": best}
         self.data["cycles"] = [*self.data["cycles"], cycle][-MAX_CYCLES:]
         return cycle
 
+    def _mark_use(self, start: float, end: float, kwh: float) -> None:
+        """Note the quarters of the day this run covered: under "all", and under
+        "big" when it used clearly more than a usual run (1.5× the median of the
+        last 30; for a boiler or espresso: real use, not a keep-warm pulse)."""
+        recent = sorted(c["kwh"] for c in self.data["cycles"][-30:])
+        big = len(recent) < 5 or kwh > 1.5 * recent[len(recent) // 2]
+        t = start - start % 900
+        while t < end:
+            local = dt_util.as_local(dt_util.utc_from_timestamp(t))
+            day = self.data["use"].setdefault(local.strftime("%Y-%m-%d"), {"all": [], "big": []})
+            q = local.hour * 4 + local.minute // 15
+            for kind in ("all", "big") if big else ("all",):
+                if q not in day[kind]:
+                    day[kind].append(q)
+            t += 900
+
     def prune(self) -> None:
+        if self.data.get("use"):
+            self.data["use"] = dict(sorted(self.data["use"].items())[-USE_DAYS:])
         for key, keep in (("days", DAYS_KEPT), ("months", MONTHS_KEPT), ("hours", DAYS_KEPT * 24)):
             items = sorted(self.data[key].items())
             self.data[key] = dict(items[-keep:])
