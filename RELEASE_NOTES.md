@@ -1,5 +1,22 @@
 # Release notes
 
+## 2.3.0
+
+### Energy contract
+- New card **Energy contract** in the general settings: what a kWh costs to buy and what feeding one in brings. Charging the car, and later planning and the home battery, calculate with it.
+- **Buying**: dynamic (a price sensor with forecast, e.g. Zonneplan per quarter hour, including tax and markup) or a fixed price. The price sensor moved here from the EV charger's price card (existing settings are kept).
+- **Feeding in** brings the bare market price with a dynamic contract (no energy tax, no VAT; it can be negative). RoomControl takes it from the price sensor when that has a price without tax, else from a market price sensor you choose (e.g. Nord Pool), else derives it (price ÷ 1.21 − energy tax − markup, both amounts filled in by you). A fixed feed-in amount is possible for fixed contracts, and feed-in costs per kWh (default 0).
+- The card shows the prices right now and where each comes from: "Buying now € 0.243 · market price € 0.061 · feeding in brings € 0.061".
+- The car's "saved" amount for its own solar power is now the buying price minus what feeding that power in would have brought, instead of the full buying price.
+
+### Device profiles: RoomControl learns what metered devices use
+- For every switch and meter with a power sensor RoomControl now learns: standby power, power while running (and peak), each run (duration, kWh and its power pattern), when it runs (weekday × hour), kWh per month, and runs this week.
+- Runs that look alike become a **program** (recognised after 3 runs); you give programs your own name (e.g. "Eco", "Quick").
+- It starts from the history Home Assistant still has of the power sensor, so it doesn't start from nothing.
+- In a room's **Power** card each metered switch and meter shows "Learned: standby 1.2 W · running ± 880 W · 5× this week · Eco 0.92 kWh", with **Profile** for the details, program names, the week pattern and **Learn again**.
+
+---
+
 ## 2.2.0
 
 ### Leave and vacation

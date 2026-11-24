@@ -13,6 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
@@ -166,6 +167,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_alarm_status)
     websocket_api.async_register_command(hass, ws_alarm_test)
     websocket_api.async_register_command(hass, ws_energy_status)
+    websocket_api.async_register_command(hass, ws_devices)
     websocket_api.async_register_command(hass, ws_ev_test)
     websocket_api.async_register_command(hass, ws_solar_forecasts)
     websocket_api.async_register_command(hass, ws_nspanel)
@@ -309,6 +311,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if old_select := ent_reg.async_get_entity_id("select", DOMAIN, f"{DOMAIN}_vacation_kind"):
         ent_reg.async_remove(old_select)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    from .device_learning import DeviceLearning  # noqa: PLC0415
+
+    device_learning = DeviceLearning(hass)
+    await device_learning.async_load()
+    _data(hass)["device_learning"] = device_learning
+
+    @callback
+    def _learning_start(_hass: HomeAssistant) -> None:
+        device_learning.start()
+
+    async_at_started(hass, _learning_start)
     clocks.start()
     locks.start()
     await vacuums.async_start()
@@ -391,6 +404,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             cover_memory.stop()
         if (clocks := _data(hass).pop("clocks", None)) is not None:
             clocks.shutdown()
+        if (device_learning := _data(hass).pop("device_learning", None)) is not None:
+            device_learning.shutdown()
         if (vacuums := _data(hass).pop("vacuums", None)) is not None:
             vacuums.stop()
         if (locks := _data(hass).pop("locks", None)) is not None:
@@ -671,6 +686,25 @@ def ws_energy_status(
     """Power per room and phase, and whether the car is charging."""
     energy = _data(hass).get("energy")
     connection.send_result(msg["id"], energy.status() if energy else {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/devices", vol.Required("area_id"): str, vol.Optional("forget"): str}
+)
+@callback
+def ws_devices(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Panel: what RoomControl learned about the room's metered devices; "forget": learn one again."""
+    learning = _data(hass).get("device_learning")
+    if learning is None:
+        connection.send_result(msg["id"], {"devices": []})
+        return
+    if (key := msg.get("forget")) and key.startswith(f"{msg['area_id']}|"):
+        learning.forget(key)
+    connection.send_result(msg["id"], {"devices": learning.profiles(msg["area_id"])})
 
 
 @websocket_api.websocket_command(

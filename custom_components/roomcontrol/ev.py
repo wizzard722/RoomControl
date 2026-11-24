@@ -86,6 +86,10 @@ _END_KEYS = ("end_date", "end", "end_time", "till", "to")
 _NESTED_PRICE_KEYS = ("price_tax_included", "price_incl_tax", "price_including_tax", "total_price",
                       "price", "price_tax_excluded")
 _PRICE_KEYS = ("electricity_price", "price", "value", "total", "price_incl", "tariff")
+# The bare market price (no tax, no markup), when a sensor offers it next to the price you pay.
+_MARKET_NESTED_KEYS = ("price_tax_excluded", "price_excl_tax", "price_excluding_tax", "market_price")
+_MARKET_KEYS = ("market_price", "price_excl_tax", "price_excluding_tax", "price_tax_excluded",
+                "electricity_price_excl_tax", "price_excl")
 
 
 def _when(value: Any) -> datetime | None:
@@ -112,10 +116,22 @@ def _rows(attrs: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _price_of(row: dict[str, Any]) -> float | None:
+def _price_of(row: dict[str, Any], market: bool = False) -> float | None:
     """A row's price: a plain number (Zonneplan's older "electricity_price",
     Nord Pool's "value" …) or nested, e.g. Zonneplan's quarter-hour
-    "price_tax_included": {"amount": …}."""
+    "price_tax_included": {"amount": …}. market=True: only the bare market
+    price (e.g. "price_tax_excluded"), None when the row has none."""
+    if market:
+        for key in _MARKET_KEYS:
+            if isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool):
+                return float(row[key])
+        for key in _MARKET_NESTED_KEYS:
+            value = row.get(key)
+            if isinstance(value, dict):
+                for inner in ("amount", "value", "total"):
+                    if isinstance(value.get(inner), (int, float)):
+                        return float(value[inner])
+        return None
     for key in _PRICE_KEYS:
         if isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool):
             return float(row[key])
@@ -128,7 +144,7 @@ def _price_of(row: dict[str, Any]) -> float | None:
     return None
 
 
-def price_forecast(hass: HomeAssistant, sensor: str | None) -> list[dict[str, Any]]:
+def price_forecast(hass: HomeAssistant, sensor: str | None, market: bool = False) -> list[dict[str, Any]]:
     """[{"start": utc datetime, "end": utc datetime, "price": €/kWh}], sorted.
     Reads the forecast in the price sensor's attributes: Zonneplan
     ("forecast": [{"datetime", "electricity_price"}], in 1/10,000,000 €;
@@ -142,7 +158,7 @@ def price_forecast(hass: HomeAssistant, sensor: str | None) -> list[dict[str, An
     out: list[dict[str, Any]] = []
     for row in _rows(dict(st.attributes)):
         start = next((t for k in _TIME_KEYS if (t := _when(row.get(k))) is not None), None)
-        price = _price_of(row)
+        price = _price_of(row, market)
         if start is None or price is None:
             continue
         end = next((t for k in _END_KEYS if (t := _when(row.get(k))) is not None), None)

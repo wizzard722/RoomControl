@@ -24,7 +24,8 @@ grid part is at most what the house takes from the grid), "battery_kwh"
 (into the battery: the rise of the battery level × its size, when known),
 "cost" (€, the grid part at the price of each moment; own power is free;
 older sessions: all kWh), "saved" (€, the sun part at the price of each
-moment: what it would have cost from the grid), "soc_from", "soc_to"}].
+moment: what it would have cost from the grid, less what feeding it in would
+have brought, see tariff.py), "soc_from", "soc_to"}].
 
 Room options: "phase": "L1" | "L2" | "L3" (3 phases only) and
 "power": {"bundle:<group id>" | "switch:<entity>": {"sensor": entity} | {"watts": n}};
@@ -55,7 +56,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import CONF_GROUPS, DOMAIN
-from .ev import EvNotifier, price_now, price_status
+from .ev import EvNotifier, price_status
 from .rooms import managed_areas
 
 SETTING_ENERGY = "energy"
@@ -219,6 +220,7 @@ def room_parts(hass: HomeAssistant, room: dict[str, Any]) -> list[dict[str, Any]
         out.append({"key": key, "kind": "switch",
                     "name": (st.attributes.get("friendly_name") if st else None) or sw["entity_id"],
                     "watts": watts, "source": source, "auto": auto,
+                    "sensor": sensor if sensor and sensor != "none" and not fixed else None,
                     "energy": energy, "kwh": None if kwh is None else round(kwh, 3)})
     out += room_meters(hass, room, out)
     return out
@@ -417,14 +419,9 @@ class Energy:
 
     def price_kwh(self) -> float | None:
         """The price per kWh now: the price sensor, else the fixed price."""
-        cfg = _cfg(self.hass)
-        if cfg.get("price_sensor"):
-            from .ev import price_forecast
-            sensor = cfg["price_sensor"]
-            if (p := price_now(self.hass, sensor, price_forecast(self.hass, sensor))) is not None:
-                return p
-        value = cfg.get("price_kwh")
-        return float(value) if isinstance(value, (int, float)) else None
+        from .tariff import buy_now  # noqa: PLC0415
+
+        return buy_now(self.hass)
 
     @callback
     def start(self) -> None:
@@ -497,8 +494,12 @@ class Energy:
                 self.grid_kwh += grid
                 self.solar_kwh += kwh - grid
                 if (price := self.price_kwh()) is not None:
+                    from .tariff import sell_now  # noqa: PLC0415
+
                     self.cost += grid * price
-                    self.saved += (kwh - grid) * price  # own power: what it would have cost
+                    # Own power: what it would have cost, less what feeding it in would have brought.
+                    sell = sell_now(self.hass)
+                    self.saved += (kwh - grid) * (price - (sell if sell is not None else 0.0))
                     self.priced = True
             if self.soc_from is None:
                 self.soc_from = soc
@@ -687,6 +688,9 @@ class Energy:
                          "battery": round(battery[p], 1) if p in battery else None}
         out: dict[str, Any] = {"configured": bool(phases), "three": three, "phases": phases,
                                "phase_detail": detail, "rooms": rooms}
+        from .tariff import status as tariff_status  # noqa: PLC0415
+
+        out["tariff"] = tariff_status(hass)  # the energy contract: prices now and their source
         charger_phase = (cfg.get("charger_phase") or "L1") if three else "L1"
         if not cfg.get("charger_room") and not cfg.get("soc_sensor"):
             if cfg.get("price_sensor"):
