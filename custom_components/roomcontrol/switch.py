@@ -17,7 +17,7 @@ from homeassistant.helpers.event import async_track_state_change_event, async_tr
 from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
-from .clocks import SIGNAL_CLOCKS_UPDATED, clock_key, room_clocks
+from .clocks import SIGNAL_CLOCKS_UPDATED, clock_key, clock_modes, clock_skip, room_clocks
 from .entity_ids import with_roomcontrol_ids
 from .const import (
     ALARM_ARMED_HOME,
@@ -545,11 +545,14 @@ class ClockSwitch(SwitchEntity):
             "ringing": bool(state and state.ringing),
             "snoozed_until": state.snoozed_until.isoformat() if state and state.snoozed_until else None,
             "step": state.step if state else 0,
+            "vacation": clock_modes(clock),
+            "skipped_by": clock_skip(self.hass, clock),  # the vacation mode it does not go off in, now
         }
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CLOCKS_UPDATED, self.async_write_ha_state))
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self.async_write_ha_state))
+        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_VACATION, self.async_write_ha_state))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         if manager := self._manager():

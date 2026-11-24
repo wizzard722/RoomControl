@@ -2,6 +2,12 @@
 
 ## 2.1.7
 
+### Alarm clocks: normal, vacation at home, vacation elsewhere
+- Each alarm clock has a new choice **Goes off with**: chips for *Normal*, *Vacation at home* and *Vacation elsewhere*. It goes off only in the chosen situations; *Normal* means no vacation is on. Several can be on at once (e.g. a later vacation alarm on *Vacation at home* only).
+- **Default: Normal only, also for existing alarm clocks.** They no longer go off while a vacation is on. To have one go off during a vacation too, switch on *Vacation at home* and/or *Vacation elsewhere* for it.
+- While a vacation is on that the clock is not set for, the clock shows "Skips now: vacation at home", *Coming up* shows "Alarm clock … skips: vacation at home", and *What happened* notes that it did not go off and why. The clock's summary mentions the choice when it is not Normal only ("also vacation at home"). The alarm clock's switch in Home Assistant has the attributes `vacation` and `skipped_by`.
+- As before, an alarm clock only goes off when one of its persons is home.
+
 ### Home later: light bundles keep their time slot while nobody is home
 - When nobody of a room was home (or the alarm went to Armed Away), all its lamps went off, also light bundles set to *On for Home later* whose time slot was running. Those light bundles now follow their time slot while nobody is home: on when it starts (when dark), off when it ends.
 - When a *Home later* button is on, they also stay on after their time slot, until that person is home.

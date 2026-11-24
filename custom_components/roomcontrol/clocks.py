@@ -12,7 +12,9 @@ A room can have several alarm clocks (`alarm_clocks` in the room config):
      "stop_music": bool (default yes), "stop_light": bool (default no),
      "covers_open": bool (opens all of the room's curtains),
      "covers_steps": "same" | "own", "covers_snoozes": int,
-     "covers_snooze_minutes": int}
+     "covers_snooze_minutes": int,
+     "vacation": ["normal", "home", "away"] (when it goes off: no vacation,
+     vacation at home, vacation elsewhere; default ["normal"])}
 
 When it goes off the chosen bundles go on: without snooze straight at 100%;
 with snooze the brightness is spread evenly over the moments it goes off
@@ -31,7 +33,9 @@ Curtains (optional) open step by step as well: in the same steps as the light
 opens them to 100 * (i + 1) / (n + 1) %; curtains without a position open
 fully at the first step. Stopping the clock leaves them where they are.
 
-It only goes off when one of its persons (or else the room's persons) is home.
+It only goes off when one of its persons (or else the room's persons) is home,
+and when the vacation mode now (switch.py "Vakantie") is one it is set for:
+by default only without vacation, so a work alarm stays silent on vacation.
 """
 from __future__ import annotations
 
@@ -59,6 +63,32 @@ _LOGGER = logging.getLogger(__name__)
 
 CONF_ALARM_CLOCKS = "alarm_clocks"
 SIGNAL_CLOCKS_UPDATED = f"{DOMAIN}_clocks_updated"
+
+
+CLOCK_MODES = ("normal", "home", "away")
+
+
+def clock_modes(clock: dict[str, Any]) -> list[str]:
+    """When the clock may go off; default only without vacation."""
+    modes = clock.get("vacation")
+    if not isinstance(modes, list):
+        return ["normal"]
+    return [m for m in CLOCK_MODES if m in modes]
+
+
+def vacation_mode(hass: HomeAssistant) -> str:
+    """"normal", "home" or "away" (vacation True counts as at home)."""
+    value = hass.data.get(DOMAIN, {}).get("vacation")
+    if not value:
+        return "normal"
+    return value if value in ("home", "away") else "home"
+
+
+def clock_skip(hass: HomeAssistant, clock: dict[str, Any]) -> str | None:
+    """Why the clock would not go off now for the vacation mode
+    ("normal" / "home" / "away": the mode it is not set for), or None."""
+    mode = vacation_mode(hass)
+    return None if mode in clock_modes(clock) else mode
 
 
 def clock_key(area_id: str, clock_id: str) -> str:
@@ -323,6 +353,12 @@ class ClockManager:
         if step == 0:
             self._schedule_next(key, clock, state)  # next time, whatever happens now
             if not clock.get("enabled", True):
+                return
+            if (skip := clock_skip(self.hass, clock)) is not None:
+                _LOGGER.debug("Alarm clock %s: not set for vacation mode %s, not going off", key, skip)
+                if light is not None:
+                    light._dbg("blocked", "alarm_clock", self._lamps(room, clock), why=f"clock_{skip}",
+                               clock=clock.get("name") or clock.get("time"))
                 return
             if not self._persons_home(room, clock):
                 _LOGGER.debug("Alarm clock %s: nobody home, not going off", key)

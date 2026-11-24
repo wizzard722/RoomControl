@@ -138,7 +138,7 @@ from .control import rc_call
 from .fan_activity import FanActivity, FanKey, fan_activities, fan_key
 from .learn import LearnStore
 from .smoke import SIGNAL_SMOKE, smoke_active
-from .clocks import SIGNAL_CLOCKS_UPDATED
+from .clocks import SIGNAL_CLOCKS_UPDATED, clock_skip
 from .texts import text
 from .vacuums import SIGNAL_VACUUM_UPDATED
 from .slots import hm_minutes, mode_slots, slot_part
@@ -1520,7 +1520,8 @@ class RoomControlLight(LightEntity):
                 if key.startswith(f"{self._area_id}:") and state.next is not None:
                     found = clocks.find(key)
                     name = (found[2].get("name") or found[2].get("time") or "") if found else ""
-                    add(dt_util.as_local(state.next), "clock", [name] if name else [])
+                    skip = clock_skip(self.hass, found[2]) if found else None
+                    add(dt_util.as_local(state.next), f"clock_skip_{skip}" if skip else "clock", [name] if name else [])
         # The running grace period.
         if self._grace_until is not None:
             add(dt_util.as_local(self._grace_until), "grace_off", self._bundle_names(self._idle_lamps()))
