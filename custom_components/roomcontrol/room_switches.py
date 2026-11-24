@@ -16,6 +16,9 @@ chosen for it (default: All off, nobody home and smoke):
                  home; back on when one of them is home again (with back_on);
 - "night":       the night: the alarm goes to Armed Home (people asleep);
                  back on at Disarmed (with back_on);
+- "slot":        during the switch's own time slots ("slots", the light-bundle
+                 slot format, Normal / Leave / Vacation), back on when the
+                 slot ends (with back_on);
 - "smoke":       a smoke alarm (back on at All safe, see smoke.py);
 - "vacation_home" / "vacation_away": while vacation at home / elsewhere is
                  on (switch.py "Vakantie"); back on when it ends or changes
@@ -25,13 +28,14 @@ RoomControl, also not by the smoke action's own list of switches.
 """
 from __future__ import annotations
 
+from datetime import timedelta
 import logging
 from typing import Any
 
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -41,7 +45,7 @@ from .rooms import anyone_home, household_persons, managed_areas, room_persons
 _LOGGER = logging.getLogger(__name__)
 
 CONF_SWITCHES = "switches"
-OFF_MOMENTS = ("all_off", "nobody_home", "room_away", "night", "smoke", "vacation_home", "vacation_away")
+OFF_MOMENTS = ("all_off", "nobody_home", "room_away", "night", "slot", "smoke", "vacation_home", "vacation_away")
 DEFAULT_OFF_ON = ["all_off", "nobody_home", "smoke"]
 SWITCH_DOMAINS = ("switch.", "remote.")  # what a room's Switches may hold
 CONF_MEDIA_OFF_AWAY = "media_off_away"  # room option: media players off when nobody is home
@@ -70,6 +74,7 @@ def room_switches(room: dict[str, Any] | None) -> list[dict[str, Any]]:
             "back_on": item.get("back_on", True) is not False,
             "off_on": list(dict.fromkeys("nobody_home" if m == "armed_away" else m for m in off_on if m in (*OFF_MOMENTS, "armed_away")))
             if isinstance(off_on, list) else list(DEFAULT_OFF_ON),
+            "slots": [x for x in item.get("slots") or [] if isinstance(x, dict)],
         })
     return out
 
@@ -120,6 +125,9 @@ async def async_switch_off(hass: HomeAssistant, switches: list[str], why: str) -
     todo = [s for s in switches if s not in blocked and (st := hass.states.get(s)) is not None and st.state == "on"]
     if not todo:
         return
+    whys = hass.data.setdefault(DOMAIN, {}).setdefault("switch_why", {})
+    for s in todo:
+        whys[s] = why.replace(" ", "_")  # offpay.py: why it went off
     _LOGGER.debug("Room switches off (%s): %s", why, todo)
     log_switches(hass, todo, "off", f"switches_{why.replace(' ', '_')}")
     try:
@@ -146,6 +154,7 @@ class RoomSwitches:
         self.vacation_off: list[str] = []  # switched off for a vacation
         self.room_off: dict[str, list[str]] = {}  # area: switched off because the room's persons left
         self.night_off: list[str] = []  # switched off for the night (Armed Home)
+        self.slot_off: list[str] = []  # switched off for one of their own time slots
         self._track_rooms: CALLBACK_TYPE | None = None
 
     async def async_load(self) -> None:
@@ -153,17 +162,19 @@ class RoomSwitches:
         self.switched_off = [s for s in data.get("off", []) if isinstance(s, str)]
         self.vacation_off = [s for s in data.get("vacation_off", []) if isinstance(s, str)]
         self.night_off = [s for s in data.get("night_off", []) if isinstance(s, str)]
+        self.slot_off = [s for s in data.get("slot_off", []) if isinstance(s, str)]
         room_off = data.get("room_off") if isinstance(data.get("room_off"), dict) else {}
         self.room_off = {a: [s for s in v if isinstance(s, str)] for a, v in room_off.items() if isinstance(v, list)}
 
     def _keep(self) -> None:
         self._store.async_delay_save(lambda: {"off": self.switched_off, "vacation_off": self.vacation_off, "room_off": self.room_off,
-                     "night_off": self.night_off}, 1)
+                     "night_off": self.night_off, "slot_off": self.slot_off}, 1)
 
     @callback
     def start(self) -> None:
         self._unsubs.append(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._sync))
         self._unsubs.append(async_dispatcher_connect(self.hass, SIGNAL_VACATION, self._on_vacation))
+        self._unsubs.append(async_track_time_interval(self.hass, self._slot_tick, timedelta(minutes=1)))
         self._sync()
 
     @callback
@@ -257,6 +268,43 @@ class RoomSwitches:
                 self.hass.async_create_task(self.async_room_back(area))
             elif not any((st := self.hass.states.get(p)) is not None and st.state == "home" for p in persons):
                 self.hass.async_create_task(self.async_room_away(area))
+
+    @callback
+    def _slot_tick(self, _now: Any = None) -> None:
+        """Switches with the moment "slot": off while one of their slots runs, back on after."""
+        from .slots import mode_slots, slot_part  # noqa: PLC0415
+        from .switch import _sun_phase  # noqa: PLC0415
+
+        phase, sun_down = _sun_phase(self.hass)
+        now = dt_util.as_local(dt_util.now())
+        vacation = self.hass.data.get(DOMAIN, {}).get("vacation")
+        managed = managed_areas(self.hass)
+        off, back = [], []
+        for room in self.hass.data.get(DOMAIN, {}).get("rooms", []):
+            if room.get("area_id") not in managed:
+                continue
+            for sw in room_switches(room):
+                entity = sw["entity_id"]
+                if not sw["may_off"] or "slot" not in sw["off_on"]:
+                    if entity in self.slot_off:
+                        self.slot_off.remove(entity)
+                    continue
+                active = any(slot_part(x, now, phase, sun_down) is not None for x in mode_slots(sw["slots"], vacation))
+                st = self.hass.states.get(entity)
+                if active and entity not in self.slot_off and st is not None and st.state == "on":
+                    off.append(entity)
+                elif not active and entity in self.slot_off:
+                    self.slot_off.remove(entity)
+                    if sw["back_on"] and entity not in self.switched_off and entity not in self.vacation_off:
+                        back.append(entity)
+        if off:
+            self.slot_off.extend(off)
+            self.hass.async_create_task(async_switch_off(self.hass, off, "slot"))
+        if back:
+            log_switches(self.hass, back, "on", "switches_slot_over")
+            self.hass.async_create_task(async_turn(self.hass, back, True))
+        if off or back:
+            self._keep()
 
     async def async_night(self) -> None:
         """Armed Home (the night): the "night" switches off, remembering which were on."""

@@ -321,6 +321,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     device_watch = DeviceWatch(hass, device_learning)
     device_learning.on_done = device_watch.run_done
     _data(hass)["device_watch"] = device_watch
+    from .offpay import OffPay  # noqa: PLC0415
+
+    offpay = OffPay(hass, device_learning)
+    await offpay.async_load()
+    _data(hass)["offpay"] = offpay
 
     from .nordpool_prices import NordPoolPrices  # noqa: PLC0415
 
@@ -331,6 +336,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     def _learning_start(_hass: HomeAssistant) -> None:
         device_learning.start()
         device_watch.start()
+        offpay.start()
         nordpool.start()
 
     async_at_started(hass, _learning_start)
@@ -422,6 +428,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             nordpool.shutdown()
         if (device_watch := _data(hass).pop("device_watch", None)) is not None:
             device_watch.shutdown()
+        if (offpay := _data(hass).pop("offpay", None)) is not None:
+            offpay.shutdown()
         if (vacuums := _data(hass).pop("vacuums", None)) is not None:
             vacuums.stop()
         if (locks := _data(hass).pop("locks", None)) is not None:
@@ -705,7 +713,8 @@ def ws_energy_status(
 
 
 @websocket_api.websocket_command(
-    {vol.Required("type"): f"{DOMAIN}/devices", vol.Required("area_id"): str, vol.Optional("forget"): str}
+    {vol.Required("type"): f"{DOMAIN}/devices", vol.Required("area_id"): str, vol.Optional("forget"): str,
+     vol.Optional("trial"): vol.In(["start", "stop"]), vol.Optional("key"): str}
 )
 @callback
 def ws_devices(
@@ -720,7 +729,20 @@ def ws_devices(
         return
     if (key := msg.get("forget")) and key.startswith(f"{msg['area_id']}|"):
         learning.forget(key)
-    connection.send_result(msg["id"], {"devices": learning.profiles(msg["area_id"])})
+    offpay = _data(hass).get("offpay")
+    if offpay is not None and (key := msg.get("key")) and key.startswith(f"{msg['area_id']}|") and msg.get("trial"):
+        offpay.start_trial(key) if msg["trial"] == "start" else offpay.stop_trial(key)
+    devices = learning.profiles(msg["area_id"])
+    if offpay is not None:
+        for device in devices:
+            if "|switch:" in device["key"]:
+                try:
+                    device["offpay"] = offpay.analysis(device["key"])
+                except Exception as err:  # noqa: BLE001 - never break the panel
+                    _LOGGER.warning("Off-pay analysis of %s failed: %s", device["key"], err)
+            else:
+                device["kind"], device["kind_guessed"] = offpay.kind(device["key"])
+    connection.send_result(msg["id"], {"devices": devices})
 
 
 @websocket_api.websocket_command(

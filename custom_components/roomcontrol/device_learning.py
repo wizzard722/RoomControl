@@ -10,7 +10,9 @@ Per device (key "<area id>|<part key>", e.g. "keuken|switch:switch.vaatwasser"):
   program; counted as recognised from PROGRAM_MIN runs. Their names are the
   user's, in the room option "power": {part key: {"programs": {id: name}}};
 - heat: how often a run started per weekday and hour;
-- days / months: kWh per day (last 60) and per month (last 24).
+- days / months / hours: kWh per day (last 60), per month (last 24) and
+  per local hour (last 60 days, "YYYY-MM-DDTHH"), for offpay.py;
+- kind: guessed from the pattern (guess_kind), the user's choice wins.
 
 A new device first replays the history Home Assistant still has of its
 power sensor (recorder), so it doesn't start from nothing. Kept in
@@ -86,6 +88,29 @@ def _alike(prog: dict[str, Any], minutes: float, kwh: float, sig: list[float]) -
     return diff + abs(1 - dr) + abs(1 - er)
 
 
+KINDS = ("standby", "warm", "cool", "task")
+
+
+def guess_kind(data: dict[str, Any]) -> str:
+    """What kind of device: "standby" (only standby use: tv, NAS), "warm"
+    (keeps something warm by itself: boiler, espresso), "cool" (fridge,
+    freezer) or "task" (runs when started: dishwasher, washing machine).
+    Short runs many times a day on their own: a thermostat (warm when it
+    draws a lot, cool when little); a few longer runs: a task."""
+    cycles = data.get("cycles") or []
+    if not cycles:
+        return "standby"
+    first = dt_util.parse_datetime(cycles[0]["start"])
+    days = max(1.0, (dt_util.utcnow() - first).total_seconds() / 86400) if first else 1.0
+    per_day = len(cycles) / min(days, 30.0) if len(cycles) < 60 else len(cycles) / max(1.0, (
+        dt_util.utcnow() - dt_util.parse_datetime(cycles[-60]["start"])).total_seconds() / 86400)
+    minutes = sorted(c["min"] for c in cycles)
+    median = minutes[len(minutes) // 2]
+    if per_day >= 4 and median <= 60:
+        return "warm" if (data.get("run_w") or 0) >= 500 else "cool"
+    return "task"
+
+
 class Learner:
     """One device's learning state (what is stored plus the run going on)."""
 
@@ -97,6 +122,7 @@ class Learner:
         d.setdefault("heat", [[0] * 24 for _ in range(7)])
         d.setdefault("days", {})
         d.setdefault("months", {})
+        d.setdefault("hours", {})
         self.last: tuple[float, float] | None = None  # (timestamp, W)
         self.run: dict[str, Any] | None = None  # {"start", "kwh", "samples", "below"}
 
@@ -110,9 +136,10 @@ class Learner:
             return 0.0
         kwh = w0 * (t1 - t0) / 3_600_000
         local = dt_util.as_local(dt_util.utc_from_timestamp(t0))
-        days, months = self.data["days"], self.data["months"]
-        day, month = local.strftime("%Y-%m-%d"), local.strftime("%Y-%m")
+        days, months, hours = self.data["days"], self.data["months"], self.data["hours"]
+        day, month, hour = local.strftime("%Y-%m-%d"), local.strftime("%Y-%m"), local.strftime("%Y-%m-%dT%H")
         days[day] = round(days.get(day, 0.0) + kwh, 5)
+        hours[hour] = round(hours.get(hour, 0.0) + kwh, 6)
         months[month] = round(months.get(month, 0.0) + kwh, 5)
         return kwh
 
@@ -189,7 +216,7 @@ class Learner:
         return cycle
 
     def prune(self) -> None:
-        for key, keep in (("days", DAYS_KEPT), ("months", MONTHS_KEPT)):
+        for key, keep in (("days", DAYS_KEPT), ("months", MONTHS_KEPT), ("hours", DAYS_KEPT * 24)):
             items = sorted(self.data[key].items())
             self.data[key] = dict(items[-keep:])
 

@@ -1,5 +1,19 @@
 # Release notes
 
+## 2.5.0
+
+### Does switching off pay?
+- For every room switch with a power meter, its **Profile** (room → Power) now has **Does switching off pay?**:
+  - **Kind of device**, guessed from its pattern and changeable: *Standby only* (TV, NAS), *Keeps warm* (boiler, espresso), *Cooling* (fridge, freezer: switching off is not advised) or *Task* (dishwasher, washing machine).
+  - Per reason it was switched off (Night, Nobody home, Time slot, Leave, Vacation, by hand …): what it saved while off and what it used extra to catch up afterwards (a boiler heating up again), both in kWh and at the price of those hours, the net result per time and per month, and how certain that is (number of times).
+  - For a device that keeps warm: fill in when it must be warm again, and RoomControl advises when to switch it back on — the cheapest moment that still leaves time to heat up — with **Apply as time slot**.
+  - **Trial 14 nights**: switches it off every other night (00:30 until the warm-again time), so there are nights with and without to compare.
+- The Switches card shows the result per rule next to each metered switch, e.g. "Night: costs € 2.65 per month · certain".
+- RoomControl now keeps the use per hour of metered devices, the buying price per hour (also from the price sensor's history) and when each switch was off and why (also from its history), for the last 60 days.
+
+### Switches: off during a time slot
+- New moment **Time slot** under *Off with*: the switch goes off while one of its own time slots runs (the usual time slot editor, with Normal / Leave / Vacation) and back on when it ends (with *Back on when someone comes home*).
+
 ## 2.4.0
 
 ### Watching devices
