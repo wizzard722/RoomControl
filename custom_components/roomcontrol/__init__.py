@@ -12,7 +12,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
-from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import config_validation as cv, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.storage import Store
@@ -50,7 +50,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.LIGHT, Platform.COVER, Platform.SENSOR, Platform.BINARY_SENSOR, Platform.FAN, Platform.SWITCH, Platform.BUTTON, Platform.LOCK, Platform.NOTIFY, Platform.SELECT]
+PLATFORMS = [Platform.LIGHT, Platform.COVER, Platform.SENSOR, Platform.BINARY_SENSOR, Platform.FAN, Platform.SWITCH, Platform.BUTTON, Platform.LOCK, Platform.NOTIFY]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
@@ -97,6 +97,40 @@ def _without_motion(hass: HomeAssistant, old: list[dict[str, Any]], new: list[di
         _LOGGER.info("RoomControl: %s has no motion sensors any more: learned grace period forgotten", area)
 
 
+def _split_both_slots(data: dict[str, Any]) -> bool:
+    """Time slots for "both" (verlof and vakantie) became two slots, one for
+    each (2.2.0: the choice "both" is gone). True when something changed."""
+    from .slots import split_both  # noqa: PLC0415
+
+    changed = False
+
+    def fix(holder: dict[str, Any], key: str) -> None:
+        nonlocal changed
+        new, did = split_both(holder.get(key))
+        if did:
+            holder[key] = new
+            changed = True
+
+    for room in data.get("rooms", []):
+        if not isinstance(room, dict):
+            continue
+        for group in room.get("groups", []) or []:
+            if isinstance(group, dict):
+                fix(group, "slots")
+        windows = room.get("motion_windows")
+        if isinstance(windows, dict):
+            for sensor in list(windows):
+                fix(windows, sensor)
+        for lock in room.get("locks", []) or []:
+            if isinstance(lock, dict):
+                fix(lock, "slots")
+    settings = data.get("settings", {})
+    fix(settings, "all_dim_slots")
+    if isinstance(settings.get("alarm"), dict):
+        fix(settings["alarm"], "slots")
+    return changed
+
+
 async def _async_save_rooms(hass: HomeAssistant, rooms: list[dict[str, Any]]) -> None:
     await _async_save(hass, rooms=rooms)
 
@@ -122,6 +156,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         "rooms": list(stored.get("rooms", [])),
         "settings": {**DEFAULT_SETTINGS, **stored.get("settings", {})},
     }
+    if _split_both_slots(hass.data[DOMAIN]):
+        await store.async_save({"rooms": hass.data[DOMAIN]["rooms"], "settings": hass.data[DOMAIN]["settings"]})
 
     websocket_api.async_register_command(hass, ws_get_config)
     websocket_api.async_register_command(hass, ws_set_config)
@@ -268,6 +304,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .light import async_load_fans_applied  # noqa: PLC0415
 
     await async_load_fans_applied(hass)
+    # 2.2.0: the "Vakantie soort" select is gone (Vakantie and Verlof are switches now).
+    ent_reg = er.async_get(hass)
+    if old_select := ent_reg.async_get_entity_id("select", DOMAIN, f"{DOMAIN}_vacation_kind"):
+        ent_reg.async_remove(old_select)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     clocks.start()
     locks.start()

@@ -9,8 +9,10 @@ used) and cleaning moments (`vacuum_plans`):
                                 "armed_away"]: it may start when one of these
                                 persons is home OR the alarm is in one of these
                                 states (nothing chosen: always),
-     "retry": bool, "retry_until": "HH:MM"}  someone home at the moment: start
+     "retry": bool, "retry_until": "HH:MM",  someone home at the moment: start
                                 as soon as everybody has left, until that time.
+     "vacation": ["normal", "home", "away"]}  when it runs: normal, verlof,
+                                vakantie (default all three).
 
 Vacuum persons: the general setting `vacuum_persons` (missing = all persons
 RoomControl follows).
@@ -37,6 +39,7 @@ from homeassistant.helpers.event import async_track_point_in_time, async_track_s
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from .slots import chosen_modes, mode_now
 from .smoke import smoke_active
 from .clocks import next_ring
 from .const import DOMAIN, SETTING_ALARM_ENTITY, SETTING_PERSONS, SIGNAL_CONFIG_UPDATED
@@ -200,6 +203,11 @@ class VacuumManager:
         _, room, plan = found
         self._schedule_next(key, plan, state)  # next time, whatever happens now
         if not plan.get("enabled", True):
+            return
+        if (mode := mode_now(self.hass)) not in chosen_modes(plan):
+            state.last_note = f"skip_{mode}"  # not set for verlof / vakantie / normal
+            _LOGGER.debug("Vacuum %s: not set for mode %s, not starting", key, mode)
+            async_dispatcher_send(self.hass, SIGNAL_VACUUM_UPDATED)
             return
         if (why := self.blocked(plan)) is not None:
             until = self._retry_until(plan)

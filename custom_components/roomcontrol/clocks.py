@@ -13,8 +13,8 @@ A room can have several alarm clocks (`alarm_clocks` in the room config):
      "covers_open": bool (opens all of the room's curtains),
      "covers_steps": "same" | "own", "covers_snoozes": int,
      "covers_snooze_minutes": int,
-     "vacation": ["normal", "home", "away"] (when it goes off: no vacation,
-     vacation at home, vacation elsewhere; default ["normal"])}
+     "vacation": ["normal", "home", "away"] (when it goes off: normal,
+     verlof (leave), vakantie (vacation); default ["normal"])}
 
 After the clock (its stop step, or Stop pressed) its lamps follow the room's
 rules again: they go off after the grace period without motion.
@@ -61,6 +61,7 @@ from .smoke import smoke_active
 from .const import CONF_COVERS, CONF_GROUPS, CONF_MEDIA_PLAYERS, DOMAIN, SIGNAL_CONFIG_UPDATED
 from .control import rc_call
 from .rooms import room_persons
+from .slots import chosen_modes, mode_now
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,29 +69,15 @@ CONF_ALARM_CLOCKS = "alarm_clocks"
 SIGNAL_CLOCKS_UPDATED = f"{DOMAIN}_clocks_updated"
 
 
-CLOCK_MODES = ("normal", "home", "away")
-
-
 def clock_modes(clock: dict[str, Any]) -> list[str]:
-    """When the clock may go off; default only without vacation."""
-    modes = clock.get("vacation")
-    if not isinstance(modes, list):
-        return ["normal"]
-    return [m for m in CLOCK_MODES if m in modes]
-
-
-def vacation_mode(hass: HomeAssistant) -> str:
-    """"normal", "home" or "away" (vacation True counts as at home)."""
-    value = hass.data.get(DOMAIN, {}).get("vacation")
-    if not value:
-        return "normal"
-    return value if value in ("home", "away") else "home"
+    """When the clock may go off; default only without verlof / vakantie."""
+    return chosen_modes(clock, ("normal",))
 
 
 def clock_skip(hass: HomeAssistant, clock: dict[str, Any]) -> str | None:
-    """Why the clock would not go off now for the vacation mode
-    ("normal" / "home" / "away": the mode it is not set for), or None."""
-    mode = vacation_mode(hass)
+    """The mode now ("normal" / "home" = verlof / "away" = vakantie) when the
+    clock is not set for it, else None."""
+    mode = mode_now(hass)
     return None if mode in clock_modes(clock) else mode
 
 

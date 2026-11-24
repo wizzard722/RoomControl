@@ -141,7 +141,7 @@ from .smoke import SIGNAL_SMOKE, smoke_active
 from .clocks import SIGNAL_CLOCKS_UPDATED, clock_skip
 from .texts import text
 from .vacuums import SIGNAL_VACUUM_UPDATED
-from .slots import hm_minutes, mode_slots, slot_part
+from .slots import chosen_modes, hm_minutes, mode_now, mode_slots, slot_part
 from .devices import split_identifier
 from .rooms import (
     daylight_kelvin,
@@ -1827,6 +1827,8 @@ class RoomControlLight(LightEntity):
     def _on_presence_change(self, _event: Event) -> None:
         self._evaluate_covers()
         self._evaluate_conditions()
+        if self._replay_on:
+            self._replay_step()  # someone came home: seeming lived in ends now
         self._recompute()
         self._check_idle()
         self.async_write_ha_state()
@@ -1915,6 +1917,11 @@ class RoomControlLight(LightEntity):
         if open_at == "light":
             return "light", None
         if open_at == "time" and (minutes := hm_minutes(room.get(CONF_COVERS_OPEN_TIME))) is not None:
+            # The opening time counts in the modes chosen for it (room option
+            # "covers_open_vacation", default all); otherwise as if no time was
+            # chosen: open when it gets light.
+            if mode_now(self.hass) not in chosen_modes({"vacation": room.get("covers_open_vacation")}):
+                return None
             return "time", minutes
         return None
 
@@ -2396,11 +2403,14 @@ class RoomControlLight(LightEntity):
             self._replay_on = set()
 
     def _replay_active(self) -> bool:
-        return (
-            bool(self._room.get(CONF_AWAY_REPLAY)) and not self._manual and bool(self._members)
-            and (self._alarm_mode() == "away" or not anyone_home(self.hass))
-            and self._sun_down()
-        )
+        """Seem lived in: only while nobody is home — with an alarm panel when it
+        is on Armed Away or Armed Vacation, without one when nobody is home —
+        and the sun is down."""
+        if not self._room.get(CONF_AWAY_REPLAY) or self._manual or not self._members or not self._sun_down():
+            return False
+        if self._alarm_entity():
+            return self._alarm_state() in ("armed_away", "armed_vacation")
+        return not anyone_home(self.hass)
 
     @callback
     def _setup_smart_tick(self) -> None:
@@ -2424,9 +2434,14 @@ class RoomControlLight(LightEntity):
         if learn is None:
             return
         if not self._replay_active():
-            if self._replay_on and not self._manual and not anyone_home(self.hass):
-                # Still nobody home (e.g. the sun came up): the replayed lamps go off.
-                lamps = [e for e in self._replay_on if self._is_on(e)]
+            if self._replay_on and not self._manual:
+                # Over (someone home, the alarm off, the sun up): the replayed
+                # lamps go off at once, except those a running time slot, lux
+                # control or "Later thuis" / coming home in the dark holds on.
+                held = set(self._evening_lamps()) | set(self._lux_lamps_now())
+                if self._late_home_holds():
+                    held |= set(self._late_lamps())
+                lamps = [e for e in self._replay_on if self._is_on(e) and e not in held]
                 if lamps:
                     self._dbg("off", "replay_end", lamps)
                     self.hass.async_create_task(self._async_call("turn_off", lamps=lamps))
@@ -3032,6 +3047,8 @@ class RoomControlLight(LightEntity):
                     self._auto_on("alarm off, time slot, sun down", lamps=lamps)
                 elif self._lux_lamps_now():
                     self._regulate_lux(force=True)
+        if entered and self._replay_on:
+            self._replay_step()  # the alarm left Armed Away / Vacation: seeming lived in ends now
         # Dim at armed home.
         if entered or previous is None:
             self._reconcile_alarm_dim()

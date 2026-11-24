@@ -2,8 +2,10 @@
 
 A slot: {"days": [0..6] (Monday = 0), "start": {"type": "time", "time":
 "HH:MM"} | {"type": "dusk"} | {"type": "dark"}, "end": {"type": "time",
-"time": "HH:MM"} | {"type": "sunrise"}, "holiday": "normal" | "vacation" (any
-vacation) | "vacation_home" | "vacation_away"}.
+"time": "HH:MM"} | {"type": "sunrise"}, "holiday": "normal" |
+"vacation_home" (verlof, leave) | "vacation_away" (vakantie: the alarm on
+Armed Vacation)}. Older "vacation" / "only" (both) is split in two when
+RoomControl loads (split_both).
 A slot that ends before it starts (or at sunrise) runs past midnight into
 the next day.
 """
@@ -66,6 +68,44 @@ def slot_fits(slot: dict[str, Any], vacation: Any) -> bool:
         return True
     kind = "home" if vacation is True else vacation
     return holiday == f"vacation_{kind}"
+
+
+MODES = ("normal", "home", "away")  # no vacation · verlof (leave) · vakantie (vacation)
+
+
+def mode_now(hass: Any) -> str:
+    """"normal", "home" (verlof) or "away" (vakantie) now; an older True counts as verlof."""
+    from .const import DOMAIN  # noqa: PLC0415
+
+    value = hass.data.get(DOMAIN, {}).get("vacation")
+    if not value:
+        return "normal"
+    return value if value in ("home", "away") else "home"
+
+
+def chosen_modes(item: dict[str, Any], default: tuple[str, ...] = MODES) -> list[str]:
+    """The modes an item (alarm clock, cleaning moment, curtains) runs in:
+    its "vacation" list, else the default."""
+    modes = item.get("vacation") if isinstance(item, dict) else None
+    if not isinstance(modes, list):
+        return list(default)
+    return [m for m in MODES if m in modes]
+
+
+def split_both(slots: Any) -> tuple[Any, bool]:
+    """Slots for "both" (older "vacation" / "only") become two: one for verlof
+    and one for vakantie, so nothing changes in how they work."""
+    if not isinstance(slots, list):
+        return slots, False
+    out, changed = [], False
+    for slot in slots:
+        if isinstance(slot, dict) and str(slot.get("holiday") or "") in ("vacation", "only"):
+            out.append({**slot, "holiday": "vacation_home"})
+            out.append({**slot, "holiday": "vacation_away"})
+            changed = True
+        else:
+            out.append(slot)
+    return out, changed
 
 
 def mode_slots(slots: list[Any], vacation: Any) -> list[dict[str, Any]]:

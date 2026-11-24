@@ -194,16 +194,6 @@
         }
       }
     },
-    "select": {
-      "vacation": {
-        "name": "Vacation",
-        "state": {
-          "off": "Off",
-          "home": "At home",
-          "away": "Elsewhere"
-        }
-      }
-    },
     "switch": {}
   }
 }

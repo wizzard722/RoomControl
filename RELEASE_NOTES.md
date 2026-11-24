@@ -1,5 +1,27 @@
 # Release notes
 
+## 2.2.0
+
+### Leave and vacation
+- **Vacation is now a state of the alarm.** The *Vakantie* switch (General device) is on while the alarm is on Armed Vacation and goes off when it leaves it. Switching it on by hand sets the alarm to Armed Vacation; off sets it to Disarmed (someone home) or Armed Away (nobody home). Without an alarm panel it is a plain switch.
+- **New: Leave (*Verlof*)**, for days off at home. A new switch *Verlof* on the General device; you switch it yourself and it does not touch the alarm. When Vacation comes on, Leave goes off (Vacation goes above Leave).
+- "Vacation at home" is now **Leave** and "Vacation elsewhere" is now **Vacation**, everywhere: time slots of light bundles, motion sensors, All dim and the alarm, lock times, switches ("Off with"), alarm clocks.
+- **The choice "Vacation (both)" is gone.** Existing time slots set to both are split into two identical slots, one for Leave and one for Vacation, when RoomControl starts, so they keep working as before.
+- **Lock times** can now also be set for Leave.
+- **Vacuum cleaning moments and the curtains' opening time** have the choice *Normal · Leave · Vacation* too (default: all three, as before). An opening time that does not apply then opens the curtains when it gets light.
+- The *Vakantie soort* select is removed (replaced by the two switches). The general settings show *Normal · Leave · Vacation*; the options "vacation follows the alarm" and "kind by distance" are gone.
+
+### Alarm: everyone away is Armed Away
+- Everyone away within the distance limit now always sets **Armed Away**; further away **Armed Vacation** (and Vacation goes on). Coming back within the limit: Armed Away again. The setting "Closer" (default Armed Home) is removed: Armed Home is the night (asleep at home) and is never used for away.
+- **One distance limit**, set by you under Alarm › Automatic › Everyone away; the separate vacation distance in the general settings is gone.
+- A state set by hand (e.g. Vacation switched on while still close by) is no longer undone by the distance; only crossing the limit changes it.
+
+### Look lived-in: only while nobody is home
+- Look lived-in now runs only while nobody is home: with an alarm panel when it is on Armed Away or Armed Vacation (no longer at Armed Home or Disarmed), without one when nobody is home.
+- When it stops (someone comes home, the alarm changes, the sun comes up) the lamps it switched on go off right away, except lamps a running time slot, lux control or *Home later* / coming home in the dark keeps on. Before, they stayed on when someone was home.
+
+---
+
 ## 2.1.7
 
 ### Alarm clocks: normal, vacation at home, vacation elsewhere

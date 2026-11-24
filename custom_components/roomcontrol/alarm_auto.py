@@ -9,7 +9,8 @@ General setting "alarm" (panel → Alarm), with the house's alarm panel from
  "away_on": bool, (who counts: the persons of Presence in the general settings),
  "away_delay": minutes, "distance_sensors": {person: sensor (m, km or mi)}
  (older: "distance_sensor", one sensor for everyone),
- "distance_km": 100, "far_state": "armed_vacation", "near_state": "armed_home",
+ "distance_km": 100,   # everyone away: within it Armed Away, further Armed Vacation
+                      # (= Vakantie, switch.py); the only distance limit
  "locks": [lock ids] (locked first), "fail_notify": bool,
  "home_on": bool, "home_minutes": 10,   # someone comes home: disarm (re-arm a slot later)
  "home_lights": bool,                    # ... and when dark: the "Later thuis" rooms' lamps
@@ -428,7 +429,8 @@ class AlarmAutomation:
         cfg = self.cfg()
         km = self.distance_km()
         far = km is not None and km > _num(cfg.get("distance_km"), 100)
-        return (cfg.get("far_state") or "armed_vacation") if far else (cfg.get("near_state") or "armed_home")
+        # Armed Home is the night (people asleep at home), never "away".
+        return "armed_vacation" if far else "armed_away"
 
     async def _away(self) -> None:
         locks = [lock for lock in self.cfg().get("locks") or [] if lock]
@@ -437,17 +439,20 @@ class AlarmAutomation:
                 await self.hass.services.async_call("lock", "lock", {ATTR_ENTITY_ID: locks}, blocking=True)
             except Exception:  # noqa: BLE001
                 _LOGGER.warning("Alarm: could not lock %s", locks)
-        await self.set_state(self.away_target(), "away")
+        self._last_away_target = self.away_target()
+        await self.set_state(self._last_away_target, "away")
 
     @callback
     def _distance_changed(self) -> None:
         """Everyone is away and the distance crosses the limit: the state goes along."""
         if not self._away_active or not self.all_away():
             return
-        cfg = self.cfg()
-        own = {cfg.get("far_state") or "armed_vacation", cfg.get("near_state") or "armed_home"}
+        own = {"armed_vacation", "armed_away"}
         target = self.away_target()
-        if self.state() in own and self.state() != target:
+        # Only when the limit is crossed: a state set by hand in between (e.g.
+        # Vakantie switched on while still close by) stays.
+        crossed, self._last_away_target = getattr(self, "_last_away_target", target) != target, target
+        if crossed and self.state() in own and self.state() != target:
             self.hass.async_create_task(self.set_state(target, "distance"))
 
     # ── someone comes home ─────────────────────────────────────────────────

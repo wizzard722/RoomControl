@@ -5,7 +5,7 @@ DOMAIN = "roomcontrol"
 TITLE = "RoomControl"
 # Must match manifest.json "version" and the panel's EXPECTED_BACKEND_VERSION;
 # the panel warns when they differ (e.g. HA not restarted after an update).
-VERSION = "2.1.7"
+VERSION = "2.2.0"
 
 # Only used by version-1 config entries (one entry per area), for migration.
 CONF_AREA_ID = "area_id"
@@ -79,7 +79,6 @@ SIGNAL_VACATION = "roomcontrol_vacation"
 SIGNAL_LAST_MOTION = "roomcontrol_last_motion"
 # Setting: the vacation mode follows the alarm panel (general settings): on
 # while it is "armed_vacation", off when it leaves that state.
-SETTING_VACATION_FOLLOWS_ALARM = "vacation_follows_alarm"
 # Identifier of the General device (house-wide entities).
 GENERAL_DEVICE = "general"
 DEFAULT_SETTINGS = {

@@ -2,7 +2,8 @@
 
 Per lock (room option `locks`, see const.CONF_LOCKS):
 - lock times ("Wanneer op slot"): [{"name", "days": [0..6] (Monday = 0),
-  "time": "HH:MM", "holiday": "normal" | "vacation"}]. At that time on those
+  "time": "HH:MM", "holiday": "normal" | "vacation_home" (verlof) |
+  "vacation_away" (vakantie)}]. At that time on those
   days the lock is locked (if it is open). During vacation the vacation times
   count — or, when there are none, the normal ones. A time with
   "enabled": false is off (kept, but it does nothing). The older lock-wide
