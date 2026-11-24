@@ -7,6 +7,11 @@
 - When a *Home later* button is on, they also stay on after their time slot, until that person is home.
 - Other light bundles behave as before: off when nobody is home.
 
+### Fixed: coming home in the dark kept acting as "Home later"
+- When someone came home in the dark (alarm › Automatic › Someone comes home › *When it is dark: lamps on as for Home later*), the light bundles set for *Home later* went on for the wait time. If no lamp had to go off when the wait time ended (e.g. a time slot was still running), that coming-home state was never ended, so the room kept acting as if *Home later* was on: light bundles held on, and on again at sunset. It now always ends with the wait time.
+- The room's *What happened* now says "coming home in the dark (alarm)" and "coming home: wait time over" for this, instead of "home later", so it can't be mistaken for the *Home later* button.
+- The hint on the Alarm page now points to the light bundle option (room › Light › light bundle › Extra).
+
 ### EV charging: fewer false "charging" alerts
 - With 3 phases, a room without a phase of its own was not subtracted from the charger's phase, so an appliance there could look like the car charging. RoomControl now also estimates the car as the whole house (all phases) − all rooms, and uses the lower of the two estimates.
 - Meters that report in kW (e.g. an oven's power sensor) were skipped as room meters; they now count (in W).

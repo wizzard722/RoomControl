@@ -517,8 +517,11 @@ class AlarmAutomation:
                 self._rearm_timer = None
                 self._rearm_at = None
                 self._rearm_who = []
-                if self.arrive_lights() and self.arrive_lights_go_off():
-                    self._log("arrive_lights_off")
+                if self.arrive_lights():
+                    # Always end it (else the rooms keep acting as for "Later
+                    # thuis"); only log it when a lamp actually goes off.
+                    if self.arrive_lights_go_off():
+                        self._log("arrive_lights_off")
                     self._arrive_lights(False)
                 again = self.slot_now()
                 if again and self.state() == "disarmed":

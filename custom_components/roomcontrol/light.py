@@ -624,6 +624,7 @@ class RoomControlLight(LightEntity):
         self._debug: deque[dict[str, Any]] = deque(maxlen=80)
         # "Later thuis": an off was held back; do it once the person is home.
         self._late_pending = False
+        self._late_was = "late_home"  # what held the lamps: "late_home" or "arrive"
         # "Later thuis": the bundles were switched on for it already.
         self._late_on_done = False
         self._on_by_motion = False
@@ -1658,6 +1659,11 @@ class RoomControlLight(LightEntity):
         bundle, follow the older room option."""
         return self._lamps_where(CONF_LATE_HOME, bool(self._room.get(CONF_LATE_HOME)))
 
+    def _late_why(self) -> str:
+        """"late_home" (a Later thuis switch is on) or "arrive" (only someone
+        who just came home in the dark), for the room's log."""
+        return "late_home" if self.hass.data.get(DOMAIN, {}).get("late_home_active") else "arrive"
+
     def _late_home_holds(self) -> bool:
         """A "Later thuis" switch is on and this room keeps (some of) its bundles on for it."""
         data = self.hass.data.get(DOMAIN, {})
@@ -1677,6 +1683,7 @@ class RoomControlLight(LightEntity):
         sun down: the room's bundles go on (and stay on). Once none holds the room any more: off again (the off
         that was held back)."""
         if self._late_home_holds():
+            self._late_was = self._late_why()
             # Only when it is dark (sun down); switched on during the day, they go on at sunset.
             if not self._late_on_done and not self._manual and self._sun_down():
                 self._late_on_done = True
@@ -1686,7 +1693,7 @@ class RoomControlLight(LightEntity):
                 ]
                 if off:
                     # Straight to the lamps: presence and alarm don't stop this.
-                    self._dbg("on", "late home", off)
+                    self._dbg("on", "late home" if self._late_why() == "late_home" else "arrive", off)
                     self._late_pending = True
                     self.hass.async_create_task(self._async_call("turn_on", lamps=off))
             return
@@ -1696,7 +1703,7 @@ class RoomControlLight(LightEntity):
         self._late_pending = False
         lamps = self.late_home_off_lamps()
         if lamps and not (self._any_motion() and presence_allows(self.hass, self._room)):
-            self._auto_off("late home: arrived", lamps=lamps)
+            self._auto_off("late home: arrived" if getattr(self, "_late_was", "late_home") == "late_home" else "arrive: wait over", lamps=lamps)
         self._check_idle()
         self._recompute()
         self.async_write_ha_state()
@@ -1709,7 +1716,7 @@ class RoomControlLight(LightEntity):
             kept = [e for e in lamps if e in set(self._late_lamps())]
             if kept:
                 self._late_pending = True
-                self._dbg("blocked", reason, kept, why="late_home")
+                self._dbg("blocked", reason, kept, why=self._late_why())
                 lamps = [e for e in lamps if e not in kept]
                 if not lamps:
                     return
