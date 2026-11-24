@@ -96,9 +96,8 @@ Build order agreed with the user (each step: analysis + proposal first):
 1. Energy contract (H): dynamic tariffs, feed-in price and costs, net
    metering until a date.
 2. Learning devices (I): profile per metered device (standby, running
-   power, cycles, programs named by the user, when, trend); watts of
-   devices/bundles without a meter learned from the phase jump at on/off,
-   used automatically (a fixed value the user enters always wins).
+   power, cycles, programs named by the user, when, trend). Not wanted:
+   learning the watts of devices without a meter.
 3. Monitoring and night mode (E).
 4. Does switching off pay? (G).
 5. Planning and sun (B, D).
