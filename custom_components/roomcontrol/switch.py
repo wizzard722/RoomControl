@@ -666,6 +666,9 @@ class VacationSwitch(RestoreEntity, SwitchEntity):
         self._watch_alarm()
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._watch_alarm))
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_VACATION, self.async_write_ha_state))
+        from .vacuums import SIGNAL_VACUUM_ALARM  # noqa: PLC0415
+
+        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_VACUUM_ALARM, self._apply_alarm_now))
         self.async_on_remove(self._stop_watching)
         self.async_on_remove(async_at_started(self.hass, self._apply_alarm_now))
 
@@ -690,8 +693,10 @@ class VacationSwitch(RestoreEntity, SwitchEntity):
         st = self.hass.states.get(alarm) if alarm else None
         if st is None or st.state in ALARM_TRANSITIONAL or st.state in ("unavailable", "unknown"):
             return  # not known yet: _on_alarm applies it when it is
-        if (st.state == "armed_vacation") != self.is_on:
-            set_vacation_mode(self.hass, "away" if st.state == "armed_vacation" else None)
+        # The vacuum disarmed it for a run while nobody is home: the state it held counts.
+        state = self.hass.data.get(DOMAIN, {}).get("vacuum_alarm_hold") or st.state
+        if (state == "armed_vacation") != self.is_on:
+            set_vacation_mode(self.hass, "away" if state == "armed_vacation" else None)
 
     @callback
     def _on_alarm(self, event: Any) -> None:

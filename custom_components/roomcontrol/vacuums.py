@@ -18,9 +18,12 @@ Vacuum persons: the general setting `vacuum_persons` (missing = all persons
 RoomControl follows).
 
 The alarm (the general settings' alarm panel): when a moment starts the
-vacuum while nobody is home, the alarm goes to Armed Home first (so the
-vacuum doesn't set it off). When that run is over (the vacuum is docked or
-idle again): somebody home → nothing; nobody home → Armed Away.
+vacuum while nobody is home, the alarm is disarmed first (so the vacuum
+doesn't set it off; Armed Home is the night, not for this). The state it was
+in is kept in hass.data "vacuum_alarm_hold": meanwhile the lamps, "look
+lived-in" and Vacation go on as if the alarm were still in that state. When
+the run is over (the vacuum is docked or idle again): somebody home →
+nothing; nobody home → back to that state (Armed Away when unknown).
 
 When a run RoomControl started is over, the room counts as vacuumed at that
 moment (`last_clean`, kept across restarts; the panel shows it until the
@@ -50,6 +53,7 @@ CONF_VACUUMS = "vacuums"
 CONF_VACUUM_PLANS = "vacuum_plans"
 SETTING_VACUUM_PERSONS = "vacuum_persons"
 SIGNAL_VACUUM_UPDATED = f"{DOMAIN}_vacuum_updated"
+SIGNAL_VACUUM_ALARM = f"{DOMAIN}_vacuum_alarm"  # the alarm hold of a run started or ended
 
 # Vacuum states: busy vs. done.
 BUSY = {"cleaning", "returning"}
@@ -276,7 +280,7 @@ class VacuumManager:
         state = self.states.get(key) if key else None
         nobody = not self.anyone_home()
         if nobody:
-            await self._alarm("alarm_arm_home")
+            await self._disarm_for_run()
         try:
             await self.hass.services.async_call("vacuum", "start", {ATTR_ENTITY_ID: vac}, blocking=True)
         except Exception:  # noqa: BLE001
@@ -293,16 +297,31 @@ class VacuumManager:
         self.sync()  # track the vacuum until the run is over
         return True
 
+    async def _disarm_for_run(self) -> None:
+        """Nobody home: disarm for the run, remembering the state it was in."""
+        alarm = self.hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_ALARM_ENTITY)
+        st = self.hass.states.get(alarm) if alarm else None
+        if st is None or st.state in ("disarmed", "unavailable", "unknown"):
+            return
+        data = self.hass.data.setdefault(DOMAIN, {})
+        data.setdefault("vacuum_alarm_hold", st.state)
+        async_dispatcher_send(self.hass, SIGNAL_VACUUM_ALARM)
+        await self._alarm("alarm_disarm")
+
     async def _alarm(self, service: str) -> None:
         alarm = self.hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_ALARM_ENTITY)
         if not alarm:
             return
-        wanted = {"alarm_arm_home": "armed_home", "alarm_arm_away": "armed_away"}[service]
+        wanted = {"alarm_arm_home": "armed_home", "alarm_arm_away": "armed_away",
+                  "alarm_arm_vacation": "armed_vacation", "alarm_disarm": "disarmed"}[service]
         if (st := self.hass.states.get(alarm)) is not None and st.state == wanted:
             return
         _LOGGER.debug("Vacuum: %s on %s", service, alarm)
+        data = {ATTR_ENTITY_ID: alarm}
+        if code := ((self.hass.data.get(DOMAIN, {}).get("settings", {}).get("alarm") or {}).get("code")):
+            data["code"] = str(code)
         try:
-            await self.hass.services.async_call("alarm_control_panel", service, {ATTR_ENTITY_ID: alarm}, blocking=True)
+            await self.hass.services.async_call("alarm_control_panel", service, data, blocking=True)
         except Exception as err:  # noqa: BLE001 - e.g. the panel needs a code
             _LOGGER.warning("Vacuum: could not %s %s: %s", service, alarm, err)
 
@@ -315,6 +334,8 @@ class VacuumManager:
         if new is None:
             return
         if entity_id.startswith(("person.", "alarm_control_panel.")):
+            if entity_id.startswith("person.") and new.state == "home" and self.hass.data.get(DOMAIN, {}).pop("vacuum_alarm_hold", None):
+                async_dispatcher_send(self.hass, SIGNAL_VACUUM_ALARM)  # someone is home: the real (disarmed) state counts
             self._start_waiting()
         elif entity_id in self.runs and new.state in DONE and (old is None or old.state not in DONE):
             self.hass.async_create_task(self._run_over(entity_id))
@@ -348,10 +369,13 @@ class VacuumManager:
             self.last_clean[run["area_id"]] = dt_util.utcnow().isoformat()
             await self._store.async_save({"last_clean": self.last_clean})
             async_dispatcher_send(self.hass, SIGNAL_VACUUM_UPDATED)
+        hold = self.hass.data.get(DOMAIN, {}).pop("vacuum_alarm_hold", None) if not self.runs else None
         if self.anyone_home():
             _LOGGER.debug("Vacuum %s done; somebody home, alarm left alone", vac)
-        else:
-            await self._alarm("alarm_arm_away")
+        elif run.get("alarm_changed"):
+            await self._alarm("alarm_arm_vacation" if hold == "armed_vacation" else "alarm_arm_away")
+        if hold is not None:
+            async_dispatcher_send(self.hass, SIGNAL_VACUUM_ALARM)
         self.sync()
 
     # ── on/off per room ────────────────────────────────────────────────────

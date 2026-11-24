@@ -490,7 +490,8 @@ class AlarmAutomation:
         # Someone else came home a moment ago (the wait time is running): this
         # person joins, and the wait time starts again for everyone.
         joining = self._rearm_timer is not None
-        if not cfg.get("home_on", True) or (self.state() not in ARMED and not joining):
+        held = self.hass.data.get(DOMAIN, {}).get("vacuum_alarm_hold")  # disarmed only for the vacuum
+        if not cfg.get("home_on", True) or (self.state() not in ARMED and not held and not joining):
             return
         from .switch import _sun_phase
 

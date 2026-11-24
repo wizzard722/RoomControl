@@ -299,6 +299,8 @@ class RoomSwitches:
                 self.hass.async_create_task(self.async_away("nobody home"))
             elif new.state == "home":
                 self.hass.async_create_task(self.async_back("someone home"))
+        elif self.hass.data.get(DOMAIN, {}).get("vacuum_alarm_hold"):
+            return  # the vacuum disarmed it for a run while nobody is home: nothing changes
         elif new.state == "armed_away":
             self.hass.async_create_task(self.async_away("armed away"))
         elif new.state in ("disarmed", "armed_home"):
@@ -307,6 +309,8 @@ class RoomSwitches:
     def nobody_home(self) -> bool:
         """Armed Away (with an alarm panel), else nobody of the household home."""
         if alarm := self._alarm():
+            if hold := self.hass.data.get(DOMAIN, {}).get("vacuum_alarm_hold"):
+                return hold == "armed_away"
             st = self.hass.states.get(alarm)
             return st is not None and st.state == "armed_away"
         return bool(household_persons(self.hass)) and not anyone_home(self.hass)

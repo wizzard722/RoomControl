@@ -1,5 +1,19 @@
 # Release notes
 
+## 2.3.2
+
+### Energy contract: choose the Nord Pool service
+- Under *Feeding in brings* there is a new choice **Market price from Nord Pool**: you pick the Nord Pool service (e.g. "Nord Pool NL") instead of one of its sensors; RoomControl uses its prices itself, today's and tomorrow's. *Market price from another sensor* stays for other integrations (e.g. ENTSO-e). On *automatic* Nord Pool is still found by itself.
+
+### Vacuum: the alarm is disarmed for a run, not set to Armed Home
+- When a cleaning moment starts while nobody is home, the alarm used to go to Armed Home (the night state). It is now disarmed for the run and goes back to the state it was in afterwards (Armed Away, or Armed Vacation during a vacation).
+- Meanwhile everything goes on as if that state still holds: Vacation stays on, the lamps and *look lived-in* keep their away behaviour, and switches set to go off when nobody is home stay off. When someone comes home during the run, the real state counts again and the alarm is left alone afterwards.
+
+### Fixed
+- The English summary of an alarm clock showed "{light bundles}" instead of the light bundles' names.
+
+---
+
 ## 2.3.1
 
 ### Energy contract: Nord Pool, also when installed later

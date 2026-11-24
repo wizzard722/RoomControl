@@ -19,6 +19,7 @@ from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timedelta
 import logging
+import types
 from typing import Any
 
 from homeassistant.components.light import (
@@ -139,6 +140,7 @@ from .fan_activity import FanActivity, FanKey, fan_activities, fan_key
 from .learn import LearnStore
 from .smoke import SIGNAL_SMOKE, smoke_active
 from .clocks import SIGNAL_CLOCKS_UPDATED, clock_skip
+from .vacuums import SIGNAL_VACUUM_ALARM
 from .texts import text
 from .vacuums import SIGNAL_VACUUM_UPDATED
 from .slots import chosen_modes, hm_minutes, mode_now, mode_slots, slot_part
@@ -3004,6 +3006,13 @@ class RoomControlLight(LightEntity):
         self._check_idle()
         self.async_write_ha_state()
 
+    @callback
+    def _on_vacuum_alarm(self) -> None:
+        """The vacuum's alarm hold started or ended: apply the alarm state as it counts now."""
+        alarm = self._alarm_entity()
+        if alarm and self._alarm_started:
+            self._on_alarm_change(types.SimpleNamespace(data={"new_state": self.hass.states.get(alarm)}))
+
     @staticmethod
     def _settled(state: State | None) -> str | None:
         if state is None or state.state in ALARM_TRANSITIONAL:
@@ -3015,6 +3024,8 @@ class RoomControlLight(LightEntity):
         new = self._settled(event.data.get("new_state"))
         if new is None:
             return  # arming/pending/unavailable: wait for the settled state
+        if new == "disarmed" and (hold := self.hass.data.get(DOMAIN, {}).get("vacuum_alarm_hold")):
+            new = hold  # disarmed only for the vacuum while nobody is home: nothing changes for the lamps
         previous, self._alarm_settled = self._alarm_settled, new
         if previous is None and self._alarm_started:
             # The alarm panel only now became available: apply its state.
@@ -3094,6 +3105,9 @@ class RoomControlLight(LightEntity):
     def _alarm_state(self) -> str | None:
         alarm = self._alarm_entity()
         state = self.hass.states.get(alarm) if alarm else None
+        # The vacuum disarmed it for a run while nobody is home: the state it held counts.
+        if state is not None and state.state == "disarmed" and (hold := self.hass.data.get(DOMAIN, {}).get("vacuum_alarm_hold")):
+            return hold
         return state.state if state is not None else None
 
     def _armed_home_motion_only(self) -> bool:
@@ -3375,6 +3389,9 @@ class RoomControlLight(LightEntity):
         )
         self.async_on_remove(
             async_dispatcher_connect(self.hass, SIGNAL_LATE_HOME, self._on_late_home)
+        )
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_VACUUM_ALARM, self._on_vacuum_alarm)
         )
         self.async_on_remove(
             async_dispatcher_connect(self.hass, SIGNAL_VACATION, self._on_vacation)

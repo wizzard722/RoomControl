@@ -46,9 +46,18 @@ def is_builtin(hass: HomeAssistant, sensor: str | None) -> bool:
     )
 
 
-def find_sensor(hass: HomeAssistant) -> str | None:
-    """A Nord Pool price sensor: the HACS one (prices in its attributes) first,
-    else the built-in current price sensor."""
+def services(hass: HomeAssistant) -> list[dict[str, str]]:
+    """The Nord Pool services (config entries) of this Home Assistant: [{"id", "title"}]."""
+    try:
+        return [{"id": e.entry_id, "title": e.title or "Nord Pool"} for e in hass.config_entries.async_entries("nordpool")]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def find_sensor(hass: HomeAssistant, entry_id: str | None = None) -> str | None:
+    """The price sensor of a Nord Pool service (config entry; None: any): the
+    HACS one (prices in its attributes) first, else the built-in current
+    price sensor. The user picks the service, RoomControl its sensor."""
     found: list[tuple[int, str]] = []
     try:
         entries = list(er.async_get(hass).entities.values())
@@ -56,6 +65,8 @@ def find_sensor(hass: HomeAssistant) -> str | None:
         return None
     for entry in entries:
         if entry.platform != "nordpool" or entry.domain != "sensor" or entry.disabled_by:
+            continue
+        if entry_id and entry.config_entry_id != entry_id:
             continue
         st = hass.states.get(entry.entity_id)
         if st is not None and isinstance(st.attributes.get("raw_today"), list):
@@ -93,11 +104,9 @@ class NordPoolPrices:
 
     def _sensor(self) -> str | None:
         """The Nord Pool sensor the energy contract uses now, if it is the built-in one."""
-        cfg = self.hass.data.get(DOMAIN, {}).get("settings", {}).get("energy") or {}
-        source = cfg.get("market_source") or "auto"
-        if source not in ("auto", "sensor"):
-            return None
-        sensor = cfg.get("market_sensor") or (find_sensor(self.hass) if source == "auto" else None)
+        from .tariff import market_sensor  # noqa: PLC0415
+
+        sensor = market_sensor(self.hass)
         return sensor if is_builtin(self.hass, sensor) else None
 
     @callback

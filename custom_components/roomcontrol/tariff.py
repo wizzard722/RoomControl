@@ -4,8 +4,9 @@ Inside the general setting "energy":
  "price_sensor": sensor,     # dynamic contract: the price you pay (with forecast,
                              # e.g. Zonneplan per quarter hour), including tax and markup
  "price_kwh": 0.25,          # fixed contract (no price sensor)
- "market_source": "auto" | "sensor" | "derived" | "fixed",
- "market_sensor": sensor,    # "sensor": the bare market price (e.g. Nord Pool)
+ "market_source": "auto" | "nordpool" | "sensor" | "derived" | "fixed",
+ "market_entry": entry id,   # "nordpool": the Nord Pool service (config entry) chosen
+ "market_sensor": sensor,    # "sensor": another market price sensor (e.g. ENTSO-e)
  "energy_tax_kwh": 0.1088,   # "derived": energy tax per kWh, without VAT
  "buy_markup_kwh": 0.02,     # "derived": the supplier's markup per kWh, without VAT
  "feed_in_kwh": 0.05,        # "fixed": what a fed-in kWh brings
@@ -34,7 +35,7 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 
 VAT = 1.21
-MARKET_SOURCES = ("auto", "sensor", "derived", "fixed")
+MARKET_SOURCES = ("auto", "nordpool", "sensor", "derived", "fixed")
 
 
 def _cfg(hass: HomeAssistant) -> dict[str, Any]:
@@ -81,7 +82,7 @@ def market_rows(hass: HomeAssistant) -> tuple[list[dict[str, Any]], str | None]:
     if source == "auto" and cfg.get("price_sensor"):
         if rows := price_forecast(hass, cfg["price_sensor"], market=True):
             return rows, "price_sensor"
-    if source in ("auto", "sensor") and (sensor := market_sensor(hass)):
+    if source in ("auto", "nordpool", "sensor") and (sensor := market_sensor(hass)):
         if rows := sensor_rows(hass, sensor):
             return rows, "market_sensor"
     if rows := buy_rows(hass):
@@ -98,9 +99,13 @@ def market_sensor(hass: HomeAssistant) -> str | None:
 
     cfg = _cfg(hass)
     source = cfg.get("market_source") if cfg.get("market_source") in MARKET_SOURCES else "auto"
-    if cfg.get("market_sensor"):
-        return cfg["market_sensor"]
-    return find_sensor(hass) if source == "auto" else None
+    if source == "nordpool":
+        return find_sensor(hass, cfg.get("market_entry") or None)
+    if source == "sensor":
+        return cfg.get("market_sensor")
+    if source == "auto":
+        return cfg.get("market_sensor") or find_sensor(hass)
+    return None
 
 
 def sensor_rows(hass: HomeAssistant, sensor: str) -> list[dict[str, Any]]:
@@ -160,6 +165,12 @@ def forecast(hass: HomeAssistant) -> list[dict[str, Any]]:
     return out
 
 
+def nordpool_services(hass: HomeAssistant) -> list[dict[str, str]]:
+    from .nordpool_prices import services  # noqa: PLC0415
+
+    return services(hass)
+
+
 def status(hass: HomeAssistant) -> dict[str, Any]:
     """For the panel: the prices now and where they come from."""
     cfg = _cfg(hass)
@@ -177,6 +188,7 @@ def status(hass: HomeAssistant) -> dict[str, Any]:
         "sell": None if sell is None else round(sell, 4),
         "market_sensor": market_sensor(hass) if source == "market_sensor" else None,
         "market_periods": len(market),
+        "nordpool": nordpool_services(hass),
         "periods": len(rows),
         "until": rows[-1]["end"].isoformat() if rows else None,
     }
