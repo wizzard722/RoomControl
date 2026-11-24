@@ -2,6 +2,9 @@
 
 ## 2.5.0
 
+### Armed Home: Dim when not on motion
+- In a room's alarm card, **Not on motion** (Armed Home) has a new switch **Dim**: the light bundles that are on go to their Dim level instead of off, and a light bundle switched on while Armed Home burns at Dim. What is off stays off, motion still switches nothing on, light bundles that don't take part in Dim keep their level and the alarm clock keeps its own level. When Armed Home ends, every lamp gets back the brightness it would have had.
+
 ### Debug tab
 - The room's debug log moved from the bug button in the page head to a new tab **Debug**, next to Overview · Settings · Analysis.
 - **Now**: chips with what counts at this moment (sun, someone home, alarm, motion, lux against the target lux, manual control).

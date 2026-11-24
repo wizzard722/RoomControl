@@ -34,6 +34,10 @@ CONF_ARMED_HOME_MOTION_ONLY = "armed_home_motion_only"
 CONF_ARMED_HOME_MODE = "armed_home_mode"
 ARMED_HOME_MOTION = "motion"
 ARMED_HOME_NO_MOTION = "no_motion"
+# Room option (with "no_motion"): at armed home the lamps that are on go to
+# Dim instead of off, and every lamp switched on burns at Dim; motion still
+# switches nothing on. Lamps of an alarm clock keep their own level.
+CONF_ARMED_HOME_DIM = "armed_home_dim"
 CONF_ALARM_ENTITY = "alarm_entity"
 
 # Room option: person.* entities; lights are only allowed while at least one

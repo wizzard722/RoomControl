@@ -89,6 +89,7 @@ from .const import (
     VERSION,
     ALARM_ARMED_HOME,
     ARMED_HOME_NO_MOTION,
+    CONF_ARMED_HOME_DIM,
     CONF_ARMED_HOME_MODE,
     ALARM_DISARMED,
     ALARM_TRANSITIONAL,
@@ -715,7 +716,7 @@ class RoomControlLight(LightEntity):
         if self._track("alarm", [alarm] if alarm else [], self._on_alarm_change):
             self._alarm_settled = self._settled(self.hass.states.get(alarm)) if alarm else None
         # Dim at armed home: apply at startup and when the option is switched.
-        dim_wanted = (bool(alarm), room.get(CONF_ARMED_HOME_MODE) == ARMED_HOME_NO_MOTION)
+        dim_wanted = (bool(alarm), room.get(CONF_ARMED_HOME_MODE) == ARMED_HOME_NO_MOTION, bool(room.get(CONF_ARMED_HOME_DIM)))
         if dim_wanted != self._dim_option_seen:
             self._dim_option_seen = dim_wanted
             self._reconcile_alarm_dim()
@@ -1671,6 +1672,8 @@ class RoomControlLight(LightEntity):
             first = lamps[0]
             if first in blocked:
                 wants = "off_away"
+            elif self._armed_home_dim():
+                wants = "armed_home_dim"
             elif self._armed_home_no_motion():
                 wants = "armed_home_no_motion"
             elif self._alarm_mode() == "home":
@@ -1683,7 +1686,7 @@ class RoomControlLight(LightEntity):
                 wants = "motion"
             else:
                 wants = "nothing"
-            win = {"off_away": "alarm", "armed_home_no_motion": "alarm", "motion_1pct": "alarm", "on_slot": "slot",
+            win = {"off_away": "alarm", "armed_home_no_motion": "alarm", "armed_home_dim": "alarm", "motion_1pct": "alarm", "on_slot": "slot",
                    "lux": "lux", "motion": "motion"}.get(wants, "none")
             if self._manual:
                 win = "manual"
@@ -3166,6 +3169,8 @@ class RoomControlLight(LightEntity):
                 # motion (room option): always off.
                 if self._any_motion() and not self._armed_home_no_motion():
                     self._on_by_motion = True
+                elif self._armed_home_dim():
+                    pass  # not on motion, Dim: what is on stays on and goes to Dim (below)
                 else:
                     if self.is_on:
                         self._alarm_last_off = dt_util.utcnow()
@@ -3214,7 +3219,9 @@ class RoomControlLight(LightEntity):
         if self._manual:
             return
         if state == ALARM_ARMED_HOME:
-            if self.is_on and not (self._any_motion() and not self._armed_home_no_motion()):
+            if self._armed_home_dim():
+                pass  # what is on stays on, at Dim (_reconcile_alarm_dim)
+            elif self.is_on and not (self._any_motion() and not self._armed_home_no_motion()):
                 self._alarm_last_off = dt_util.utcnow()
                 self._auto_off("alarm armed home (startup)")
             elif self._any_motion() and not self._armed_home_no_motion():
@@ -3251,8 +3258,14 @@ class RoomControlLight(LightEntity):
         return self._room.get(CONF_ALARM_ENTITY) or self._settings().get(SETTING_ALARM_ENTITY) or None
 
     def _alarm_dim_for(self, state: str | None) -> bool:
-        """Armed home (on motion): the lamps burn at Dim."""
-        return state == ALARM_ARMED_HOME and self._room.get(CONF_ARMED_HOME_MODE) != ARMED_HOME_NO_MOTION
+        """Armed home (on motion, or not on motion with Dim): the lamps burn at Dim."""
+        return state == ALARM_ARMED_HOME and (
+            self._room.get(CONF_ARMED_HOME_MODE) != ARMED_HOME_NO_MOTION or bool(self._room.get(CONF_ARMED_HOME_DIM))
+        )
+
+    def _armed_home_dim(self) -> bool:
+        """Armed home, not on motion, with Dim: lamps that are on go to Dim, not off."""
+        return self._armed_home_no_motion() and bool(self._room.get(CONF_ARMED_HOME_DIM))
 
     @callback
     def _reconcile_alarm_dim(self) -> None:
