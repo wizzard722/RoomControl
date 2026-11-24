@@ -206,6 +206,7 @@ class DeviceLearning:
         self._unsubs: list[CALLBACK_TYPE] = []
         self._track: CALLBACK_TYPE | None = None
         self._booting: set[str] = set()
+        self.on_done: Any = None  # called with (key, run) when a run is over (live, not when replaying history)
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
@@ -302,7 +303,8 @@ class DeviceLearning:
         t = (new.last_updated if new is not None else dt_util.utcnow()).timestamp()
         for key, s in self.sensors.items():
             if s == sensor and key not in self._booting and (learner := self.learners.get(key)) is not None:
-                learner.feed(t, _watts(new))
+                if (done := learner.feed(t, _watts(new))) is not None and self.on_done:
+                    self.on_done(key, done)
         self._save()
 
     @callback
@@ -312,7 +314,8 @@ class DeviceLearning:
         for key, sensor in self.sensors.items():
             if key in self._booting or (learner := self.learners.get(key)) is None:
                 continue
-            learner.feed(t, _watts(self.hass.states.get(sensor)))
+            if (done := learner.feed(t, _watts(self.hass.states.get(sensor)))) is not None and self.on_done:
+                self.on_done(key, done)
             learner.prune()
         self._save()
 

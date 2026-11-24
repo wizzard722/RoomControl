@@ -1,5 +1,17 @@
 # Release notes
 
+## 2.4.0
+
+### Watching devices
+- Per metered device (switch or meter with a power sensor), in a room's **Power** card → **Profile** → **Watch**:
+  - **Done message**: when a run is over and someone is home, e.g. "Dishwasher is done (Eco · 0.92 kWh · € 0.23)", with the program name you gave it and the cost at the current price.
+  - **Fridge / freezer alarm**: no power (or no reading) for 30 minutes, always, also when nobody is home; and once a week a warning when the last 7 days were clearly above normal (30 % more than the 4 weeks before).
+  - **Forgotten**: still running after a time limit you set per device (empty: twice its longest program, at least 2 hours).
+- New card **Device messages** in the general settings: where these messages go — a melding in Home Assistant (default on), the phones of chosen persons, and an NSPanel group. Each message is also noted in the room's *What happened*.
+
+### Night mode for switches
+- Switches have a new moment **Night (Armed Home)** under *Off with*: they go off when the alarm goes to Armed Home, and back on at Disarmed (with *Back on when someone comes home*). Not while the vacuum has disarmed the alarm for a run.
+
 ## 2.3.2
 
 ### Energy contract: choose the Nord Pool service

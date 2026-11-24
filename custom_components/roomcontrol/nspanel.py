@@ -29,14 +29,14 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 SETTING_NSPANEL = "nspanel"
-SOURCES = ("alarm", "ev", "smoke", "doorbell", "announce")
+SOURCES = ("alarm", "ev", "smoke", "doorbell", "announce", "devices")
 _SHOW, _CLEAR = "_notification_show", "_notification_clear"
 DEFAULT_SECONDS = 60
 
 
 _LABELS = {
-    "nl": {"alarm": "Alarm", "ev": "Auto laden", "smoke": "Rook!", "doorbell": "Deurbel", "announce": "Bericht"},
-    "en": {"alarm": "Alarm", "ev": "Car charging", "smoke": "Smoke!", "doorbell": "Doorbell", "announce": "Message"},
+    "nl": {"alarm": "Alarm", "ev": "Auto laden", "smoke": "Rook!", "doorbell": "Deurbel", "announce": "Bericht", "devices": "Apparaten"},
+    "en": {"alarm": "Alarm", "ev": "Car charging", "smoke": "Smoke!", "doorbell": "Doorbell", "announce": "Message", "devices": "Devices"},
 }
 
 

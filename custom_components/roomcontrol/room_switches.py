@@ -14,6 +14,8 @@ chosen for it (default: All off, nobody home and smoke):
 - "room_away":   every person linked to the room (room → Motion &
                  presence) has left the house, also while others are still
                  home; back on when one of them is home again (with back_on);
+- "night":       the night: the alarm goes to Armed Home (people asleep);
+                 back on at Disarmed (with back_on);
 - "smoke":       a smoke alarm (back on at All safe, see smoke.py);
 - "vacation_home" / "vacation_away": while vacation at home / elsewhere is
                  on (switch.py "Vakantie"); back on when it ends or changes
@@ -39,7 +41,7 @@ from .rooms import anyone_home, household_persons, managed_areas, room_persons
 _LOGGER = logging.getLogger(__name__)
 
 CONF_SWITCHES = "switches"
-OFF_MOMENTS = ("all_off", "nobody_home", "room_away", "smoke", "vacation_home", "vacation_away")
+OFF_MOMENTS = ("all_off", "nobody_home", "room_away", "night", "smoke", "vacation_home", "vacation_away")
 DEFAULT_OFF_ON = ["all_off", "nobody_home", "smoke"]
 SWITCH_DOMAINS = ("switch.", "remote.")  # what a room's Switches may hold
 CONF_MEDIA_OFF_AWAY = "media_off_away"  # room option: media players off when nobody is home
@@ -143,17 +145,20 @@ class RoomSwitches:
         self.switched_off: list[str] = []
         self.vacation_off: list[str] = []  # switched off for a vacation
         self.room_off: dict[str, list[str]] = {}  # area: switched off because the room's persons left
+        self.night_off: list[str] = []  # switched off for the night (Armed Home)
         self._track_rooms: CALLBACK_TYPE | None = None
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
         self.switched_off = [s for s in data.get("off", []) if isinstance(s, str)]
         self.vacation_off = [s for s in data.get("vacation_off", []) if isinstance(s, str)]
+        self.night_off = [s for s in data.get("night_off", []) if isinstance(s, str)]
         room_off = data.get("room_off") if isinstance(data.get("room_off"), dict) else {}
         self.room_off = {a: [s for s in v if isinstance(s, str)] for a, v in room_off.items() if isinstance(v, list)}
 
     def _keep(self) -> None:
-        self._store.async_delay_save(lambda: {"off": self.switched_off, "vacation_off": self.vacation_off, "room_off": self.room_off}, 1)
+        self._store.async_delay_save(lambda: {"off": self.switched_off, "vacation_off": self.vacation_off, "room_off": self.room_off,
+                     "night_off": self.night_off}, 1)
 
     @callback
     def start(self) -> None:
@@ -253,6 +258,40 @@ class RoomSwitches:
             elif not any((st := self.hass.states.get(p)) is not None and st.state == "home" for p in persons):
                 self.hass.async_create_task(self.async_room_away(area))
 
+    async def async_night(self) -> None:
+        """Armed Home (the night): the "night" switches off, remembering which were on."""
+        todo = [
+            s for s in switches_for(self.hass, "night")
+            if s not in never_off(self.hass) and (st := self.hass.states.get(s)) is not None and st.state == "on"
+        ]
+        if not todo:
+            return
+        self.night_off = list(dict.fromkeys([*self.night_off, *todo]))
+        self._keep()
+        await async_switch_off(self.hass, todo, "night")
+
+    async def async_night_back(self) -> None:
+        """Disarmed (up again): back on what went off for the night (set to come back on)."""
+        todo, self.night_off = self.night_off, []
+        if not todo:
+            return
+        self._keep()
+        stay_off = {
+            sw["entity_id"]
+            for room in self.hass.data.get(DOMAIN, {}).get("rooms", [])
+            for sw in room_switches(room)
+            if not sw["back_on"]
+        }
+        todo = [s for s in todo if self.hass.states.get(s) is not None and s not in stay_off
+                and s not in self.vacation_off and s not in self.switched_off]
+        if not todo:
+            return
+        log_switches(self.hass, todo, "on", "switches_night_over")
+        try:
+            await async_turn(self.hass, todo, True)
+        except Exception:  # noqa: BLE001
+            _LOGGER.warning("Could not switch %s back on (night over)", todo)
+
     async def async_room_away(self, area: str) -> None:
         """The room's persons all left: its "room_away" switches off."""
         todo = [
@@ -305,6 +344,11 @@ class RoomSwitches:
             self.hass.async_create_task(self.async_away("armed away"))
         elif new.state in ("disarmed", "armed_home"):
             self.hass.async_create_task(self.async_back(new.state))
+        if not event.data["entity_id"].startswith("person.") and not self.hass.data.get(DOMAIN, {}).get("vacuum_alarm_hold"):
+            if new.state == "armed_home":
+                self.hass.async_create_task(self.async_night())
+            elif new.state == "disarmed":
+                self.hass.async_create_task(self.async_night_back())
 
     def nobody_home(self) -> bool:
         """Armed Away (with an alarm panel), else nobody of the household home."""
