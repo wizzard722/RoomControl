@@ -8,6 +8,11 @@
 - While a vacation is on that the clock is not set for, the clock shows "Skips now: vacation at home", *Coming up* shows "Alarm clock … skips: vacation at home", and *What happened* notes that it did not go off and why. The clock's summary mentions the choice when it is not Normal only ("also vacation at home"). The alarm clock's switch in Home Assistant has the attributes `vacation` and `skipped_by`.
 - As before, an alarm clock only goes off when one of its persons is home.
 
+### Alarm clocks: lamps go off after the clock
+- Lamps an alarm clock switched on stayed on after the clock was over (unless *Light off* was ticked at the stop step), also when nobody was in the room. After the clock (its stop step, or Stop pressed) its lamps now follow the room's rules: without motion they go off after the grace period, with motion they stay on, and a running time slot keeps them on. In a room without a motion sensor they stay on, as before. *Light off* at the stop step still switches them off at once.
+- A clock with nothing ticked at the stop step now also has a stop step: its lamps are the room's again from then on; music keeps playing until you stop the clock. Before, the clock never ended, and its light bundles were left out of Dim meanwhile.
+- Fixed: unloading or reloading RoomControl failed on the alarm clocks (two methods with the same name), which could leave their timers running until a restart.
+
 ### Home later: light bundles keep their time slot while nobody is home
 - When nobody of a room was home (or the alarm went to Armed Away), all its lamps went off, also light bundles set to *On for Home later* whose time slot was running. Those light bundles now follow their time slot while nobody is home: on when it starts (when dark), off when it ends.
 - When a *Home later* button is on, they also stay on after their time slot, until that person is home.

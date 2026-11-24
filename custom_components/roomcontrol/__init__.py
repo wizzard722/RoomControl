@@ -350,7 +350,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if (cover_memory := _data(hass).pop("cover_memory", None)) is not None:
             cover_memory.stop()
         if (clocks := _data(hass).pop("clocks", None)) is not None:
-            clocks.stop()
+            clocks.shutdown()
         if (vacuums := _data(hass).pop("vacuums", None)) is not None:
             vacuums.stop()
         if (locks := _data(hass).pop("locks", None)) is not None:

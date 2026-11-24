@@ -16,6 +16,9 @@ A room can have several alarm clocks (`alarm_clocks` in the room config):
      "vacation": ["normal", "home", "away"] (when it goes off: no vacation,
      vacation at home, vacation elsewhere; default ["normal"])}
 
+After the clock (its stop step, or Stop pressed) its lamps follow the room's
+rules again: they go off after the grace period without motion.
+
 When it goes off the chosen bundles go on: without snooze straight at 100%;
 with snooze the brightness is spread evenly over the moments it goes off
 (3 snoozes: 25% → 50% → 75% → 100%). Each snooze interval it goes one step
@@ -140,6 +143,8 @@ class ClockState:
         # Watches the player while the music plays (it stopped by itself → play again).
         self.unsub_player: CALLBACK_TYPE | None = None
         self.music_on = False
+        # Past the stop step: the lamps are the room's again (the music may still play).
+        self.lamps_released = False
         # A one-time clock disables itself when it goes off; that must not stop it.
         self.once_ringing = False
         self.music_restarted: datetime | None = None
@@ -174,7 +179,9 @@ class ClockManager:
         self.sync()
 
     @callback
-    def stop(self) -> None:
+    def shutdown(self) -> None:
+        """RoomControl unloads: cancel every clock's timers. (Not "stop": that
+        is the Stop button of one clock, further down.)"""
         if self._unsub_signal:
             self._unsub_signal()
             self._unsub_signal = None
@@ -240,7 +247,7 @@ class ClockManager:
         """Lamps of this room's clocks that are going off or snoozing now."""
         out: set[str] = set()
         for key, state in self.states.items():
-            if not state.active or not key.startswith(f"{area_id}:"):
+            if not state.active or state.lamps_released or not key.startswith(f"{area_id}:"):
                 continue
             if (found := self.find(key)) is not None:
                 out |= set(self._lamps(found[1], found[2]))
@@ -373,6 +380,8 @@ class ClockManager:
         state.ringing = True
         state.snoozed_until = None
         state.step = step
+        if step == 0:
+            state.lamps_released = False
         pct = self.step_pct(clock, step)
         _LOGGER.debug("Alarm clock %s goes off (step %s, %s%%)", key, step, pct)
         if (lamps := self._lamps(room, clock)) and light is not None:
@@ -390,8 +399,10 @@ class ClockManager:
                 await self._music_start(key, clock, step)
             else:
                 await self._set_volume(key, clock, step)
-        if step >= self.snoozes(clock) and state.unsub_auto_stop is None and any(self.stop_actions(clock)):
-            # Last step: the stop step follows one interval later.
+        if step >= self.snoozes(clock) and state.unsub_auto_stop is None:
+            # Last step: the stop step follows one interval later (also with
+            # nothing to switch off: then the clock is over and its lamps follow
+            # the room's rules again).
             @callback
             def _auto(_now: Any, k: str = key) -> None:
                 self.states[k].unsub_auto_stop = None
@@ -586,7 +597,9 @@ class ClockManager:
         if music_off or not state.music_on:
             self._finish(key, state)
         else:
-            # Light off, music keeps playing: the clock goes on until it is stopped.
+            # The music keeps playing: the clock goes on until it is stopped,
+            # but its lamps are the room's again (grace period without motion).
+            state.lamps_released = True
             state.cancel("unsub_snooze", "unsub_covers")
             async_dispatcher_send(self.hass, SIGNAL_CLOCKS_UPDATED)
 
@@ -598,6 +611,7 @@ class ClockManager:
         state.snoozed_until = None
         state.step = 0
         state.once_ringing = False
+        state.lamps_released = False
         state.cancel("unsub_snooze", "unsub_auto_stop", "unsub_covers", "unsub_player")
         async_dispatcher_send(self.hass, SIGNAL_CLOCKS_UPDATED)
 

@@ -625,6 +625,8 @@ class RoomControlLight(LightEntity):
         # "Later thuis": an off was held back; do it once the person is home.
         self._late_pending = False
         self._late_was = "late_home"  # what held the lamps: "late_home" or "arrive"
+        # Lamps an alarm clock switched on, now that it is over: off after the grace period.
+        self._after_clock: set[str] = set()
         # "Later thuis": the bundles were switched on for it already.
         self._late_on_done = False
         self._on_by_motion = False
@@ -2938,6 +2940,8 @@ class RoomControlLight(LightEntity):
         lamps: set[str] = set()
         if self._on_by_motion:
             lamps |= set(self._motion_lamps()) | set(self._door_lamps())
+        self._after_clock &= set(on)  # lamps of an ended alarm clock, still on
+        lamps |= self._after_clock
         return [e for e in on if e in lamps and e not in held]
 
     def _fan_run_on(self) -> int:
@@ -3212,6 +3216,16 @@ class RoomControlLight(LightEntity):
         ended, self._clock_prev = self._clock_prev - ringing, ringing
         if ended and (back := ended & self._dimmed_lamps()):
             self.hass.async_create_task(self._async_apply_dim(set(), back))
+        self._after_clock -= ringing
+        if ended:
+            # The clock is over: its lamps that are on follow the room's rules,
+            # like lamps motion switched on (off after the grace period).
+            # Without a motion sensor nobody can be seen: they stay on, as before.
+            on = {e for e in ended if self._is_on(e)} if self._motion_sensors() else set()
+            if on:
+                self._after_clock |= on
+                self._dbg("info", "clock_over", sorted(on))
+                self._check_idle()
         self.refresh_state()
 
     def _lamp_dimmed(self, entity_id: str) -> bool:
