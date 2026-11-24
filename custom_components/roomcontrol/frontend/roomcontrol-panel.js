@@ -3348,7 +3348,6 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
           <span>${V(`ev.h_range`,t).replace(`{from}`,String(g+1)).replace(`{to}`,String(Math.min(g+m,p.length))).replace(`{n}`,String(p.length))}</span>
           <button class="ev-pg" aria-label=${V(`ev.h_next`,t)} ?disabled=${g+m>=p.length} @click=${()=>{this._evPg=h+1,this._evOpenS=void 0,this.requestUpdate()}}><ha-icon icon="mdi:chevron-right"></ha-icon></button>
         </div>`:L}`:F`<p class="hint">${V(`ev.h_none_period`,t)}</p>`}`}
-        <p class="hint">${V(`ev.h_hint`,t)}</p>
       </div>`}_renderEvPriceCard(e){let t=this.hass.language;if(!e)return L;let n=(e=>{if(e.length<2||new Date(e[0].end)-new Date(e[0].start)>=55*6e4)return e;let t=new Map;for(let n of e){let e=new Date(n.start);e.setMinutes(0,0,0);let r=e.getTime(),i=t.get(r);i?(i.sum+=n.price,i.sun+=n.sun_share??0,i.k++,i.end=n.end):t.set(r,{start:new Date(r).toISOString(),end:n.end,sum:n.price,sun:n.sun_share??0,k:1})}return[...t.values()].map(e=>({start:e.start,end:e.end,price:e.sum/e.k,sun_share:e.sun/e.k}))})(e.forecast??[]),r=e.cheapest,i=n.length?Math.max(...n.map(e=>e.price),0):0,a=n.length?Math.min(...n.map(e=>e.price),0):0,o=i-a||1,s=Date.now(),c=e=>r&&new Date(e.start)<new Date(r.end)&&new Date(e.end)>new Date(r.start);return F`<div class="al-card">
         <div class="al-card-title">${V(`ev.p_title`,t)}</div>
         <div class="ev-grid">

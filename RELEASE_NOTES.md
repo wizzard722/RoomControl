@@ -12,6 +12,9 @@
 ### Fixed
 - The English summary of an alarm clock showed "{light bundles}" instead of the light bundles' names.
 
+### Changed
+- The explanation under the EV charger's *Charged* card ("kWh = the charger's use …") is no longer shown.
+
 ---
 
 ## 2.3.1
