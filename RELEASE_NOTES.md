@@ -9,6 +9,11 @@
 - Adding a device whose use is already learned (14 days or more) takes the learned times over straight away.
 - Devices without a meter learn from being switched on by hand. The car keeps the ready time of the EV charger settings until it has learned from being unplugged.
 
+### Planning: a heat map of when a device is used
+- The device card shows **When used** as a heat map: weekdays × hours, coloured from never to always (the last six weeks of learned use). The time it is needed (taken over or suggested) has a blue outline; for **On while in use** the time slots do.
+- Tap a cell for details, e.g. "Tue 07:00–08:00 · used in 5 of 6 weeks · needed".
+- It replaces the "When needed" bar per weekday.
+
 ### Planning: sun heat counts for the next time
 - **Keeps warm** with **Sun first**: the hours a boiler already ran on the sun since the last time it was needed count for the next time, so after a sunny day there is no night stretch from the grid ("Already ran 1.5 h on the sun: that heat counts for this time"). After a grey day the cheapest stretch fills in the rest.
 

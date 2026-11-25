@@ -550,7 +550,9 @@ class Planner:
         return {"key": dev["key"], "mode": "use", "mode_used": "use" if controllable and auto and slots else "advice", "auto": auto,
                 "controllable": controllable, "lead": lead, "slots_count": len(slots),
                 "window_end": (nxt or {}).get("end") or now.isoformat(),
-                "block": nxt, "need": None, "proposal": self._use_proposal(dev.get("learn_key"))}
+                "block": nxt, "proposal": self._use_proposal(dev.get("learn_key")),
+                "need": {"at": None, "learned": False, "days": (u := self.need(dev["key"], "use", dev.get("learn_key")))["days"],
+                         "week": u["week"], "hours": u["hours"], "meter": u["meter"], "any": u["learned"]}}
 
     @callback
     def plan(self) -> None:
