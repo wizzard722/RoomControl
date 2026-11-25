@@ -2,8 +2,11 @@
 
 Room option "switches": [{"entity_id": "switch.x" | "remote.x" (e.g. an
 NVIDIA Shield), "may_off": bool (default
-True), "off_on": ["all_off", "nobody_home", "smoke"], "back_on": bool
-(default True: after "nobody home", back on when someone is home again)}].
+True), "off_on": ["all_off", "nobody_home", "smoke"], "back_on": bool | "standby"
+(default True: after "nobody home", back on when someone is home again;
+"standby": back on, but what of the room's media players and remotes
+switches on by itself in the next STANDBY_WINDOW seconds goes off again: a
+TV that starts when its plug gets power, and wakes the rest by HDMI-CEC)}].
 
 A switch that may go off is switched off by RoomControl at the moments
 chosen for it (default: All off, nobody home and smoke):
@@ -35,7 +38,7 @@ from typing import Any
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -45,6 +48,7 @@ from .rooms import anyone_home, household_persons, managed_areas, room_persons
 _LOGGER = logging.getLogger(__name__)
 
 CONF_SWITCHES = "switches"
+STANDBY_WINDOW = 120  # s after a plug "back on in standby" in which what wakes by itself goes off again
 IDLE_BACK_OFF = 30  # minutes at standby before a switch turned on by hand during its slot goes off again
 OFF_MOMENTS = ("all_off", "nobody_home", "room_away", "night", "slot", "smoke", "vacation_home", "vacation_away")
 DEFAULT_OFF_ON = ["all_off", "nobody_home", "smoke"]
@@ -62,6 +66,11 @@ async def async_turn(hass: HomeAssistant, entities: list[str], on: bool) -> None
         await hass.services.async_call(domain, "turn_on" if on else "turn_off", {ATTR_ENTITY_ID: ids}, blocking=True)
 
 
+def _awake(state: str | None) -> bool:
+    """A media player or remote that is on (not off / standby / unavailable)."""
+    return state not in (None, *MEDIA_IDLE)
+
+
 def room_switches(room: dict[str, Any] | None) -> list[dict[str, Any]]:
     """The room's switches, with their defaults filled in."""
     out = []
@@ -73,6 +82,7 @@ def room_switches(room: dict[str, Any] | None) -> list[dict[str, Any]]:
             "entity_id": item["entity_id"],
             "may_off": item.get("may_off", True) is not False,
             "back_on": item.get("back_on", True) is not False,
+            "standby": item.get("back_on") == "standby",
             "off_on": list(dict.fromkeys("nobody_home" if m == "armed_away" else m for m in off_on if m in (*OFF_MOMENTS, "armed_away")))
             if isinstance(off_on, list) else list(DEFAULT_OFF_ON),
             "slots": [x for x in item.get("slots") or [] if isinstance(x, dict)],
@@ -159,6 +169,8 @@ class RoomSwitches:
         self.slot_off: list[str] = []  # switched off for one of their own time slots
         self._idle_since: dict[str, float] = {}
         self._track_rooms: CALLBACK_TYPE | None = None
+        self._sb_until: dict[str, Any] = {}  # media player / remote → until when it goes off again if it wakes
+        self._sb_track: CALLBACK_TYPE | None = None
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
@@ -215,6 +227,8 @@ class RoomSwitches:
                 await async_turn(self.hass, back, True)
             except Exception:  # noqa: BLE001
                 _LOGGER.warning("Could not switch %s back on (vacation over)", back)
+            else:
+                self.standby_watch(back)
 
     @callback
     def stop(self) -> None:
@@ -227,6 +241,65 @@ class RoomSwitches:
         if self._track_rooms:
             self._track_rooms()
             self._track_rooms = None
+        if self._sb_track:
+            self._sb_track()
+            self._sb_track = None
+        self._sb_until = {}
+
+    # ── back on in standby ─────────────────────────────────────────────────
+
+    @callback
+    def standby_watch(self, entities: list[str]) -> None:
+        """Plugs set to "back on in standby" just got power: for STANDBY_WINDOW
+        seconds, the room's media players and remotes that are off now go off
+        again when they switch on by themselves."""
+        from .const import CONF_MEDIA_PLAYERS  # noqa: PLC0415
+
+        now = dt_util.utcnow()
+        blocked = never_off(self.hass)
+        added = False
+        for room in self.hass.data.get(DOMAIN, {}).get("rooms", []):
+            sws = room_switches(room)
+            if not any(sw["standby"] and sw["entity_id"] in entities for sw in sws):
+                continue
+            for e in [*(room.get(CONF_MEDIA_PLAYERS) or []), *(sw["entity_id"] for sw in sws if sw["entity_id"].startswith("remote."))]:
+                st = self.hass.states.get(e)
+                if e in blocked or (st is not None and _awake(st.state)):
+                    continue  # already on (or may never go off): left alone
+                self._sb_until[e] = now + timedelta(seconds=STANDBY_WINDOW)
+                added = True
+        if added:
+            self._sb_retrack()
+            async_call_later(self.hass, STANDBY_WINDOW + 1, self._sb_prune)
+
+    @callback
+    def _sb_prune(self, _now: Any = None) -> None:
+        now = dt_util.utcnow()
+        self._sb_until = {e: t for e, t in self._sb_until.items() if t > now}
+        self._sb_retrack()
+
+    @callback
+    def _sb_retrack(self) -> None:
+        if self._sb_track:
+            self._sb_track()
+            self._sb_track = None
+        if self._sb_until:
+            self._sb_track = async_track_state_change_event(self.hass, sorted(self._sb_until), self._on_wake)
+
+    @callback
+    def _on_wake(self, event: Event) -> None:
+        entity = event.data.get("entity_id")
+        new, old = event.data.get("new_state"), event.data.get("old_state")
+        until = self._sb_until.get(entity)
+        if until is None or new is None or not _awake(new.state) or (old is not None and _awake(old.state)):
+            return
+        self._sb_until.pop(entity, None)  # once; the listener is tidied up by _sb_prune
+        if dt_util.utcnow() > until:
+            return
+        domain = entity.split(".", 1)[0]
+        log_switches(self.hass, [entity], "off", "switches_standby")
+        self.hass.async_create_task(self.hass.services.async_call(
+            domain if domain in ("media_player", "remote") else "homeassistant", "turn_off", {ATTR_ENTITY_ID: entity}))
 
     def _alarm(self) -> str | None:
         return self.hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_ALARM_ENTITY) or None
@@ -311,6 +384,7 @@ class RoomSwitches:
         if back:
             log_switches(self.hass, back, "on", "switches_slot_over")
             self.hass.async_create_task(async_turn(self.hass, back, True))
+            self.standby_watch(back)
         if off or back:
             self._keep()
 
@@ -362,6 +436,8 @@ class RoomSwitches:
             await async_turn(self.hass, todo, True)
         except Exception:  # noqa: BLE001
             _LOGGER.warning("Could not switch %s back on (night over)", todo)
+        else:
+            self.standby_watch(todo)
 
     async def async_room_away(self, area: str) -> None:
         """The room's persons all left: its "room_away" switches off."""
@@ -398,6 +474,8 @@ class RoomSwitches:
             await async_turn(self.hass, todo, True)
         except Exception:  # noqa: BLE001
             _LOGGER.warning("Could not switch %s back on (room person home)", todo)
+        else:
+            self.standby_watch(todo)
 
     @callback
     def _on_change(self, event: Event) -> None:
@@ -484,3 +562,5 @@ class RoomSwitches:
             await async_turn(self.hass, todo, True)
         except Exception:  # noqa: BLE001
             _LOGGER.warning("Could not switch %s back on (%s)", todo, why)
+        else:
+            self.standby_watch(todo)

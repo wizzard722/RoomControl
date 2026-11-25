@@ -1,5 +1,11 @@
 # Release notes
 
+## 3.0.4
+
+### Room switches: back on in standby
+- **Back on when someone comes home** has a third choice: **In standby**. The plug gets power again, but when the TV, a remote (e.g. an NVIDIA Shield) or a media player of the room switches on by itself within 2 minutes — a TV that starts when it gets power and wakes the amplifier and Shield by HDMI-CEC — RoomControl switches it off again. Something that was already on is left alone.
+- It works for every way a switch comes back on: someone home again, the night over, a room's person home, a time slot over and a vacation over. Each switch-off is noted in the room's Debug ("Back on in standby: woke by itself, off again").
+
 ## 3.0.3
 
 ### Planning: "On while in use" for devices like a coffee maker
