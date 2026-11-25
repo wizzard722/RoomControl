@@ -2,11 +2,21 @@
 
 ## 3.0.10
 
-### Rooms: a prediction model per room (shown on Analysis)
+### Rooms: a prediction model per room
 - RoomControl now learns per room whether it will be in use soon. Every minute it takes a snapshot — the time slot (workday or weekend, hour), who of the household is home, how long ago the last motion was, motion in linked rooms, light bundles on, media playing and dark outside — and a quarter later it notes whether the room was really in use (motion or a lamp on). Two small, explainable models learn from this (logistic regression; light enough for a Raspberry Pi). Kept across restarts.
 - Room → **Analysis** shows a new card **Prediction · today**: in use now and probably for how much longer (from the remembered sessions), or the chance in the next quarter; a timeline of today with the predicted chance per quarter and what really happened (motion, light bundles on); the coming hours; **what weighs most now** (e.g. "Paul home +35 %", "Motion less than 5 min ago +28 %"); and **how certain** it is, per day.
 - Certainty: every prediction is checked afterwards; it is the balanced accuracy over the last 7 days (how often both "in use" and "not in use" were predicted right; 50 % = guessing). Under 14 days it says "still learning". A new room borrows the timeline of its linked rooms.
-- Shown only: nothing acts on the predictions yet.
+- What the model may do is chosen per room in **Settings → Prediction** (a new card), and it only acts once it is ready (14 days learned and at least 60 % certain):
+  - **Grace per moment**: likely used again soon → the grace period 1.5× longer; unlikely → 0.6×.
+  - **Show in Coming up**: "Probably in use (86 %)" and "Probably nobody any more (74 %)" among the planned things on the room's Overview.
+  - **Look lived-in with the model**: lamps on when the room is usually in use then (with the household home), instead of copying last week.
+  - **Who counts**: the household's persons with their learned influence; tap one to leave them out. **Learn again** starts over.
+
+### Rooms: lux sensor response model
+- RoomControl measures, after each step lux control makes (on, off, brighter, dimmer), how long the lux sensor takes to show it, and how many lux the step brought, brighter and dimmer apart. A step it doesn't see within 5 minutes counts as "too small to notice". The last 50 steps are kept.
+- With **Lux sensor model** on (Settings → Prediction), once it is certain (10 reactions, 70 %), the wait between two dimming steps is the reaction time it sees in 90 % of the cases plus 3 s (5 s – 3 min, brighter and dimmer apart) instead of a fixed 30 s, and the learned lux per step (also apart) sets the step size. Faster sensors make the light bundles react faster; slow ones no longer overshoot.
+- Linked rooms: when a room changes its lamps, its linked rooms measure how much of that light reaches them and how fast; with the model on they wait for it instead of regulating against it.
+- Room → **Analysis** shows a **Lux sensor** card: the waits (brighter, dimmer) and what is used now, every reaction time as a dot with the median and the 90 % line, predicted vs measured lux per step, lux per step, the linked rooms' share, and how certain the model is.
 
 ### Planning: a coffee maker's short use is learned, and shown per time slot
 - Making a cup draws power for less than a minute: too short to count as a run, so a coffee maker stayed at "nothing seen yet". RoomControl now also counts per quarter of an hour the energy above standby; a quarter with at least 3 Wh above standby counts as used. **On while in use** learns from this (heat map, time slot suggestion), and **Add device** recognises such a device as On while in use.

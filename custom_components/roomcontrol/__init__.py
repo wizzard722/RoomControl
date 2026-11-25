@@ -903,7 +903,7 @@ def ws_smoke_clear(
     {
         vol.Required("type"): f"{DOMAIN}/forget_learned",
         vol.Required("area_id"): str,
-        vol.Required("what"): vol.In(["grace_extra", "brightness", "sessions", "motion"]),
+        vol.Required("what"): vol.In(["grace_extra", "brightness", "sessions", "motion", "lux", "predict"]),
     }
 )
 @callback
@@ -914,7 +914,10 @@ def ws_forget_learned(
 ) -> None:
     """Forget what a room learned (one kind), so it starts over."""
     learn = _data(hass).get("learn")
-    if learn is not None:
+    if msg["what"] == "predict":
+        if (predictor := _data(hass).get("predict")) is not None:
+            predictor.forget(msg["area_id"])
+    elif learn is not None:
         learn.forget(msg["area_id"], msg["what"])
     entity = _data(hass).get("entities", {}).get(msg["area_id"])
     if entity is not None:

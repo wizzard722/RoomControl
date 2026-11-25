@@ -19,8 +19,18 @@ linked rooms for the timeline.
 How sure: every snapshot's prediction is checked when its quarter is over.
 Per day RoomControl keeps how often "in use" and "not in use" were predicted
 right; the certainty is the balanced accuracy (the mean of both hit rates:
-50 % = guessing) over the last CONF_DAYS days. It is shown only; nothing
-acts on it yet. Kept in .storage/roomcontrol.predict.
+50 % = guessing) over the last CONF_DAYS days. Kept in
+.storage/roomcontrol.predict.
+
+What it is used for is chosen per room (room option "predict": {"grace",
+"soon", "replay", "lux": bool, "skip": [persons not to count]}), and only
+once the model is ready (READY_DAYS days and READY_CERTAINTY % certain):
+- grace: a big chance the room is used again soon → a longer grace period,
+  a small chance → a shorter one (light.py, _motion_off_delay);
+- soon: "probably in use from …" / "probably nobody from …" in Straks;
+- replay: "Look lived-in" switches on when the day model says the room is
+  usually in use then (with the household home), instead of last week's copy;
+- lux: the lux sensor response model (light.py) sets the wait between steps.
 """
 from __future__ import annotations
 
@@ -48,6 +58,9 @@ KEEP_DAYS = 30
 POOL_DAYS = 3
 SINCE_BUCKETS = ((5, "0-5"), (15, "5-15"), (60, "15-60"), (240, "60-240"))
 LINKED_MIN = 5
+READY_DAYS = 14
+READY_CERTAINTY = 60
+SOON_FROM = 70  # % from which a quarter counts as "probably in use"
 
 
 def _sig(z: float) -> float:
@@ -157,13 +170,21 @@ class Predictor:
     def _light(self, area: str) -> Any:
         return self.hass.data.get(DOMAIN, {}).get("entities", {}).get(area)
 
-    def _persons(self) -> list[str]:
+    def _room(self, area: str) -> dict[str, Any]:
+        return next((r for r in self.hass.data.get(DOMAIN, {}).get("rooms", []) if r.get("area_id") == area), {})
+
+    def option(self, area: str, key: str) -> Any:
+        opts = self._room(area).get("predict")
+        return opts.get(key) if isinstance(opts, dict) else None
+
+    def _persons(self, area: str | None = None) -> list[str]:
         from .rooms import household_persons  # noqa: PLC0415
 
-        return household_persons(self.hass)
+        skip = set(self.option(area, "skip") or []) if area else set()
+        return [p for p in household_persons(self.hass) if p not in skip]
 
-    def _home(self) -> list[str]:
-        return [f"person:{p}" for p in self._persons() if (st := self.hass.states.get(p)) is not None and st.state == "home"]
+    def _home(self, area: str | None = None) -> list[str]:
+        return [f"person:{p}" for p in self._persons(area) if (st := self.hass.states.get(p)) is not None and st.state == "home"]
 
     def _dark(self) -> bool:
         st = self.hass.states.get("sun.sun")
@@ -205,7 +226,7 @@ class Predictor:
         return False
 
     def features(self, area: str, now: datetime, state: dict[str, Any]) -> tuple[list[str], list[str]]:
-        home, dark = self._home(), self._dark()
+        home, dark = self._home(area), self._dark()
         since = next((name for limit, name in SINCE_BUCKETS if state["since"] < limit), "240+")
         now_f = [self._slot(now), *home, f"since:{since}"]
         if not home:
@@ -296,6 +317,55 @@ class Predictor:
         pooled.b = sum(m.b for m in others) / len(others)
         return pooled
 
+    def ready(self, area: str) -> bool:
+        room = self.rooms.get(area)
+        if room is None or room.days() < READY_DAYS:
+            return False
+        certainty, _per = room.certainty()
+        return certainty is not None and certainty >= READY_CERTAINTY
+
+    def chance_now(self, area: str) -> float | None:
+        """The chance (0–1) the room is in use in the next quarter, or None while not ready."""
+        if not self.ready(area):
+            return None
+        now = dt_util.utcnow().replace(second=0, microsecond=0)
+        state = self._state(area, now)
+        if state is None:
+            return None
+        now_f, _d = self.features(area, now, state)
+        return self.rooms[area].now.p(now_f)
+
+    def upcoming(self, area: str) -> list[dict[str, Any]]:
+        """For Straks: when the room probably gets used, or probably nobody is there any more."""
+        if not self.ready(area):
+            return []
+        st = self.status(area)
+        out = []
+        now = dt_util.utcnow()
+        if st["in_use"] and st["remaining_min"] is not None:
+            out.append({"at": now + timedelta(minutes=st["remaining_min"]), "kind": "pred_end", "p": 100 - st["p_now"]})
+        elif not st["in_use"]:
+            q0 = st["now_q"]
+            start = dt_util.start_of_local_day()
+            for q in range(q0 + 1, 96):
+                if st["timeline"][q] >= SOON_FROM and st["timeline"][q - 1] < SOON_FROM:
+                    out.append({"at": start + timedelta(minutes=15 * q), "kind": "pred_start", "p": st["timeline"][q]})
+                    break
+        return out
+
+    def replay_want(self, area: str, when: datetime) -> bool | None:
+        """Look lived-in: is the room usually in use at `when` (with the household home)?
+        None while not ready."""
+        if not self.ready(area):
+            return None
+        home = [f"person:{p}" for p in self._persons(area)]
+        f = [self._slot(when), *home, *(["nobody"] if not home else []), *(["dark"] if self._dark() else [])]
+        return self._day_model(area).p(f) >= 0.5
+
+    def forget(self, area: str) -> None:
+        self.rooms.pop(area, None)
+        self._save()
+
     def _label(self, feat: str) -> dict[str, Any]:
         kind, _, rest = feat.partition(":")
         if kind == "person":
@@ -326,7 +396,7 @@ class Predictor:
         why.sort(key=lambda w: -abs(w["effect"]))
         # Today's timeline: the day model per quarter (who is home as now).
         day = self._day_model(area)
-        home = self._home()
+        home = self._home(area)
         start = dt_util.start_of_local_day()
         timeline = []
         for q in range(96):
@@ -359,6 +429,11 @@ class Predictor:
             "pooled": room.days() < POOL_DAYS and any(a != area and (r := self.rooms.get(a)) is not None and r.days() >= POOL_DAYS
                                                       for a in linked_group(self.hass, area)),
             "linked": [a for a in linked_group(self.hass, area) if a != area],
+            "ready": self.ready(area), "ready_days": READY_DAYS, "ready_certainty": READY_CERTAINTY,
+            "persons": [{"id": p, "name": ((st := self.hass.states.get(p)) and st.attributes.get("friendly_name")) or p,
+                         "weight": round(max((abs(m.w.get(f"person:{p}", 0.0)) for m in (room.now, room.day)), default=0.0), 2)}
+                        for p in self._persons()],
+            "lux": light.lux_model() if light is not None and hasattr(light, "lux_model") else None,
         }
 
     @staticmethod

@@ -174,6 +174,15 @@ _LOGGER = logging.getLogger(__name__)
 MOTION_ON_STATES = ("on", "detected")
 # Lux model: at most this much brightness (of 255) per step once the gain is known.
 LUX_MODEL_MAX_STEP = 128
+LUX_RESP_MAX = 300  # s: no response this long → the sensor did not notice the step
+LUX_LINKED_MAX = 180  # s
+LUX_MODEL_MIN = 10  # responses before the model's wait is used
+LUX_MODEL_SURE = 70  # %
+LUX_SAMPLES = 50
+PREDICT_GRACE_HIGH = 0.7
+PREDICT_GRACE_LOW = 0.2
+PREDICT_GRACE_LONGER = 1.5
+PREDICT_GRACE_SHORTER = 0.6
 # A hand-made brightness change counts once the lamp stayed there this long (s).
 BRIGHT_SETTLE = 20
 # At most one notification of a kind per room in this time.
@@ -661,6 +670,9 @@ class RoomControlLight(LightEntity):
         # Lux model: lux per brightness step (0-255), and what we measured at the last adjustment.
         self._lux_gain: float | None = None
         self._lux_probe: tuple[float, float, tuple[str, ...]] | None = None
+        self._lux_watch: dict[str, Any] | None = None  # the step whose sensor response is awaited
+        self._lux_linked_watch: dict[str, Any] | None = None  # a linked room's step, awaited here
+        self._lux_last_dir: str | None = None
         # Lamps lux control already asked for the lowest level (too light):
         # still too light next time → off (some lamps can't go that low).
         self._lux_min_asked: tuple[str, ...] | None = None
@@ -1644,6 +1656,13 @@ class RoomControlLight(LightEntity):
         # The running grace period.
         if self._grace_until is not None:
             add(dt_util.as_local(self._grace_until), "grace_off", self._bundle_names(self._idle_lamps()))
+        # The prediction model (room option predict.soon).
+        if self._predict_on("soon") and (pr := self._predictor()) is not None:
+            try:
+                for ev in pr.upcoming(self._area_id):
+                    add(dt_util.as_local(ev["at"]), ev["kind"], [f"{ev['p']} %"])
+            except Exception:  # noqa: BLE001
+                pass
         events.sort(key=lambda e: e[0])
         seen: set[tuple[str, str, tuple[str, ...]]] = set()
         out = []
@@ -2170,11 +2189,150 @@ class RoomControlLight(LightEntity):
 
     @callback
     def _on_lux_change(self, _event: Event) -> None:
+        self._lux_response()
         self._regulate_lux()
 
     @callback
     def _lux_tick(self, now: datetime | None = None) -> None:
+        self._lux_timeout(now or dt_util.utcnow())
         self._regulate_lux(now)
+
+    # ── lux sensor response model ──────────────────────────────────────────
+
+    def _lux_data(self) -> dict[str, Any] | None:
+        learn = self._learn()
+        return learn.room(self._area_id).setdefault("lux", {}) if learn is not None else None
+
+    def _lux_start_watch(self, now: datetime, lux: float, direction: str, pred: float | None, db: float | None) -> None:
+        """RoomControl changed the lamps: wait for the lux sensor to notice."""
+        self._lux_last_dir = direction
+        self._lux_watch = {"t": now, "lux0": lux, "dir": direction, "pred": pred, "db": db}
+
+    def _lux_record(self, w: dict[str, Any], latency: float | None, measured: float | None) -> None:
+        data = self._lux_data()
+        if data is None:
+            return
+        samples = data.setdefault("samples", [])
+        samples.append([w["t"].isoformat(), w["dir"], None if latency is None else round(latency, 1),
+                        None if w["pred"] is None else round(w["pred"], 1), None if measured is None else round(measured, 1)])
+        data["samples"] = samples[-LUX_SAMPLES:]
+        if measured is not None and w.get("db"):
+            g = measured / w["db"]
+            if 0.02 <= g <= 50:
+                gains = data.setdefault("gain", {})
+                old = gains.get(w["dir"])
+                gains[w["dir"]] = round(g if old is None else old * 0.7 + g * 0.3, 4)
+        if (learn := self._learn()) is not None:
+            learn._save()
+
+    @callback
+    def _lux_response(self) -> None:
+        """A new lux reading: did it show the step RoomControl (or a linked room) made?"""
+        lux = room_lux(self.hass, self._room) if room_lux_sensors(self._room) else None
+        if lux is None:
+            return
+        now = dt_util.utcnow()
+        if (w := self._lux_watch) is not None:
+            delta = lux - w["lux0"]
+            need = max(2.0, 0.25 * abs(w["pred"])) if w["pred"] else max(2.0, 0.05 * w["lux0"])
+            if (delta >= need) if w["dir"] == "up" else (-delta >= need):
+                self._lux_watch = None
+                self._lux_record(w, (now - w["t"]).total_seconds(), delta)
+        if (lw := self._lux_linked_watch) is not None and abs(lux - lw["lux0"]) >= 2.0:
+            self._lux_linked_watch = None
+            self._lux_linked_record(lw, (lux - lw["lux0"]) / lw["db"], (now - lw["t"]).total_seconds())
+
+    @callback
+    def _lux_timeout(self, now: datetime) -> None:
+        if (w := self._lux_watch) is not None and (now - w["t"]).total_seconds() > LUX_RESP_MAX:
+            self._lux_watch = None
+            self._lux_record(w, None, None)
+        if (lw := self._lux_linked_watch) is not None and (now - lw["t"]).total_seconds() > LUX_LINKED_MAX:
+            self._lux_linked_watch = None
+            self._lux_linked_record(lw, 0.0, None)
+
+    def _lux_linked_record(self, lw: dict[str, Any], gain: float, latency: float | None) -> None:
+        data = self._lux_data()
+        if data is None or not -50 <= gain <= 50:
+            return
+        linked = data.setdefault("linked", {}).setdefault(lw["src"], {"gain": None, "n": 0, "lat": None})
+        linked["gain"] = round(gain if linked["gain"] is None else linked["gain"] * 0.7 + gain * 0.3, 4)
+        linked["n"] += 1
+        if latency is not None:
+            linked["lat"] = round(latency if linked["lat"] is None else linked["lat"] * 0.7 + latency * 0.3, 1)
+        if (learn := self._learn()) is not None:
+            learn._save()
+
+    def lux_from_linked(self, src: str, db: float, now: datetime) -> None:
+        """A linked room changed its lamps: see how much of it arrives here, and
+        (with the lux model on) wait for it instead of regulating against it."""
+        if not room_lux_sensors(self._room) or not db:
+            return
+        lux = room_lux(self.hass, self._room)
+        if lux is None:
+            return
+        self._lux_linked_watch = {"src": src, "t": now, "lux0": lux, "db": db}
+        if self._predict_on("lux"):
+            self._lux_last_adjust = now
+
+    def _lux_notify_linked(self, db: float, now: datetime) -> None:
+        for area in linked_group(self.hass, self._area_id):
+            if area == self._area_id:
+                continue
+            other = self.hass.data.get(DOMAIN, {}).get("entities", {}).get(area)
+            if other is not None and hasattr(other, "lux_from_linked"):
+                try:
+                    other.lux_from_linked(self._area_id, db, now)
+                except Exception:  # noqa: BLE001
+                    continue
+
+    def _lux_stats(self) -> dict[str, Any]:
+        """Wait per direction (the 90th percentile of the reaction times + 3 s), certainty."""
+        data = self._lux_data() or {}
+        samples = data.get("samples") or []
+        wait: dict[str, int | None] = {}
+        for d in ("up", "down"):
+            lat = sorted(x[2] for x in samples if x[1] == d and x[2] is not None)
+            wait[d] = int(min(180, max(5, lat[min(len(lat) - 1, int(len(lat) * 0.9))] + 3))) if len(lat) >= 3 else None
+        lat_all = [x[2] for x in samples if x[2] is not None]
+        pairs = [(x[3], x[4]) for x in samples if x[3] is not None and x[4] is not None]
+        if len(pairs) >= 5:
+            hits = sum(1 for p, m in pairs if abs(p - m) <= max(5.0, 0.3 * abs(m)))
+            certainty = round(hits / len(pairs) * 100)
+        else:
+            certainty = round(len(lat_all) / len(samples) * 100) if samples else None
+        sure = len(lat_all) >= LUX_MODEL_MIN and certainty is not None and certainty >= LUX_MODEL_SURE
+        return {"wait": wait, "certainty": certainty, "sure": sure, "n": len(samples), "n_react": len(lat_all)}
+
+    def _lux_gap(self) -> float:
+        if not self._predict_on("lux"):
+            return LUX_CONTROL_MIN_GAP
+        stats = self._lux_stats()
+        wait = stats["wait"].get(self._lux_last_dir or "up")
+        return float(wait) if stats["sure"] and wait else LUX_CONTROL_MIN_GAP
+
+    def _lux_gain_for(self, direction: str) -> float | None:
+        if self._predict_on("lux"):
+            gains = (self._lux_data() or {}).get("gain") or {}
+            if isinstance(gains.get(direction), (int, float)) and self._lux_stats()["sure"]:
+                return float(gains[direction])
+        return self._lux_gain
+
+    def lux_model(self) -> dict[str, Any] | None:
+        """For the panel (Analysis → Lux sensor)."""
+        if not room_lux_sensors(self._room):
+            return None
+        data = self._lux_data() or {}
+        stats = self._lux_stats()
+        gains = data.get("gain") or {}
+        own = gains.get("up") or self._lux_gain
+        return {
+            "enabled": self._predict_on("lux"), "default_wait": LUX_CONTROL_MIN_GAP, "min_n": LUX_MODEL_MIN,
+            "sure_at": LUX_MODEL_SURE, **stats, "gain": gains,
+            "samples": [{"at": x[0], "dir": x[1], "lat": x[2], "pred": x[3], "meas": x[4]} for x in data.get("samples") or []],
+            "linked": [{"area": a, "share": round(v["gain"] / own * 100) if own and v.get("gain") is not None else None,
+                        "lat": v.get("lat"), "n": v.get("n", 0)} for a, v in (data.get("linked") or {}).items()],
+        }
 
     @callback
     def _regulate_lux(self, now: datetime | None = None, force: bool = False) -> None:
@@ -2190,7 +2348,7 @@ class RoomControlLight(LightEntity):
         if target <= 0 or lux is None:
             return
         now = now or dt_util.utcnow()
-        if not force and self._lux_last_adjust and (now - self._lux_last_adjust).total_seconds() < LUX_CONTROL_MIN_GAP:
+        if not force and self._lux_last_adjust and (now - self._lux_last_adjust).total_seconds() < self._lux_gap():
             return
         if abs(lux - target) <= target * LUX_CONTROL_DEADBAND:
             return
@@ -2216,6 +2374,7 @@ class RoomControlLight(LightEntity):
                 self._lux_last_adjust = now
                 self._lux_min_asked = None
                 self._dbg("on", "lux_dark", off, lux=round(lux), target=round(target))
+                self._lux_start_watch(now, lux, "up", None, None)
                 _LOGGER.debug("%s: lux %s < target %s, switching on %s", self.entity_id, lux, target, off)
                 start = min([LUX_CONTROL_START_PCT, *[self._auto_max_pct(e) or 100 for e in off if e not in fixed]])
                 data = {ATTR_ENTITY_ID: [e for e in off if e not in fixed], "brightness_pct": start}
@@ -2236,15 +2395,16 @@ class RoomControlLight(LightEntity):
                 self._lux_min_asked = None
                 self._lux_last_adjust = now
                 self._dbg("off", "lux_bright", on, lux=round(lux), target=round(target))
+                self._lux_start_watch(now, lux, "down", None, None)
                 _LOGGER.debug("%s: lux %s > target %s at the lowest level, switching off", self.entity_id, lux, target)
                 self.hass.async_create_task(
                     rc_call(self.hass, "light", "turn_off", {ATTR_ENTITY_ID: on}, blocking=True)
                 )
                 return
             factor = target / lux
-        if self._lux_gain:
+        if gain := self._lux_gain_for("up" if lux < target else "down"):
             # Known lux per brightness step: go (almost) straight to the target.
-            step = max(-LUX_MODEL_MAX_STEP, min(LUX_MODEL_MAX_STEP, (target - lux) / self._lux_gain))
+            step = max(-LUX_MODEL_MAX_STEP, min(LUX_MODEL_MAX_STEP, (target - lux) / gain))
             new = int(round(min(255, max(LUX_CONTROL_MIN_BRIGHTNESS, current + step))))
         else:
             factor = min(1 + LUX_CONTROL_MAX_STEP, max(1 - LUX_CONTROL_MAX_STEP, factor))
@@ -2264,6 +2424,10 @@ class RoomControlLight(LightEntity):
             return  # already at the limit (e.g. full brightness and still too dark)
         self._lux_probe = (lux, current, tuple(sorted(adjustable)))
         self._lux_last_adjust = now
+        direction = "up" if new > current else "down"
+        g = self._lux_gain_for(direction)
+        self._lux_start_watch(now, lux, direction, g * (new - current) if g else None, new - current)
+        self._lux_notify_linked(new - current, now)
         self._dbg("adjust", "lux_brighter" if new > current else "lux_dimmer", adjustable,
                   lux=round(lux), target=round(target), pct=round(new / 255 * 100))
         _LOGGER.debug("%s: lux %s → target %s, brightness %s → %s", self.entity_id, lux, target, current, new)
@@ -2576,6 +2740,15 @@ class RoomControlLight(LightEntity):
             self._replay_on = set()
             return
         wanted = learn.replay_lamps(self._area_id, dt_util.utcnow()) & set(self._members)
+        if self._predict_on("replay") and (pr := self._predictor()) is not None:
+            try:
+                usual = pr.replay_want(self._area_id, dt_util.utcnow())
+            except Exception:  # noqa: BLE001
+                usual = None
+            if usual is False:
+                wanted = set()
+            elif usual and not wanted:
+                wanted = self._usual_lamps(learn) & set(self._members)
         to_on = sorted(e for e in wanted if not self._is_on(e))
         to_off = sorted(e for e in self._replay_on - wanted if self._is_on(e))
         if to_on:
@@ -2589,6 +2762,15 @@ class RoomControlLight(LightEntity):
         if to_on or to_off:
             self._recompute()
             self.async_write_ha_state()
+
+    def _usual_lamps(self, learn: Any) -> set[str]:
+        """The lamps that were on in at least a third of the remembered sessions."""
+        sessions = learn.room(self._area_id).get("sessions", [])
+        counts: dict[str, int] = {}
+        for s in sessions:
+            for lamp in s[2] if len(s) > 2 else []:
+                counts[lamp] = counts.get(lamp, 0) + 1
+        return {lamp for lamp, n in counts.items() if sessions and n >= len(sessions) / 3}
 
     # Notifications.
 
@@ -3101,8 +3283,31 @@ class RoomControlLight(LightEntity):
         value = self._room.get(CONF_MOTION_OFF_DELAY)
         base = MOTION_OFF_DELAY if not isinstance(value, (int, float)) else int(min(MOTION_OFF_DELAY_MAX, max(0, value)))
         if self._room.get(CONF_ADAPTIVE_GRACE) and (learn := self._learn()) is not None:
-            return base + learn.grace_extra(self._area_id)
-        return base
+            base += learn.grace_extra(self._area_id)
+        return round(base * self._predict_grace_factor())
+
+    def _predictor(self) -> Any:
+        return self.hass.data.get(DOMAIN, {}).get("predict")
+
+    def _predict_on(self, key: str) -> bool:
+        opts = self._room.get("predict")
+        return isinstance(opts, dict) and bool(opts.get(key))
+
+    def _predict_grace_factor(self) -> float:
+        """Grace per moment (prediction model): likely used again soon → longer, unlikely → shorter."""
+        if not self._predict_on("grace") or (pr := self._predictor()) is None:
+            return 1.0
+        try:
+            p = pr.chance_now(self._area_id)
+        except Exception:  # noqa: BLE001 - the model must never break switching
+            return 1.0
+        if p is None:
+            return 1.0
+        if p >= PREDICT_GRACE_HIGH:
+            return PREDICT_GRACE_LONGER
+        if p <= PREDICT_GRACE_LOW:
+            return PREDICT_GRACE_SHORTER
+        return 1.0
 
     @callback
     def _set_grace(self, until: datetime | None) -> None:
