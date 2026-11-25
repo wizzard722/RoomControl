@@ -2,6 +2,17 @@
 
 ## 2.5.0
 
+### Energy → Planning (new)
+- New page **Energy** (lightning button in the top bar) with the tab **Planning**:
+  - **Next 24 hours**: the price per hour with the expected sun, a CO₂ strip (green = clean) when a CO₂ sensor is chosen, a time every 4 hours, and a bar per planned device.
+  - **Plan on**: Price, CO₂ or Price and CO₂. CO₂ comes from a sensor you choose (e.g. Electricity Maps / CO2 Signal); without a forecast in the sensor RoomControl learns its usual value per hour of the day. Own sun counts at what feeding it in would bring (price) and as clean (CO₂).
+  - **Flexible devices**, each with *Direct*, *Cheapest* or *Sun only* and a *Ready by* time:
+    - the **car**, when a **charging station** is chosen (EV charger → Settings: a switch, or its charging current as a number). The kWh per charge comes from the battery level, else the median of the last charges, or set it yourself. Still charging at the end of its stretch, the car may finish. Without a charging station the car gets advice only.
+    - devices that **keep something warm** (boiler), with the hours a day they need;
+    - devices that **run a program** (dishwasher, washing machine): advice only, the best start for their usual program. RoomControl does not switch them.
+  - *Cheapest*: off, except in the best unbroken stretch before the ready time. *Sun only*: on while your own surplus covers at least half its power (at least 5 minutes on or off); with a ready time the best stretch fills in the hours the sun is not expected to give. RoomControl only switches when its wish changes, so switching by hand in between is left alone. Each switch is noted in the room's Debug log.
+  - **What it brings**: saved this month, compared with the same kWh at the average price of that day.
+
 ### EV charger fixes
 - The price chart's time axis shows a time every 4 hours from its start (e.g. 15:00, 19:00, 23:00, 03:00 with "tomorrow" under the first time of the next day), right under the bars.
 - "Expected sun then" is now just "Expected sun".

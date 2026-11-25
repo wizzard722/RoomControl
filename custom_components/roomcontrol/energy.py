@@ -382,6 +382,7 @@ class Energy:
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.ev_sessions")
         self.notifier = EvNotifier(hass)
         self.sun: list[dict[str, Any]] = []  # solar forecast periods (solar_forecast.py)
+        self.last_status: dict[str, Any] | None = None  # the status of the last tick (planner.py)
         self._sun_at: datetime | None = None
         self._sun_for: tuple[str, ...] = ()
 
@@ -477,6 +478,7 @@ class Energy:
             if seen != self._soc_seen:
                 self._soc_seen, new_reading = seen, True  # a new reading from the car
         status = self.status()
+        self.last_status = status
         car = status.get("car") or {}
         now = dt_util.utcnow()
         soc = car.get("soc")

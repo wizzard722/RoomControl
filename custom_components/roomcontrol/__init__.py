@@ -191,6 +191,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     )
     websocket_api.async_register_command(hass, ws_call_service)
     websocket_api.async_register_command(hass, ws_get_debug)
+    websocket_api.async_register_command(hass, ws_plan)
     websocket_api.async_register_command(hass, ws_forget_learned)
     websocket_api.async_register_command(hass, ws_smoke_clear)
     websocket_api.async_register_command(hass, ws_restore_auto)
@@ -366,6 +367,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _data(hass)["energy"] = energy
     await energy.async_load()
     energy.start()
+    from .planner import Planner  # noqa: PLC0415
+
+    planner = Planner(hass)
+    _data(hass)["planner"] = planner
+    await planner.async_load()
+    planner.start()
     tags = Tags(hass)
     _data(hass)["tags"] = tags
     tags.start()
@@ -446,6 +453,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             room_switches.stop()
         if (energy := _data(hass).pop("energy", None)) is not None:
             energy.stop()
+        if (planner := _data(hass).pop("planner", None)) is not None:
+            planner.shutdown()
         nspanel_stop(hass)
         if (tags := _data(hass).pop("tags", None)) is not None:
             tags.stop()
@@ -916,6 +925,18 @@ def ws_get_debug(
     else:
         result["entries"] = entity.debug_log(msg.get("limit", 300))
     connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/plan"})
+@callback
+def ws_plan(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Energy → Plannen: the next 24 hours and the plan per flexible device."""
+    planner = _data(hass).get("planner")
+    connection.send_result(msg["id"], planner.status() if planner is not None else {"devices": [], "rows": []})
 
 
 @websocket_api.websocket_command(
