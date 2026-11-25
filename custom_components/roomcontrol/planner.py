@@ -797,6 +797,8 @@ class Planner:
             "battery": battery,
             "plan_on": cfg.get("plan_on") if cfg.get("plan_on") in PLAN_ON else "price",
             "co2_sensor": cfg.get("co2_sensor") or None,
+            "sun_missing": bool((en := self.hass.data.get(DOMAIN, {}).get("energy")) and hasattr(en, "sun_missing")
+                                and en.sun_missing()),
             "charger": cfg.get("charger_entity") or None,
             "rows": [{"start": r["start"].isoformat(), "buy": None if r["buy"] is None else round(r["buy"], 4),
                       "sun_kw": round(r["sun_kw"], 2), "co2": None if r["co2"] is None else round(r["co2"])} for r in rows],

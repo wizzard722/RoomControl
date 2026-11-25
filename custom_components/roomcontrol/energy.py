@@ -62,6 +62,7 @@ from .rooms import managed_areas
 SETTING_ENERGY = "energy"
 SIGNAL_ENERGY = "roomcontrol_energy"  # sent after each check (every 30 s)
 PHASES = ("L1", "L2", "L3")
+SUN_MISSING_MIN = 30  # minutes without a solar forecast before the panel says so
 CHARGE_EFFICIENCY = 0.9  # of the power drawn, this much ends up in the battery
 SOC_BRIDGE_MAX = 10.0  # percent points: a car reading further below the estimate wins
 CHARGING_STATES = {"charging", "on", "true", "laden", "bezig met laden"}
@@ -382,6 +383,7 @@ class Energy:
         self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.ev_sessions")
         self.notifier = EvNotifier(hass)
         self.sun: list[dict[str, Any]] = []  # solar forecast periods (solar_forecast.py)
+        self.sun_empty_since: datetime | None = None
         self.last_status: dict[str, Any] | None = None  # the status of the last tick (planner.py)
         self._sun_at: datetime | None = None
         self._sun_for: tuple[str, ...] = ()
@@ -464,6 +466,15 @@ class Energy:
         ids = tuple(i for i in _cfg(self.hass).get("solar_forecast") or [] if isinstance(i, str))
         self._sun_for, self._sun_at = ids, dt_util.utcnow()
         self.sun = periods(await async_read(self.hass, list(ids))) if ids else []
+        if ids and not self.sun:
+            self.sun_empty_since = self.sun_empty_since or dt_util.utcnow()
+        else:
+            self.sun_empty_since = None
+
+    def sun_missing(self) -> bool:
+        """A solar forecast is chosen but has given nothing for SUN_MISSING_MIN minutes."""
+        since = self.sun_empty_since
+        return since is not None and dt_util.utcnow() - since >= timedelta(minutes=SUN_MISSING_MIN)
 
     @callback
     def _tick(self, _now: Any = None) -> None:
@@ -472,7 +483,10 @@ class Energy:
         if not energy_enabled(self.hass):
             return  # energy management switched off: nothing is measured or kept
         ids = tuple(i for i in _cfg(self.hass).get("solar_forecast") or [] if isinstance(i, str))
-        if ids != self._sun_for or (ids and (self._sun_at is None or dt_util.utcnow() - self._sun_at > timedelta(minutes=15))):
+        # Every 15 minutes; while it gave nothing (e.g. just after a restart, before the
+        # forecast integration is up) every minute.
+        every = timedelta(minutes=1 if not self.sun else 15)
+        if ids != self._sun_for or (ids and (self._sun_at is None or dt_util.utcnow() - self._sun_at >= every)):
             self._sun_for, self._sun_at = ids, dt_util.utcnow()
             self.hass.async_create_task(self.async_refresh_sun())
         cfg = _cfg(self.hass)

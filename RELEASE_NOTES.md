@@ -1,5 +1,11 @@
 # Release notes
 
+## 3.0.10
+
+### Solar forecast back sooner after a restart
+- After a restart Home Assistant's solar forecast integration may not be ready yet, and the expected sun stayed away from the **Next 24 hours** chart (and from planning) for up to 15 minutes. While the forecast gives nothing, RoomControl now asks again every minute; once it has it, every 15 minutes as before.
+- Still no forecast after 30 minutes: the chart says "No solar forecast: check the solar forecast integration (general settings → Energy)."
+
 ## 3.0.9
 
 ### Next 24 hours: the price as a line, cheap · normal · expensive
