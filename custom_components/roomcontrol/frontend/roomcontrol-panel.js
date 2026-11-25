@@ -7980,6 +7980,9 @@ static{this.styles=[Me,o`
         gap: var(--vr-space-2);
       }
 
+      .alarm-opt-group { display: flex; flex-direction: column; border: 1px solid var(--primary-color); box-shadow: inset 0 0 0 1px var(--primary-color); border-radius: var(--vr-radius-sm); background: var(--vr-fill-primary); overflow: hidden; }
+      .alarm-opt-group > .alarm-opt { border: none; box-shadow: none; background: none; border-radius: 0; }
+      .alarm-opt-group > .alarm-dim-row { margin: 0 var(--vr-space-3) var(--vr-space-2); padding: var(--vr-space-2) 0 0; border: none; border-top: 1px solid var(--vr-border); border-radius: 0; }
       .alarm-dim-row {
         display: flex;
         align-items: center;
@@ -11149,22 +11152,22 @@ static{this.styles=[Me,o`
                   ${e.state===`armed_home`?F`
                     <div class="alarm-opt-hint">${V(`alarm.home_choose`,t)}</div>
                     <div class="alarm-options alarm-home-modes" role="radiogroup" aria-label=${o(e.state)}>
-                      ${u.map(e=>{let n=e.id===`no_motion`===l;return F`
+                      ${u.map(e=>{let n=e.id===`no_motion`===l,r=F`
                           <button class="alarm-opt ${n?`selected`:``}" role="radio"
                             aria-checked=${n?`true`:`false`}
                             @click=${()=>this._patch({armed_home_mode:e.id})}>
                             <span class="alarm-opt-title alarm-opt-head"><ha-icon icon=${e.icon}></ha-icon>${V(e.title,t)}</span>
                             <span class="alarm-opt-hint">${V(e.hint,t)}</span>
-                          </button>`})}
-                    </div>
-                    ${l?F`<div class="alarm-dim-row">
-                      <ha-icon icon="mdi:brightness-4"></ha-icon>
-                      <div class="alarm-dim-text">
-                        <div class="alarm-opt-title">${V(`alarm.home_dim`,t)}</div>
-                        <div class="alarm-opt-hint">${V(`alarm.home_dim_hint`,t)}</div>
-                      </div>
-                      <vr-toggle aria-label=${V(`alarm.home_dim`,t)} .checked=${ahd} @change=${e=>this._patch({armed_home_dim:e.detail.value})}></vr-toggle>
-                    </div>`:L}`:e.state===`armed_away`?F`
+                          </button>`;return e.id===`no_motion`&&n?F`<div class="alarm-opt-group">${r}
+                          <div class="alarm-dim-row">
+                            <ha-icon icon="mdi:brightness-4"></ha-icon>
+                            <div class="alarm-dim-text">
+                              <div class="alarm-opt-title">${V(`alarm.home_dim`,t)}</div>
+                              <div class="alarm-opt-hint">${V(`alarm.home_dim_hint`,t)}</div>
+                            </div>
+                            <vr-toggle aria-label=${V(`alarm.home_dim`,t)} .checked=${ahd} @change=${e=>this._patch({armed_home_dim:e.detail.value})}></vr-toggle>
+                          </div></div>`:r})}
+                    </div>`:e.state===`armed_away`?F`
                     <div class="alarm-opt-hint">${V(`alarm.away_choose`,t)}</div>
                     <div class="alarm-options alarm-home-modes" role="radiogroup" aria-label=${o(e.state)}>
                       ${d.map(e=>{let n=e.follow===c;return F`

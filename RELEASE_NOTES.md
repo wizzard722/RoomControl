@@ -11,6 +11,10 @@
 ### Room switches: no empty space under the temperature sensor
 - Fixed: a heater's temperature sensor picker (room → Settings → Switches) left a large empty space under it.
 
+### Alarm: Dim is part of "Not on motion"
+
+- In a room's alarm settings (Armed Home), the Dim switch now sits inside the "Not on motion" option card, below its explanation, instead of as a separate row under the options. It still only shows when "Not on motion" is chosen.
+
 ## 3.0.10
 
 ### Room switches: off after a time, a heater off at a temperature
