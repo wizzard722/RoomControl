@@ -1,5 +1,10 @@
 # Release notes
 
+## 3.0.2
+
+### Planning: "Plan on" moved to the general settings
+- The choice **Plan on** (price, CO₂, or price and CO₂) and the CO₂ sensor moved from Energy → Planning to a new card **Planning** in the general settings, right after Energy contract. Its summary shows the choice (e.g. "Plan on price and CO₂ · Electricity Maps"), it can be found by searching "co2", and it is hidden when energy management is off. The settings themselves are unchanged.
+
 ## 3.0.1
 
 ### Energy → Planning: one overview, devices you choose
