@@ -1,5 +1,12 @@
 # Release notes
 
+## 3.0.6
+
+### Planning: "On while in use" shows that it is still learning
+- A device **On while in use** without a suggestion yet shows "still learning (5 of 14 days)" in its status line, and on its card: "RoomControl is still learning when you use it (5 of 14 days). Then it suggests time slots."
+- No use seen at all yet: "Still learning, but no use seen yet. If this stays so: check the power meter of this plug (room → Settings → Power)."
+- Without a power meter: "Without a power meter RoomControl does not learn its use: choose the time slots yourself."
+
 ## 3.0.5
 
 ### Planning: learn first, then a suggestion you take over
