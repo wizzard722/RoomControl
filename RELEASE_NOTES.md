@@ -2,6 +2,12 @@
 
 ## 3.0.10
 
+### Rooms: a prediction model per room (shown on Analysis)
+- RoomControl now learns per room whether it will be in use soon. Every minute it takes a snapshot — the time slot (workday or weekend, hour), who of the household is home, how long ago the last motion was, motion in linked rooms, light bundles on, media playing and dark outside — and a quarter later it notes whether the room was really in use (motion or a lamp on). Two small, explainable models learn from this (logistic regression; light enough for a Raspberry Pi). Kept across restarts.
+- Room → **Analysis** shows a new card **Prediction · today**: in use now and probably for how much longer (from the remembered sessions), or the chance in the next quarter; a timeline of today with the predicted chance per quarter and what really happened (motion, light bundles on); the coming hours; **what weighs most now** (e.g. "Paul home +35 %", "Motion less than 5 min ago +28 %"); and **how certain** it is, per day.
+- Certainty: every prediction is checked afterwards; it is the balanced accuracy over the last 7 days (how often both "in use" and "not in use" were predicted right; 50 % = guessing). Under 14 days it says "still learning". A new room borrows the timeline of its linked rooms.
+- Shown only: nothing acts on the predictions yet.
+
 ### Planning: a coffee maker's short use is learned, and shown per time slot
 - Making a cup draws power for less than a minute: too short to count as a run, so a coffee maker stayed at "nothing seen yet". RoomControl now also counts per quarter of an hour the energy above standby; a quarter with at least 3 Wh above standby counts as used. **On while in use** learns from this (heat map, time slot suggestion), and **Add device** recognises such a device as On while in use.
 - Each time slot of **On while in use** shows what was learned in it, e.g. "learned: mostly 07:00–08:00" (or "seen so far: …", "nothing seen yet"), and below the time slots: "Seen outside your time slots: Mon–Fri 06:00–07:00; Sat–Sun 21:00–22:00."

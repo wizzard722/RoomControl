@@ -192,6 +192,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_call_service)
     websocket_api.async_register_command(hass, ws_get_debug)
     websocket_api.async_register_command(hass, ws_plan)
+    websocket_api.async_register_command(hass, ws_predict)
     websocket_api.async_register_command(hass, ws_battery)
     websocket_api.async_register_command(hass, ws_energy_overview)
     websocket_api.async_register_command(hass, ws_energy_bill)
@@ -386,6 +387,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await meter.async_load()
     meter.start()
     # The home battery (battery.py) is not started: removed from RoomControl (3.0.7).
+    from .predict import Predictor  # noqa: PLC0415
+
+    predictor = Predictor(hass)
+    _data(hass)["predict"] = predictor
+    await predictor.async_load()
+    predictor.start()
     tags = Tags(hass)
     _data(hass)["tags"] = tags
     tags.start()
@@ -470,6 +477,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             planner.shutdown()
         if (battery := _data(hass).pop("battery", None)) is not None:
             battery.shutdown()
+        if (predictor := _data(hass).pop("predict", None)) is not None:
+            predictor.shutdown()
         if (meter := _data(hass).pop("meter", None)) is not None:
             meter.shutdown()
         nspanel_stop(hass)
@@ -1056,6 +1065,19 @@ async def ws_battery_test(
         return
     await battery.async_test(msg["action"], msg["power"])
     connection.send_result(msg["id"], {"success": True})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/predict", vol.Required("area_id"): str})
+@callback
+def ws_predict(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]
+) -> None:
+    """The room's prediction model (predict.py), for its Analyse tab."""
+    predictor = _data(hass).get("predict")
+    if predictor is None:
+        connection.send_error(msg["id"], "not_ready", "RoomControl is not loaded")
+        return
+    connection.send_result(msg["id"], predictor.status(msg["area_id"]))
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/plan"})
