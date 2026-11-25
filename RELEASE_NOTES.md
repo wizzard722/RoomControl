@@ -1,5 +1,12 @@
 # Release notes
 
+## 3.0.9
+
+### Next 24 hours: the price as a line, cheap · normal · expensive
+- The **Next 24 hours** chart (Energy → Overview and Planning) shows the price as a **line** instead of grey bars. Where the price is **cheap** the line is green, **normal** grey, **expensive** red.
+- Cheap is at least 10 % below the average of the next 24 hours, expensive at least 10 % above it; two dashed lines show these limits with their price.
+- The expected sun stays as soft bars behind the line. A dot marks now, and above the chart: "Now € 0.44/kWh · expensive". Hovering an hour shows its price and level.
+
 ## 3.0.8
 
 ### Energy page: Rooms on its own tab
