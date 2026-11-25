@@ -34,7 +34,7 @@ Devices:
   during the user's time slots and off in between (no price planning: it
   uses power when it is used); RoomControl proposes the slots from its
   learned use (usage.py).
-- the home battery is shown (battery.py plans it; status() → "battery").
+- the home battery is no longer part of RoomControl (battery.py is not started).
 "auto" on: RoomControl switches the device; off: advice only (the best stretch
 is shown). Old settings without "auto": mode "cheap" or "sun" means on.
 The ready time is predicted (need.py): per weekday when the device is usually

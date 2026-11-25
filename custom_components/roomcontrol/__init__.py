@@ -385,12 +385,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _data(hass)["meter"] = meter
     await meter.async_load()
     meter.start()
-    from .battery import HomeBattery  # noqa: PLC0415
-
-    battery = HomeBattery(hass)
-    _data(hass)["battery"] = battery
-    await battery.async_load()
-    battery.start()
+    # The home battery (battery.py) is not started: removed from RoomControl (3.0.7).
     tags = Tags(hass)
     _data(hass)["tags"] = tags
     tags.start()

@@ -1,5 +1,13 @@
 # Release notes
 
+## 3.0.7
+
+### Energy page: only Overview and Planning
+- The **Saving**, **Home battery** and **Bill** tabs are gone from the Energy page; it has **Overview** and **Planning**. Tips you already applied from Saving stay applied.
+
+### Home battery removed
+- RoomControl no longer steers a home battery: its planning and simulation are not started, the battery row and its charge level are gone from Planning and the 24-hour chart, and **I have a home battery** (with its sensor and phase) is gone from the energy settings. A battery sensor set before is no longer used in the phase figures. A battery RoomControl was steering keeps the mode it was last set to.
+
 ## 3.0.6
 
 ### Planning: "On while in use" shows that it is still learning

@@ -3,7 +3,7 @@
 General setting "energy":
 {"phases": 1 | 3,
  "phase_sensors": {"L1": sensor, "L2": sensor, "L3": sensor},  # consumed power per phase (W or kW)
- "has_solar": bool, "has_battery": bool,
+ "has_solar": bool, "has_battery": bool (ignored since 3.0.7: no home battery),
  "produced_sensors": {"L1": sensor, ...},  # with solar or battery: power returned per phase
  "solar_sensors": {"L1": sensor, ...},  # optional: solar output per phase
  (older: "solar_sensor" + "solar_phase": "all" | "L1" | "L2" | "L3")
@@ -661,7 +661,7 @@ class Energy:
         sensors = cfg.get("phase_sensors") or {}
         produced = cfg.get("produced_sensors") or {}
         names = PHASES if three else ("L1",)
-        gen = bool(cfg.get("has_solar") or cfg.get("has_battery"))
+        gen = bool(cfg.get("has_solar"))  # a home battery is no longer part of RoomControl
 
         def share(sensor_key: str, phase_key: str, on: bool) -> dict[str, float]:
             """A solar / battery output spread over the phases it is on."""
@@ -678,7 +678,7 @@ class Energy:
             solar = {p: w for p, x in per_phase_solar.items() if (w := _watts(hass, x)) is not None}
         else:
             solar = share("solar_sensor", "solar_phase", bool(cfg.get("has_solar")))
-        battery = share("battery_sensor", "battery_phase", bool(cfg.get("has_battery")))
+        battery = share("battery_sensor", "battery_phase", False)
         detail: dict[str, Any] = {}
         phases: dict[str, float | None] = {}
         for p in names:
