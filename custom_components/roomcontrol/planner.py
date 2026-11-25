@@ -9,11 +9,13 @@ Inside the general setting "energy":
                                                      # CO2 Signal); hours ahead come from
                                                      # its "forecast" attribute, else from
                                                      # what it showed per hour of the day
- "plan": {"car" | "sw:<switch>": {"mode": "direct" | "cheap" | "sun",
+ "plan": {"car" | "sw:<switch>": {"auto": bool,     # RoomControl switches it (else advice)
+                               "mode": "cheap" | "sun",
                                "planned": true,      # a room switch chosen for planning
                                "kind": "warm" | "timer" | "charge" | "task",
                                "watts": n,           # its power (default: learned / the room's)
-                               "ready": "HH:MM",     # ready by (default 07:00)
+                               "ready": "HH:MM",     # old: ready by; now only the fallback
+                                                     # while the need is not learned yet
                                "hours": h,           # keeps warm: hours a day
                                "kwh": n}}            # the car: kWh a charge (default:
                                                      # from the battery level, else the
@@ -24,9 +26,15 @@ Devices:
 - the room switches the user chose (Energy → Planning → Add): "warm" keeps
   something warm (hours a day), "timer" is on for a while in the best
   stretch (the device starts when it gets power), "charge" needs kWh, and
-  "task" (dishwasher, washing machine) gets advice only: the best start.
+  "task" (dishwasher, washing machine) runs its usual program in the best
+  stretch (the plug stays off until then).
 - the home battery is shown (battery.py plans it; status() → "battery").
-Per day (the window: the 24 hours up to "ready") a device in "cheap" gets the
+"auto" on: RoomControl switches the device; off: advice only (the best stretch
+is shown). Old settings without "auto": mode "cheap" or "sun" means on.
+The ready time is predicted (need.py): per weekday when the device is usually
+first needed, learned from its use (not the stretches RoomControl ran), from
+switching it on by hand while planning held it off, and for the car from
+unplugging it. Per window (up to the next need) a device in "cheap" gets the
 best unbroken stretch of its hours; "sun" runs while the own surplus covers
 half its power, and with a ready time the best stretch fills in the hours
 the sun is not expected to give. RoomControl switches only when its wish
@@ -53,12 +61,11 @@ from .const import DOMAIN, SIGNAL_CONFIG_UPDATED
 _LOGGER = logging.getLogger(__name__)
 
 Q = timedelta(minutes=15)
-DEFAULT_READY = "07:00"
 DEFAULT_WARM_HOURS = 3.0
 SUN_ON = 0.5  # share of its power the surplus must cover to switch on
 SUN_OFF = 0.2
 MIN_SWITCH = timedelta(minutes=5)
-MODES = ("direct", "cheap", "sun")
+MODES = ("cheap", "sun")
 SWITCH_KINDS = ("warm", "timer", "charge", "task")
 PLAN_ON = ("price", "co2", "both")
 KEEP_RUNS = 400
@@ -72,18 +79,11 @@ def _num(value: Any, default: float) -> float:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else default
 
 
-def _ready(value: Any, now: datetime) -> datetime:
-    """The next moment at this local time (HH:MM), strictly after now."""
-    text = value if isinstance(value, str) and ":" in value else DEFAULT_READY
-    try:
-        h, m = (int(x) for x in text.split(":")[:2])
-    except ValueError:
-        h, m = 7, 0
-    local = dt_util.as_local(now)
-    at = local.replace(hour=h % 24, minute=m % 60, second=0, microsecond=0)
-    if at <= local:
-        at += timedelta(days=1)
-    return dt_util.as_utc(at)
+def auto_of(conf: dict[str, Any]) -> bool:
+    """Does RoomControl switch it? Old settings: mode cheap or sun."""
+    if isinstance(conf.get("auto"), bool):
+        return conf["auto"]
+    return conf.get("mode") in MODES
 
 
 class Planner:
@@ -102,6 +102,10 @@ class Planner:
         self._finishing: set[str] = set()  # the car: let it finish
         self._unsubs: list[CALLBACK_TYPE] = []
         self._planned_at: datetime | None = None
+        self.needs: dict[str, list[str]] = {}  # key → moments it was needed (switched on by hand, unplugged)
+        self.blocks: dict[str, list[list[str]]] = {}  # key → the stretches RoomControl ran
+        self._held: set[str] = set()  # switched on by hand while held off (noted once)
+        self._plugged: bool | None = None
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
@@ -109,10 +113,13 @@ class Planner:
         self.co2 = {str(k): float(v) for k, v in (data.get("co2") or {}).items() if isinstance(v, (int, float))}
         self.done = {k: v for k, v in (data.get("done") or {}).items() if isinstance(v, str)}
         self._running = {k: v for k, v in (data.get("running") or {}).items() if isinstance(v, dict)}
+        self.needs = {k: [x for x in v if isinstance(x, str)] for k, v in (data.get("needs") or {}).items() if isinstance(v, list)}
+        self.blocks = {k: [b for b in v if isinstance(b, list) and len(b) == 2] for k, v in (data.get("blocks") or {}).items()
+                       if isinstance(v, list)}
 
     def _save(self) -> None:
         self._store.async_delay_save(lambda: {"runs": self.runs[-KEEP_RUNS:], "co2": self.co2, "done": self.done,
-                                              "running": self._running}, 30)
+                                              "running": self._running, "needs": self.needs, "blocks": self.blocks}, 30)
 
     @callback
     def start(self) -> None:
@@ -180,7 +187,7 @@ class Planner:
                 kwh = kw * hours
             out.append({"key": sw["key"], "kind": kind, "name": sw["name"], "entity": sw["entity"],
                         "kw": round(kw, 3), "kwh": round(kwh, 2), "hours": round(hours, 2), "area": sw["area"],
-                        "meter": sw["meter"]})
+                        "meter": sw["meter"], "learn_key": sw["learn_key"]})
         return out
 
     def switches(self) -> list[dict[str, Any]]:
@@ -221,13 +228,43 @@ class Planner:
                 minutes = sorted(c["min"] for c in cycles[-20:])
                 kwhs = sorted(c["kwh"] for c in cycles[-20:])
                 st = hass.states.get(entity)
-                out.append({"key": key, "entity": entity, "area": area,
+                out.append({"key": key, "entity": entity, "area": area, "learn_key": f"{area}|switch:{entity}",
                             "name": (st.attributes.get("friendly_name") if st else None) or entity,
                             "kw": watts / 1000, "meter": bool(part.get("sensor")),
                             "task_hours": minutes[len(minutes) // 2] / 60 if minutes else None,
                             "task_kwh": kwhs[len(kwhs) // 2] if kwhs else None,
                             "planned": bool(conf.get("planned"))})
         return out
+
+    def need(self, key: str, kind: str, learn_key: str | None) -> dict[str, Any]:
+        """When it is needed (need.py), with the next moment."""
+        from .need import DEFAULT_Q, first_uses, next_need, predict  # noqa: PLC0415
+
+        offpay = self.hass.data.get(DOMAIN, {}).get("offpay")
+        learners = getattr(getattr(offpay, "learning", None), "learners", {}) or {}
+        learner = learners.get(learn_key) if learn_key else None
+        use = (learner.data.get("use") if learner else None) or {}
+        which = "big" if kind == "warm" else "all"
+        blocks = self.blocks.get(key, [])
+        firsts = first_uses(use, which, blocks, self.needs.get(key, []))
+        out = predict(firsts, use, which, blocks)
+        ready = self._conf(key).get("ready")
+        fallback = DEFAULT_Q
+        if isinstance(ready, str) and ":" in ready:
+            try:
+                h, m = (int(x) for x in ready.split(":")[:2])
+                fallback = (h % 24) * 4 + (m % 60) // 15
+            except ValueError:
+                pass
+        at, learned = next_need(out["week"], dt_util.utcnow(), fallback)
+        return {**out, "at": at, "at_learned": learned, "fallback_q": fallback, "meter": learner is not None}
+
+    def _note_need(self, key: str, now: datetime) -> None:
+        from .need import prune  # noqa: PLC0415
+
+        self.needs[key] = prune([*self.needs.get(key, []), now.isoformat()], now)[-200:]
+        self._planned_at = None
+        self._save()
 
     # ── prices, sun, CO2 per quarter ───────────────────────────────────────
 
@@ -343,20 +380,25 @@ class Planner:
 
         key = dev["key"]
         conf = self._conf(key)
-        mode = conf.get("mode") if conf.get("mode") in MODES else "direct"
-        controllable = bool(dev.get("entity")) and dev["kind"] != "task"
-        if dev["kind"] == "task" or not controllable:
-            mode_used = "advice"
-        else:
-            mode_used = mode
-        end = _ready(conf.get("ready") if dev["kind"] != "task" else None, now) if dev["kind"] != "task" else now + timedelta(hours=24)
-        plan: dict[str, Any] = {"key": key, "mode": mode, "mode_used": mode_used, "ready": conf.get("ready") or DEFAULT_READY,
-                                "window_end": end.isoformat(), "controllable": controllable}
+        mode = conf.get("mode") if conf.get("mode") in MODES else "cheap"
+        auto = auto_of(conf)
+        controllable = bool(dev.get("entity"))
+        mode_used = mode if controllable and auto else "advice"
+        need = self.need(key, dev["kind"], dev.get("learn_key"))
+        end = need["at"]
         running = self._running.get(key)
+        if running and (r_end := dt_util.parse_datetime(running.get("window_end") or "")) is not None and r_end > now:
+            end = r_end  # a stretch is running for this window: keep it
+        plan: dict[str, Any] = {"key": key, "mode": mode, "mode_used": mode_used, "auto": auto,
+                                "ready": dt_util.as_local(end).strftime("%H:%M"),
+                                "window_end": end.isoformat(), "controllable": controllable,
+                                "need": {"at": end.isoformat(), "learned": need["at_learned"], "days": need["days"],
+                                         "week": need["week"], "hours": need["hours"], "meter": need["meter"],
+                                         "any": need["learned"]}}
         if running and running.get("window_end") == end.isoformat():
             plan["block"] = {k: running[k] for k in ("start", "end", "avg") if k in running}
             return plan
-        if self.done.get(key) == end.isoformat() and mode_used in ("cheap", "sun"):
+        if self.done.get(key) == end.isoformat() and mode_used in ("cheap", "sun", "advice"):
             plan["done"] = True
             return plan
         rows = self.quarters(end)
@@ -366,7 +408,7 @@ class Planner:
             base_kw = _num(cfg.get("base_load_w"), DEFAULT_BASE_LOAD_W) / 1000
             sun_q = sum(1 for r in rows if r["sun_kw"] - base_kw >= SUN_ON * dev["kw"])
             plan["sun_hours"] = round(sun_q / 4, 2)
-            hours = max(0.0, hours - sun_q / 4) if conf.get("ready") else 0.0
+            hours = max(0.0, hours - sun_q / 4)
         if hours <= 0 or not rows:
             return plan
         scored = self._scored(rows, dev["kw"])
@@ -456,11 +498,19 @@ class Planner:
         if self._planned_at is None or now - self._planned_at >= timedelta(minutes=15):
             self.plan()
         energy = self.hass.data.get(DOMAIN, {}).get("energy")
-        car_charging = bool(((getattr(energy, "last_status", None) or {}).get("car") or {}).get("charging")) if energy else False
+        car = ((getattr(energy, "last_status", None) or {}).get("car") or {}) if energy else {}
+        car_charging = bool(car.get("charging"))
+        plugged = car.get("plugged")
+        if self._plugged is True and plugged is False and "car" in self.plans:
+            self._note_need("car", now)  # unplugged: the car was needed now
+        if isinstance(plugged, bool):
+            self._plugged = plugged
         for key, plan in list(self.plans.items()):
             dev = plan["device"]
             if not plan.get("controllable") or plan["mode_used"] not in ("cheap", "sun"):
                 self._running.pop(key, None)
+                if self._want.pop(key, None) is False and plan.get("controllable") and self._is_on(dev["entity"]) is False:
+                    self.hass.async_create_task(self._switch(dev, True, "block"))  # no longer automatic: back on
                 continue
             block = plan.get("block")
             in_block = False
@@ -469,6 +519,10 @@ class Planner:
                 in_block = b_start is not None and b_end is not None and b_start <= now < b_end
                 if in_block and key not in self._running:
                     self._running[key] = {**block, "window_end": plan["window_end"]}
+                    from .need import prune  # noqa: PLC0415
+
+                    self.blocks[key] = prune([*self.blocks.get(key, []), [block["start"], block["end"]]], now,
+                                             lambda b: b[1])[-200:]
                     self._save()
             if not in_block and key in self._running:
                 run = self._running.pop(key)
@@ -496,6 +550,16 @@ class Planner:
                     want = True
                 else:
                     self._finishing.discard(key)
+            if self._want.get(key) is False and not want and key != "car":
+                last = self._switched.get(key)
+                if self._is_on(dev["entity"]) and (last is None or now - last >= timedelta(minutes=2)):
+                    if key not in self._held:
+                        self._held.add(key)
+                        self._note_need(key, now)  # switched on by hand while held off: needed now
+                else:
+                    self._held.discard(key)
+            else:
+                self._held.discard(key)
             if self._want.get(key) == want and key in self._want:
                 continue  # nothing new: what is switched by hand stays
             first = key not in self._want
@@ -532,6 +596,32 @@ class Planner:
 
     # ── for the panel ──────────────────────────────────────────────────────
 
+    def _candidates(self) -> list[dict[str, Any]]:
+        """Room switches not planned yet: the recognised ones (with learned use) first,
+        with the kind guessed from learning and when they would be needed."""
+        from .need import fmt_q  # noqa: PLC0415
+
+        offpay = self.hass.data.get(DOMAIN, {}).get("offpay")
+        learners = getattr(getattr(offpay, "learning", None), "learners", {}) or {}
+        out = []
+        for sw in self.switches():
+            if sw["planned"]:
+                continue
+            learner = learners.get(sw["learn_key"])
+            guess = None
+            if learner is not None and learner.data.get("cycles") and offpay is not None:
+                guess = {"warm": "warm", "task": "task"}.get(offpay.kind(sw["learn_key"])[0], "timer")
+            kind = guess or "timer"
+            need = self.need(sw["key"], kind, sw["learn_key"])
+            out.append({"key": sw["key"], "entity": sw["entity"], "area": sw["area"], "name": sw["name"],
+                        "meter": sw["meter"], "watts": round(sw["kw"] * 1000), "kind": kind, "known": guess is not None,
+                        "runs": len(learner.data.get("cycles") or []) if learner else 0,
+                        "hours": round(sw["task_hours"], 2) if sw["task_hours"] else None,
+                        "need": {"week": [fmt_q(w["q"]) if w["learned"] else None for w in need["week"]],
+                                 "days": need["days"], "learned": need["learned"]}})
+        out.sort(key=lambda c: (not c["known"], -c["runs"], c["name"].lower()))
+        return out
+
     def status(self) -> dict[str, Any]:
         now = dt_util.utcnow()
         if self._planned_at is None or now - self._planned_at >= timedelta(minutes=5):
@@ -558,9 +648,7 @@ class Planner:
                 battery = {"soc": bst.get("soc"), "strategy": bst["strategy"], "plan": bst.get("plan") or [],
                            "blocks": [b for b in bst.get("blocks") or [] if b["action"] in ("charge", "discharge")]}
         return {
-            "candidates": [{"key": sw["key"], "entity": sw["entity"], "area": sw["area"], "name": sw["name"],
-                            "meter": sw["meter"], "watts": round(sw["kw"] * 1000)}
-                           for sw in self.switches() if not sw["planned"]],
+            "candidates": self._candidates(),
             "battery": battery,
             "plan_on": cfg.get("plan_on") if cfg.get("plan_on") in PLAN_ON else "price",
             "co2_sensor": cfg.get("co2_sensor") or None,

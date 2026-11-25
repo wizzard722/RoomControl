@@ -2,6 +2,14 @@
 
 ## 3.0.2
 
+### Planning: devices switch automatically, RoomControl predicts when they are needed
+- Every device in **To plan** has one switch, **Automatic**. On: RoomControl switches it on and off itself in the cheapest stretch, in time for when it is needed. Off: advice only (the best stretch is shown, nothing is switched; a device that was held off goes back on).
+- **Ready by is gone**: RoomControl predicts per weekday when a device is needed, from its learned use (for a device that keeps warm: real use, not keep-warm pulses), leaving out the stretches RoomControl ran itself. Switching a device on by hand while planning held it off teaches it that it was needed then; the car learns from being unplugged (plug sensor). Until enough is learned it is ready by 07:00 (or the old ready time) and shows "still learning".
+- The device card shows **Next time** (needed, on, price, cost), **When needed** per weekday (usually in use, the predicted moment), **Cheapest / Sun first**, and **Adjust yourself** (closed): kind, hours or kWh, power.
+- **Add device** is simpler: a search field, the switches recognised from their use first (with their kind and when they are needed), "recognised as …" with **change**, **Switch automatically** and Cheapest / Sun first. The Direct mode, the kind cards and the ready time are gone from it.
+- **Program** devices (dishwasher) can now also be switched: the plug stays off until the best start.
+- Old settings keep working: Cheapest or Sun only means Automatic on, Direct means advice.
+
 ### Planning: "Plan on" moved to the general settings
 - The choice **Plan on** (price, CO₂, or price and CO₂) and the CO₂ sensor moved from Energy → Planning to a new card **Planning** in the general settings, right after Energy contract. Its summary shows the choice (e.g. "Plan on price and CO₂ · Electricity Maps"), it can be found by searching "co2", and it is hidden when energy management is off. The settings themselves are unchanged.
 
