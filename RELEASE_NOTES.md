@@ -2,6 +2,12 @@
 
 ## 3.0.11
 
+### Prediction: the light bundles' time slots count
+- The prediction model now knows whether one of the room's light bundles has a time slot running (Normal / Leave / Vacation, dusk and dark as for the bundles) and learns how much that weighs.
+- A new model starts from those time slots: about 70 % in a time slot, 15 % outside, instead of a flat 50 %; the more it learns, the more it counts on itself (on its own after about 3 days). The card says "starts on your time slots".
+- The timeline shows the time slots as a strip under the bars.
+- The text under "How certain" no longer says the prediction isn't used: it is used (Settings → Prediction) once it is ready.
+
 ### Room switches: no empty space under the temperature sensor
 - Fixed: a heater's temperature sensor picker (room → Settings → Switches) left a large empty space under it.
 

@@ -12,6 +12,11 @@ explainable: each feature has a weight):
   and dark outside;
 - "day": the chance the room is in use in a quarter of the day, from the time
   slot, who is home and dark only (to draw today's timeline ahead).
+Both also know whether one of the room's light bundles has a time slot
+running ("slot_on"; Normal / Leave / Vacation, dusk and dark as for the
+bundles; ahead the sun phase is guessed from the hour). A new model starts
+from those time slots (PRIOR_IN_SLOT in one, PRIOR_OUT outside) and counts
+more on itself the more it learned, on its own after PRIOR_SAMPLES snapshots.
 
 A room with less than POOL_DAYS days learned borrows the day model of its
 linked rooms for the timeline.
@@ -61,6 +66,9 @@ LINKED_MIN = 5
 READY_DAYS = 14
 READY_CERTAINTY = 60
 SOON_FROM = 70  # % from which a quarter counts as "probably in use"
+PRIOR_SAMPLES = 3 * 1440  # snapshots (minutes) until the model counts on its own
+PRIOR_IN_SLOT = 0.7  # the start: a light bundle's time slot runs → this chance
+PRIOR_OUT = 0.15
 
 
 def _sig(z: float) -> float:
@@ -190,6 +198,37 @@ class Predictor:
         st = self.hass.states.get("sun.sun")
         return st is not None and st.state == "below_horizon"
 
+    def _bundle_slots(self, area: str) -> list[dict[str, Any]]:
+        from .slots import mode_slots  # noqa: PLC0415
+
+        slots = [x for g in self._room(area).get("groups", []) or [] if g.get("own_times")
+                 for x in g.get("slots") or [] if isinstance(x, dict)]
+        return mode_slots(slots, self.hass.data.get(DOMAIN, {}).get("vacation")) if slots else []
+
+    def slot_on(self, area: str, when: datetime, guess: bool = False) -> bool:
+        """Does one of the room's light bundle time slots run at `when`?"""
+        from .slots import slot_part  # noqa: PLC0415
+
+        slots = self._bundle_slots(area)
+        if not slots:
+            return False
+        local = dt_util.as_local(when)
+        if guess:
+            h = local.hour
+            phase, sun_down = ("dark", True) if h >= 18 or h < 7 else ("light", False)
+        else:
+            from .switch import _sun_phase  # noqa: PLC0415
+
+            phase, sun_down = _sun_phase(self.hass)
+        return any(slot_part(x, local, phase, sun_down) is not None for x in slots)
+
+    def _blend(self, room: RoomPredictor, p: float, in_slot: bool, has_slots: bool) -> float:
+        """While the model is new: lean on the light bundles' time slots."""
+        if not has_slots:
+            return p
+        w = min(1.0, room.now.n / PRIOR_SAMPLES)
+        return w * p + (1 - w) * (PRIOR_IN_SLOT if in_slot else PRIOR_OUT)
+
     @staticmethod
     def _slot(when: datetime) -> str:
         local = dt_util.as_local(when)
@@ -239,7 +278,11 @@ class Predictor:
             now_f.append("media")
         if dark:
             now_f.append("dark")
-        day_f = [self._slot(now), *home, *(["nobody"] if not home else []), *(["dark"] if dark else [])]
+        in_slot = self.slot_on(area, now)
+        if in_slot:
+            now_f.append("slot_on")
+        day_f = [self._slot(now), *home, *(["nobody"] if not home else []), *(["dark"] if dark else []),
+                 *(["slot_on"] if in_slot else [])]
         return now_f, day_f
 
     # ── learning ───────────────────────────────────────────────────────────
@@ -267,7 +310,8 @@ class Predictor:
                 room.used.popleft()
             self._note_today(room, local, state)
             now_f, day_f = self.features(area, now, state)
-            room.pending.append((now, now_f, day_f, room.now.p(now_f)))
+            room.pending.append((now, now_f, day_f, self._blend(room, room.now.p(now_f), "slot_on" in now_f,
+                                                                  bool(self._bundle_slots(area)))))
             # Snapshots whose quarter is over: was the room used in it?
             while room.pending and now - room.pending[0][0] >= timedelta(minutes=HORIZON):
                 t, nf, df, p = room.pending.popleft()
@@ -359,7 +403,8 @@ class Predictor:
         if not self.ready(area):
             return None
         home = [f"person:{p}" for p in self._persons(area)]
-        f = [self._slot(when), *home, *(["nobody"] if not home else []), *(["dark"] if self._dark() else [])]
+        f = [self._slot(when), *home, *(["nobody"] if not home else []), *(["dark"] if self._dark() else []),
+             *(["slot_on"] if self.slot_on(area, when) else [])]
         return self._day_model(area).p(f) >= 0.5
 
     def forget(self, area: str) -> None:
@@ -385,12 +430,14 @@ class Predictor:
         now = dt_util.utcnow().replace(second=0, microsecond=0)
         state = self._state(area, now) or {"motion": False, "lamps": False, "media": False, "since": 1e9}
         now_f, _day_f = self.features(area, now, state)
-        p_now = room.now.p(now_f)
+        has_slots = bool(self._bundle_slots(area))
+        p_now = self._blend(room, room.now.p(now_f), "slot_on" in now_f, has_slots)
         # What weighs most now: the chance without that feature, compared.
         why = []
+        p_model = room.now.p(now_f)
         for f in now_f:
             without = _sig(room.now.z(now_f) - room.now.w.get(f, 0.0))
-            effect = p_now - without
+            effect = p_model - without
             if abs(effect) >= 0.02:
                 why.append({**self._label(f), "effect": round(effect * 100)})
         why.sort(key=lambda w: -abs(w["effect"]))
@@ -399,28 +446,36 @@ class Predictor:
         home = self._home(area)
         start = dt_util.start_of_local_day()
         timeline = []
+        slots_tl = []
         for q in range(96):
             t = start + timedelta(minutes=15 * q)
             f = [self._slot(t), *home, *(["nobody"] if not home else [])]
+            in_slot = self.slot_on(area, t, guess=True)
+            slots_tl.append(in_slot)
+            if in_slot:
+                f.append("slot_on")
             sun = self.hass.states.get("sun.sun")
             if sun is not None:
                 rising = dt_util.parse_datetime(str(sun.attributes.get("next_rising") or ""))
                 setting = dt_util.parse_datetime(str(sun.attributes.get("next_setting") or ""))
                 if rising and setting and self._dark_at(t, rising, setting):
                     f.append("dark")
-            timeline.append(round(day.p(f) * 100))
+            timeline.append(round(self._blend(room, day.p(f), in_slot, has_slots) * 100))
         local = dt_util.as_local(now)
         ahead = []
         for h in range(1, 5):
             t = local.replace(minute=0) + timedelta(hours=h)
             qs = [timeline[(t.hour * 4 + i) % 96] for i in range(4)] if t.date() == local.date() else [
-                round(day.p([self._slot(t), *home, *(["nobody"] if not home else [])]) * 100)]
+                round(self._blend(room, day.p([self._slot(t), *home, *(["nobody"] if not home else []),
+                                               *(["slot_on"] if self.slot_on(area, t, guess=True) else [])]),
+                                  self.slot_on(area, t, guess=True), has_slots) * 100)]
             ahead.append({"at": dt_util.as_utc(t).isoformat(), "p": round(sum(qs) / len(qs))})
         certainty, per_day = room.certainty()
         light = self._light(area)
         remaining = self._remaining(area, light, now) if (state["lamps"] or state["motion"]) else None
         return {
-            "area_id": area, "days": room.days(), "samples": room.now.n, "p_now": round(p_now * 100), "in_use": bool(state["motion"] or state["lamps"]),
+            "area_id": area, "days": room.days(), "samples": room.now.n, "slots": slots_tl,
+            "prior": has_slots and room.now.n < PRIOR_SAMPLES, "p_now": round(p_now * 100), "in_use": bool(state["motion"] or state["lamps"]),
             "remaining_min": remaining, "why": why[:6], "timeline": timeline, "ahead": ahead,
             "today": {"motion": sorted(room.today.get("motion", [])) if room.today.get("day") == local.date().isoformat() else [],
                       "lamps": sorted(room.today.get("lamps", [])) if room.today.get("day") == local.date().isoformat() else []},
