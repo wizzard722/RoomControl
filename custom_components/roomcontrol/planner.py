@@ -399,6 +399,11 @@ class Planner:
 
     @callback
     def _tick(self, _now: Any = None) -> None:
+        from .const import energy_enabled  # noqa: PLC0415
+
+        if not energy_enabled(self.hass):
+            self._release()
+            return
         now = dt_util.utcnow()
         cfg = _cfg(self.hass)
         self._learn_co2(now, cfg)
@@ -454,6 +459,16 @@ class Planner:
             self._switched[key] = now
             self.hass.async_create_task(self._switch(dev, want, ("sun" if plan["mode_used"] == "sun" and not in_block else "block")
                                                      if want else "wait"))
+
+    def _release(self) -> None:
+        """Energy management switched off: what RoomControl held off goes back on."""
+        for key, want in list(self._want.items()):
+            plan = self.plans.get(key)
+            if not want and plan and plan.get("controllable") and self._is_on(plan["device"]["entity"]) is False:
+                self.hass.async_create_task(self._switch(plan["device"], True, "block"))
+        self._want.clear()
+        self._running.clear()
+        self._finishing.clear()
 
     def _learn_co2(self, now: datetime, cfg: dict[str, Any]) -> None:
         sensor = cfg.get("co2_sensor")

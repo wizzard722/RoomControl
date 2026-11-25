@@ -348,6 +348,10 @@ class DeviceLearning:
 
     @callback
     def _on_change(self, event: Event) -> None:
+        from .const import energy_enabled  # noqa: PLC0415
+
+        if not energy_enabled(self.hass):
+            return
         sensor = event.data["entity_id"]
         new = event.data.get("new_state")
         t = (new.last_updated if new is not None else dt_util.utcnow()).timestamp()
@@ -360,6 +364,10 @@ class DeviceLearning:
     @callback
     def _tick(self, _now: Any = None) -> None:
         """The value as it is now: ends runs while the sensor does not change."""
+        from .const import energy_enabled  # noqa: PLC0415
+
+        if not energy_enabled(self.hass):
+            return
         t = dt_util.utcnow().timestamp()
         for key, sensor in self.sensors.items():
             if key in self._booting or (learner := self.learners.get(key)) is None:

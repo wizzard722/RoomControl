@@ -1,6 +1,8 @@
 """Constants for RoomControl."""
 from __future__ import annotations
 
+from typing import Any
+
 DOMAIN = "roomcontrol"
 TITLE = "RoomControl"
 # Must match manifest.json "version" and the panel's EXPECTED_BACKEND_VERSION;
@@ -291,3 +293,10 @@ ALARM_RULE_STATES = (ALARM_DISARMED, ALARM_ARMED_HOME, ALARM_ARMED_AWAY)
 ALARM_ACTIONS = ("none", "off", "on", "motion")
 # States an alarm passes through between two settled states.
 ALARM_TRANSITIONAL = {"arming", "pending", "disarming", "unavailable", "unknown"}
+
+
+def energy_enabled(hass: Any) -> bool:
+    """General setting "energy_enabled" (default on): off hides the energy
+    management and the EV charger in the panel and pauses everything they do."""
+    settings = (getattr(hass, "data", {}) or {}).get(DOMAIN, {}).get("settings", {}) or {}
+    return settings.get("energy_enabled", True) is not False

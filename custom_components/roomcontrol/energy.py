@@ -467,6 +467,10 @@ class Energy:
 
     @callback
     def _tick(self, _now: Any = None) -> None:
+        from .const import energy_enabled  # noqa: PLC0415
+
+        if not energy_enabled(self.hass):
+            return  # energy management switched off: nothing is measured or kept
         ids = tuple(i for i in _cfg(self.hass).get("solar_forecast") or [] if isinstance(i, str))
         if ids != self._sun_for or (ids and (self._sun_at is None or dt_util.utcnow() - self._sun_at > timedelta(minutes=15))):
             self._sun_for, self._sun_at = ids, dt_util.utcnow()

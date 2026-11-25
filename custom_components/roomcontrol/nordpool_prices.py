@@ -111,6 +111,10 @@ class NordPoolPrices:
 
     @callback
     def _tick(self, *_: Any) -> None:
+        from .const import energy_enabled  # noqa: PLC0415
+
+        if not energy_enabled(self.hass):
+            return
         sensor = self._sensor()
         if sensor is None or self._busy:
             return

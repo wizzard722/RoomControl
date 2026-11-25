@@ -2,6 +2,9 @@
 
 ## 2.5.0
 
+### Energy management can be switched off
+- New switch **Use energy management** in the general settings → Display (default on). Off: the Energy and EV charger buttons and pages, the Energy, Energy contract and Device messages cards and the rooms' Power card are hidden, and everything behind them pauses: nothing is measured, learned, fetched, planned or switched for it. What RoomControl held off for the planning goes back on, a home battery goes back to its own mode, and a trial night gives its switch back. Settings and what was learned are kept; switching it on carries on where it was.
+
 ### Energy → Home battery (new)
 - New tab **Home battery** on the Energy page.
 - **What would a battery bring?** Worked out hour by hour on your own use and sun from RoomControl's phase sensors (hourly statistics), checked against Home Assistant's Energy dashboard (how well they match is shown; with no statistics on the phase sensors the dashboard is used), and your prices per hour. Compares 5 kWh · 2.4 kW, 10 kWh · 3.6 kW and a battery of your own, each in the maker's own-use mode and with RoomControl's plan, over 30, 60 or 90 days and per year; with a purchase price, the payback time. Uses your battery details (efficiency, reserve, wear).

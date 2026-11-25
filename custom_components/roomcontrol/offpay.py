@@ -133,6 +133,10 @@ class OffPay:
 
     @callback
     def _on_switch(self, event: Event) -> None:
+        from .const import energy_enabled  # noqa: PLC0415
+
+        if not energy_enabled(self.hass):
+            return
         old, new = event.data.get("old_state"), event.data.get("new_state")
         if old is None or new is None or old.state == new.state:
             return
@@ -209,6 +213,17 @@ class OffPay:
 
     @callback
     def _tick(self, _now: Any = None) -> None:
+        from .const import energy_enabled  # noqa: PLC0415
+        from .room_switches import async_turn  # noqa: PLC0415
+
+        if not energy_enabled(self.hass):
+            # Switched off: a trial night that holds a switch off gives it back.
+            for key, trial in list(self.trials.items()):
+                if trial.get("off_now") and (entity := self.switches().get(key)):
+                    trial["off_now"] = False
+                    self.hass.async_create_task(async_turn(self.hass, [entity], True))
+                    self._save()
+            return
         now = dt_util.utcnow()
         self._record_prices(now)
         self._run_trials(now)

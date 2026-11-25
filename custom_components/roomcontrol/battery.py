@@ -505,6 +505,14 @@ class HomeBattery:
 
     @callback
     def _tick(self, _now: Any = None) -> None:
+        from .const import energy_enabled  # noqa: PLC0415
+
+        if not energy_enabled(self.hass):
+            if self._sent is not None and self.configured():
+                self._sent = None
+                self.hass.async_create_task(self._command("self", 0))  # back to its own mode
+            self._last = None
+            return
         now = dt_util.utcnow()
         self._measure(now)
         cfg = _cfg(self.hass)

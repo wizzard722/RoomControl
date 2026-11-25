@@ -154,6 +154,10 @@ class DeviceWatch:
     @callback
     def run_done(self, key: str, cycle: dict[str, Any]) -> None:
         """A run is over: "done" message when someone is home."""
+        from .const import energy_enabled  # noqa: PLC0415
+
+        if not energy_enabled(self.hass):
+            return
         if not self.watch(key).get("done") or not anyone_home(self.hass):
             return
         lang = _lang(self.hass)
@@ -171,6 +175,10 @@ class DeviceWatch:
 
     @callback
     def _tick(self, _now: Any = None) -> None:
+        from .const import energy_enabled  # noqa: PLC0415
+
+        if not energy_enabled(self.hass):
+            return
         now = dt_util.utcnow()
         lang = _lang(self.hass)
         for key, sensor in list(self.learning.sensors.items()):
