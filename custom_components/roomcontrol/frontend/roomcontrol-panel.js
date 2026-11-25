@@ -2079,7 +2079,7 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
       }
 
       .ev-col.best .ev-colbar {
-        background: var(--success-color, #2e7d32);
+        background: linear-gradient(to top, var(--vr-on, #e8a33d) var(--sun, 0%), var(--success-color, #2e7d32) var(--sun, 0%));
       }
 
       .ev-col.now .ev-colbar {
