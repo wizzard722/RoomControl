@@ -73,6 +73,8 @@ look as above), then build the chosen one in the panel.
   and Python scripts on a bare `HomeAssistant` instance for backend logic.
 - This session type can push the work branch but not tags: GitHub
   (pre-)releases are created by the user in the GitHub UI.
+- With every release give a **release title** too ("vX.Y.Z – short name",
+  in English) and put it in the release link (`title=` in the URL).
 - Release notes are **always in English** (`RELEASE_NOTES.md`, newest
   version on top, and the text given for a GitHub release), even though
   the conversation is in Dutch. Every fix or feature that goes into a
