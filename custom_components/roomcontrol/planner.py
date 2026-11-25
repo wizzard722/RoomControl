@@ -123,6 +123,8 @@ class Planner:
         self.blocks: dict[str, list[list[str]]] = {}  # key → the stretches RoomControl ran
         self._held: set[str] = set()  # switched on by hand while held off (noted once)
         self._plugged: bool | None = None
+        self.sun_run: dict[str, dict[str, Any]] = {}  # key → {"window": iso, "min": minutes on the sun}
+        self._was_on: dict[str, bool] = {}
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
@@ -133,10 +135,12 @@ class Planner:
         self.needs = {k: [x for x in v if isinstance(x, str)] for k, v in (data.get("needs") or {}).items() if isinstance(v, list)}
         self.blocks = {k: [b for b in v if isinstance(b, list) and len(b) == 2] for k, v in (data.get("blocks") or {}).items()
                        if isinstance(v, list)}
+        self.sun_run = {k: v for k, v in (data.get("sun_run") or {}).items() if isinstance(v, dict)}
 
     def _save(self) -> None:
         self._store.async_delay_save(lambda: {"runs": self.runs[-KEEP_RUNS:], "co2": self.co2, "done": self.done,
-                                              "running": self._running, "needs": self.needs, "blocks": self.blocks}, 30)
+                                              "running": self._running, "needs": self.needs, "blocks": self.blocks,
+                                              "sun_run": self.sun_run}, 30)
 
     @callback
     def start(self) -> None:
@@ -267,7 +271,7 @@ class Planner:
         blocks = self.blocks.get(key, [])
         firsts = first_uses(use, which, blocks, self.needs.get(key, []))
         out = predict(firsts, use, which, blocks)
-        ready = self._conf(key).get("ready")
+        ready = self._conf(key).get("ready") or (_cfg(self.hass).get("ready_by") if key == "car" else None)
         fallback = DEFAULT_Q
         if isinstance(ready, str) and ":" in ready:
             try:
@@ -277,6 +281,11 @@ class Planner:
                 pass
         at, learned = next_need(out["week"], dt_util.utcnow(), fallback)
         return {**out, "at": at, "at_learned": learned, "fallback_q": fallback, "meter": learner is not None}
+
+    def _sun_done(self, key: str, window_end: datetime) -> float:
+        """Hours it ran on the sun for this window (since the previous need): a boiler keeps that heat."""
+        got = self.sun_run.get(key) or {}
+        return got.get("min", 0) / 60 if got.get("window") == window_end.isoformat() else 0.0
 
     def _note_need(self, key: str, now: datetime) -> None:
         from .need import prune  # noqa: PLC0415
@@ -407,6 +416,21 @@ class Planner:
         mode_used = mode if controllable and auto else "advice"
         need = self.need(key, dev["kind"], dev.get("learn_key"))
         end = need["at"]
+        suggest = None
+        if dev["kind"] != "car":
+            from .need import SUGGEST_DAYS, accepted_week, next_set, suggestion  # noqa: PLC0415
+
+            taken = accepted_week(conf.get("need_ok"))
+            suggest = suggestion(need, conf.get("need_ok"))
+            if taken is None:
+                # Not taken over yet: RoomControl learns and leaves the device alone.
+                return {"key": key, "mode": mode, "mode_used": "learning", "auto": auto, "controllable": controllable,
+                        "window_end": now.isoformat(), "suggest": suggest, "need_ok": None,
+                        "need": {"at": None, "learned": False, "days": need["days"], "week": need["week"],
+                                 "hours": need["hours"], "meter": need["meter"], "any": need["learned"],
+                                 "min_days": SUGGEST_DAYS}}
+            end = next_set(taken, now) or end
+            need = {**need, "at_learned": True}
         running = self._running.get(key)
         if running and (r_end := dt_util.parse_datetime(running.get("window_end") or "")) is not None and r_end > now:
             end = r_end  # a stretch is running for this window: keep it
@@ -415,7 +439,8 @@ class Planner:
                                 "window_end": end.isoformat(), "controllable": controllable,
                                 "need": {"at": end.isoformat(), "learned": need["at_learned"], "days": need["days"],
                                          "week": need["week"], "hours": need["hours"], "meter": need["meter"],
-                                         "any": need["learned"]}}
+                                         "any": need["learned"]},
+                                "suggest": suggest, "need_ok": conf.get("need_ok") if dev["kind"] != "car" else None}
         if running and running.get("window_end") == end.isoformat():
             plan["block"] = {k: running[k] for k in ("start", "end", "avg") if k in running}
             return plan
@@ -429,7 +454,9 @@ class Planner:
             base_kw = _num(cfg.get("base_load_w"), DEFAULT_BASE_LOAD_W) / 1000
             sun_q = sum(1 for r in rows if r["sun_kw"] - base_kw >= SUN_ON * dev["kw"])
             plan["sun_hours"] = round(sun_q / 4, 2)
-            hours = max(0.0, hours - sun_q / 4)
+            done_h = self._sun_done(key, end) if dev["kind"] == "warm" else 0.0
+            plan["sun_done"] = round(done_h, 2)
+            hours = max(0.0, hours - sun_q / 4 - done_h)
         if hours <= 0 or not rows:
             return plan
         scored = self._scored(rows, dev["kw"])
@@ -602,6 +629,12 @@ class Planner:
             self._plugged = plugged
         for key, plan in list(self.plans.items()):
             dev = plan["device"]
+            if plan["mode_used"] == "learning" and dev.get("entity"):
+                on = self._is_on(dev["entity"])
+                if on and self._was_on.get(key) is False and not dev.get("meter"):
+                    self._note_need(key, now)  # switched on (no meter to learn from): needed now
+                if on is not None:
+                    self._was_on[key] = on
             if not plan.get("controllable") or plan["mode_used"] not in ("cheap", "sun", "use"):
                 self._running.pop(key, None)
                 if self._want.pop(key, None) is False and plan.get("controllable") and self._is_on(dev["entity"]) is False:
@@ -644,6 +677,15 @@ class Planner:
                     last = self._switched.get(key)
                     if want != was and last is not None and now - last < MIN_SWITCH:
                         want = was
+            if plan["mode_used"] == "sun" and want and not in_block and self._is_on(dev["entity"]):
+                run = self.sun_run.get(key) or {}
+                if run.get("window") != plan["window_end"]:
+                    run = {"window": plan["window_end"], "min": 0}
+                run["min"] = run.get("min", 0) + 1  # one tick = one minute on the sun
+                self.sun_run[key] = run
+                if run["min"] % 15 == 0:
+                    self._save()
+                    self._planned_at = None
             if key in self._finishing:
                 if car_charging:
                     want = True

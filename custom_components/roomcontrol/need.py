@@ -9,7 +9,13 @@ hand while planning held it off (and, for the car, when it was unplugged).
 Per weekday the need is the earlier quarter of those moments (the lower
 quartile, so it is ready on most days): from MIN_SAME days of that weekday,
 else from the weekdays or the weekend together, else from all days (MIN_POOL
-moments). Too few moments: the default (07:00) and "learning".
+moments).
+
+RoomControl does not plan on a prediction by itself: while it learns (fewer
+than SUGGEST_DAYS days, or no weekday learned) the device is left alone, and
+then the prediction is a suggestion the user takes over ("need_ok": the ready
+time per weekday, Mon–Sun, "HH:MM" or None for a day it is not needed). A
+new suggestion is shown when the prediction moves CHANGE_MIN or more.
 """
 from __future__ import annotations
 
@@ -23,6 +29,8 @@ MIN_SAME = 2
 MIN_POOL = 3
 KEEP_DAYS = 42
 DEFAULT_Q = 28  # 07:00
+SUGGEST_DAYS = 14
+CHANGE_MIN = 30
 
 
 def _local(iso: str) -> datetime | None:
@@ -132,6 +140,55 @@ def next_need(week: list[dict[str, Any]], now: datetime, fallback_q: int = DEFAU
         if at > local:
             return dt_util.as_utc(at), bool(w.get("learned"))
     return now + timedelta(days=1), False
+
+
+def parse_hm(text: Any) -> int | None:
+    """"HH:MM" → quarter of the day (rounded down), None when not a time."""
+    if not isinstance(text, str) or ":" not in text:
+        return None
+    try:
+        h, m = (int(x) for x in text.split(":")[:2])
+    except ValueError:
+        return None
+    return (h % 24) * 4 + (m % 60) // 15 if 0 <= h < 24 and 0 <= m < 60 else None
+
+
+def accepted_week(need_ok: Any) -> list[dict[str, Any]] | None:
+    """The ready times the user took over, as a week (None: none taken over)."""
+    if not isinstance(need_ok, list) or len(need_ok) != 7:
+        return None
+    week = [{"q": parse_hm(t), "learned": True} for t in need_ok]
+    return week if any(w["q"] is not None for w in week) else None
+
+
+def next_set(week: list[dict[str, Any]], now: datetime) -> datetime | None:
+    """The next moment (UTC) of a taken-over week, skipping days without a time."""
+    local = dt_util.as_local(now)
+    for i in range(8):
+        day = (local + timedelta(days=i)).date()
+        q = week[day.weekday()]["q"]
+        if q is None:
+            continue
+        at = dt_util.start_of_local_day(day) + timedelta(minutes=15 * q)
+        if at > local:
+            return dt_util.as_utc(at)
+    return None
+
+
+def suggestion(pred: dict[str, Any], need_ok: Any) -> dict[str, Any] | None:
+    """What to suggest: the learned times per weekday, once there is enough;
+    with times taken over, only when one moved CHANGE_MIN or more (or a day changed)."""
+    if pred["days"] < SUGGEST_DAYS or not pred["learned"]:
+        return None
+    week = [fmt_q(w["q"]) if w["learned"] else None for w in pred["week"]]
+    current = accepted_week(need_ok)
+    if current is None:
+        return {"week": week, "changed": False}
+    for new, old in zip(week, current, strict=True):
+        a, b = parse_hm(new), old["q"]
+        if (a is None) != (b is None) or (a is not None and abs(a - b) * 15 >= CHANGE_MIN):
+            return {"week": week, "changed": True}
+    return None
 
 
 def fmt_q(q: int | None) -> str | None:

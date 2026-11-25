@@ -1,5 +1,17 @@
 # Release notes
 
+## 3.0.5
+
+### Planning: learn first, then a suggestion you take over
+- A planned device is no longer planned on a default ready time (07:00). While RoomControl learns when it is needed, it leaves the device alone (no night stretch, not held off) and shows "Still learning · 5 of 14 days"; a device held off before goes back on.
+- After 14 days with enough use the card shows a **suggestion**, e.g. "needed Mon–Thu 06:45, Fri 07:15, Sat–Sun 08:30. Learned from 21 days", with **Take over** and **Adjust**. Only then does RoomControl plan and switch it.
+- **Times**: the taken-over ready time per weekday, each editable; empty means not needed that day. When the learned use moves 30 minutes or more, a **new suggestion** appears instead of the times changing by themselves.
+- Adding a device whose use is already learned (14 days or more) takes the learned times over straight away.
+- Devices without a meter learn from being switched on by hand. The car keeps the ready time of the EV charger settings until it has learned from being unplugged.
+
+### Planning: sun heat counts for the next time
+- **Keeps warm** with **Sun first**: the hours a boiler already ran on the sun since the last time it was needed count for the next time, so after a sunny day there is no night stretch from the grid ("Already ran 1.5 h on the sun: that heat counts for this time"). After a grey day the cheapest stretch fills in the rest.
+
 ## 3.0.4
 
 ### Room switches: back on in standby
