@@ -33,7 +33,9 @@ async def main():
               "rooms": {"woonkamer": {"phase": "L1", "watts": 54, "parts": [
                   {"key": "bundle:g1", "kind": "bundle", "name": "Leeslamp", "watts": 40},
                   {"key": "switch:switch.tv", "kind": "switch", "name": "Tv", "watts": 14}]}}, "car": {}}
-    t = dt_util.utcnow().replace(microsecond=0)
+    # A fixed noon, so the two hours never cross midnight.
+    t = dt_util.as_utc(dt_util.as_local(dt_util.utcnow()).replace(hour=12, minute=0, second=0, microsecond=0))
+    hass.data[DOMAIN]["entities"]["woonkamer"]._last_motion_at = t - timedelta(hours=2)
     m.add(status, t)
     for i in range(1, 241):  # 2 hours
         m.add(status, t + timedelta(seconds=30 * i))

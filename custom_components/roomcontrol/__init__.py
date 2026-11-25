@@ -195,6 +195,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_predict)
     websocket_api.async_register_command(hass, ws_battery)
     websocket_api.async_register_command(hass, ws_energy_overview)
+    websocket_api.async_register_command(hass, ws_energy_overview2)
     websocket_api.async_register_command(hass, ws_energy_bill)
     websocket_api.async_register_command(hass, ws_energy_coach)
     websocket_api.async_register_command(hass, ws_battery_sim)
@@ -966,6 +967,22 @@ def ws_energy_overview(
     """Energy → Overzicht: the house now and today, rooms, phases, base load."""
     meter = _data(hass).get("meter")
     connection.send_result(msg["id"], meter.overview() if meter is not None else {})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/energy_overview2"})
+@websocket_api.async_response
+async def ws_energy_overview2(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Energy → Overzicht 2: the overview plus today per hour, yesterday, parts and tips."""
+    meter = _data(hass).get("meter")
+    if meter is None:
+        connection.send_result(msg["id"], {})
+        return
+    await meter.async_fill_hours()
+    connection.send_result(msg["id"], {**meter.overview(), **meter.overview2()})
 
 
 @websocket_api.websocket_command(

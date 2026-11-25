@@ -32,6 +32,14 @@ Energy → Besparen (step 7c): per day also
   room is under manual control): kWh, € and how often ("n");
 - "away": metered switches and meters using power while nobody is home:
   kWh, € and hours.
+Energy → Overzicht 2: per day also
+- "hours": per local hour (24 values each) the house, taken from and
+  returned to the grid and the solar panels, in kWh; hours from before
+  RoomControl counted are filled in from Home Assistant's Energy dashboard
+  ("filled": those hours);
+- "parts": per room part ("<area>|<key>": a light bundle, switch or meter)
+  kWh, minutes on (>= 1 W) and how often it went on ("n").
+Both are kept PARTS_DAYS days.
 coach() turns a week of that into tips (with what they bring per week and,
 where RoomControl can, a setting to apply), what went well and the cost per
 room; dismissed tips are kept.
@@ -55,6 +63,8 @@ KEEP_DAYS = 400
 NIGHT = (3, 5)  # local hours of the base load window
 VOLT = 230.0
 DEFAULT_FUSE = 25.0
+PARTS_DAYS = 8  # days that keep "hours" and "parts"
+HOUR_KEYS = ("house", "grid_in", "grid_out", "solar")
 
 
 def _cfg(hass: HomeAssistant) -> dict[str, Any]:
@@ -78,6 +88,8 @@ class EnergyMeter:
         self._unsub: CALLBACK_TYPE | None = None
         self.dismissed: list[str] = []
         self._idle_flag: dict[str, bool] = {}
+        self._part_on: dict[str, bool] = {}
+        self._filled_day: str | None = None
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
@@ -160,6 +172,8 @@ class EnergyMeter:
         if solar:
             _add(day, "solar", sum(solar) / 1000 * hours)
         self._waste(day, rooms, hours, buy, now)
+        self._per_hour(day, local.hour, hours, house_w, detail, solar)
+        self._per_part(day, rooms, hours)
         if NIGHT[0] <= local.hour < NIGHT[1] and house_w is not None:
             night = self.nights.setdefault(local.strftime("%Y-%m-%d"), {"n": 0, "house": 0.0, "parts": {}, "names": {}})
             n = night["n"]
@@ -178,6 +192,11 @@ class EnergyMeter:
             self.days = {k: v for k, v in self.days.items() if k >= cutoff}
             ncut = (local - timedelta(days=14)).strftime("%Y-%m-%d")
             self.nights = {k: v for k, v in self.nights.items() if k >= ncut}
+            pcut = (local - timedelta(days=PARTS_DAYS)).strftime("%Y-%m-%d")
+            for k, v in self.days.items():
+                if k < pcut:
+                    for x in ("hours", "parts", "filled"):
+                        v.pop(x, None)
         self._save()
         async_dispatcher_send(self.hass, SIGNAL_METER)
 
@@ -220,6 +239,164 @@ class EnergyMeter:
                     rec["h"] = round(rec["h"] + hours, 4)
                     rec["w"] = round(rec["kwh"] * 1000 / rec["h"], 1) if rec["h"] else w
                     names[key] = p.get("name") or p["key"]
+
+    @staticmethod
+    def _per_hour(day: dict[str, Any], hour: int, hours: float, house_w: float | None,
+                  detail: dict[str, Any], solar: list[Any]) -> None:
+        """kWh of this tick into the day's hour."""
+        hrs = day.setdefault("hours", {})
+        for k in HOUR_KEYS:
+            if not isinstance(hrs.get(k), list) or len(hrs[k]) != 24:
+                hrs[k] = [0.0] * 24
+        if house_w is not None:
+            hrs["house"][hour] = round(hrs["house"][hour] + house_w / 1000 * hours, 5)
+        used = [d.get("consumed") for d in detail.values()]
+        if used and all(u is not None for u in used):
+            hrs["grid_in"][hour] = round(hrs["grid_in"][hour] + sum(used) / 1000 * hours, 5)
+            hrs["grid_out"][hour] = round(hrs["grid_out"][hour] + sum(d.get("produced") or 0 for d in detail.values()) / 1000 * hours, 5)
+        if solar:
+            hrs["solar"][hour] = round(hrs["solar"][hour] + sum(solar) / 1000 * hours, 5)
+
+    def _per_part(self, day: dict[str, Any], rooms: dict[str, Any], hours: float) -> None:
+        """kWh, minutes on and switch-ons of each room part."""
+        parts = day.setdefault("parts", {})
+        names = day.setdefault("names", {})
+        for area, r in rooms.items():
+            for p in r.get("parts") or []:
+                if p.get("kind") not in ("bundle", "switch", "meter") or p.get("watts") is None:
+                    continue
+                key = f"{area}|{p['key']}"
+                w = p["watts"] or 0.0
+                on = w >= 1
+                rec = parts.setdefault(key, {"kwh": 0.0, "min": 0.0, "n": 0})
+                rec["kwh"] = round(rec["kwh"] + w / 1000 * hours, 5)
+                if on:
+                    rec["min"] = round(rec["min"] + hours * 60, 3)
+                    if self._part_on.get(key) is False:
+                        rec["n"] += 1
+                    elif key not in self._part_on and rec["n"] == 0:
+                        rec["n"] = 1
+                self._part_on[key] = on
+                names[key] = p.get("name") or p["key"]
+
+    async def async_fill_hours(self) -> None:
+        """Today's hours from before RoomControl counted, from the Energy
+        dashboard's hourly statistics (grid in and out, solar)."""
+        now = dt_util.as_local(dt_util.utcnow())
+        key = now.strftime("%Y-%m-%d")
+        if self._filled_day == key:
+            return
+        self._filled_day = key
+        try:
+            from homeassistant.components.energy.data import async_get_manager  # noqa: PLC0415
+
+            manager = await async_get_manager(self.hass)
+            sources = (manager.data or {}).get("energy_sources") or []
+        except Exception:  # noqa: BLE001 - no Energy dashboard
+            return
+        ids: dict[str, set[str]] = {"grid_in": set(), "grid_out": set(), "solar": set()}
+        for s in sources:
+            if s.get("type") == "grid":
+                for f in s.get("flow_from") or []:
+                    if f.get("stat_energy_from"):
+                        ids["grid_in"].add(f["stat_energy_from"])
+                for f in s.get("flow_to") or []:
+                    if f.get("stat_energy_to"):
+                        ids["grid_out"].add(f["stat_energy_to"])
+                if s.get("stat_energy_from"):
+                    ids["grid_in"].add(s["stat_energy_from"])
+                if s.get("stat_energy_to"):
+                    ids["grid_out"].add(s["stat_energy_to"])
+            elif s.get("type") == "solar" and s.get("stat_energy_from"):
+                ids["solar"].add(s["stat_energy_from"])
+        every = set().union(*ids.values())
+        if not ids["grid_in"]:
+            return
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        try:
+            from homeassistant.components.recorder import get_instance  # noqa: PLC0415
+            from homeassistant.components.recorder.statistics import statistics_during_period  # noqa: PLC0415
+
+            stats = await get_instance(self.hass).async_add_executor_job(
+                statistics_during_period, self.hass, dt_util.as_utc(start), dt_util.as_utc(now), every, "hour", None, {"change"})
+        except Exception:  # noqa: BLE001
+            return
+        per: dict[str, list[float]] = {k: [0.0] * 24 for k in ids}
+        seen: set[int] = set()
+        for sid, rows in stats.items():
+            kinds = [k for k, v in ids.items() if sid in v]
+            for r in rows:
+                if r.get("change") is None:
+                    continue
+                t = dt_util.utc_from_timestamp(r["start"]) if isinstance(r["start"], (int, float)) else r["start"]
+                lt = dt_util.as_local(t)
+                if lt.date() != start.date():
+                    continue
+                seen.add(lt.hour)
+                for k in kinds:
+                    per[k][lt.hour] += max(0.0, r["change"])
+        self.fill_hours(key, per, seen, now.hour)
+
+    def fill_hours(self, key: str, per: dict[str, list[float]], seen: set[int], hour_now: int) -> None:
+        """Put statistics into the past hours RoomControl did not count."""
+        day = self.days.setdefault(key, {"rooms": {}, "rooms_cost": {}})
+        hrs = day.setdefault("hours", {})
+        for k in HOUR_KEYS:
+            if not isinstance(hrs.get(k), list) or len(hrs[k]) != 24:
+                hrs[k] = [0.0] * 24
+        filled = set(day.get("filled") or [])
+        for h in sorted(seen):
+            if h >= hour_now or hrs["house"][h] > 0.001 or hrs["grid_in"][h] > 0.001:
+                continue
+            gi, go, so = per.get("grid_in", [0.0] * 24)[h], per.get("grid_out", [0.0] * 24)[h], per.get("solar", [0.0] * 24)[h]
+            hrs["grid_in"][h], hrs["grid_out"][h], hrs["solar"][h] = round(gi, 5), round(go, 5), round(so, 5)
+            hrs["house"][h] = round(max(0.0, gi + so - go), 5)
+            filled.add(h)
+        if filled:
+            day["filled"] = sorted(filled)
+            self._save()
+
+    def overview2(self) -> dict[str, Any]:
+        """Energy → Overzicht 2: the hours of today, yesterday, the parts and the tips."""
+        now = dt_util.as_local(dt_util.utcnow())
+        key = now.strftime("%Y-%m-%d")
+        yest = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        today = self.days.get(key) or {}
+        ydays = self.days.get(yest) or {}
+        hrs = today.get("hours") or {}
+        hours = {k: [round(v, 3) for v in (hrs.get(k) or [0.0] * 24)] for k in HOUR_KEYS}
+        names = today.get("names") or {}
+        parts = []
+        for pk, rec in (today.get("parts") or {}).items():
+            if rec.get("kwh", 0.0) < 0.005 and rec.get("min", 0.0) < 1:
+                continue
+            area, part = pk.split("|", 1)
+            parts.append({"area": area, "key": part, "kind": part.split(":", 1)[0], "name": names.get(pk, part),
+                          "kwh": round(rec.get("kwh", 0.0), 3), "min": round(rec.get("min", 0.0)), "n": int(rec.get("n", 0))})
+        parts.sort(key=lambda x: -x["kwh"])
+        y_upto = None
+        yh = (ydays.get("hours") or {}).get("house")
+        if isinstance(yh, list) and len(yh) == 24:
+            y_upto = round(sum(yh[: now.hour]) + yh[now.hour] * now.minute / 60, 2)
+        try:
+            tips = self.coach().get("tips") or []
+        except Exception:  # noqa: BLE001 - tips are a bonus
+            tips = []
+        energy = self.hass.data.get(DOMAIN, {}).get("energy")
+        status = (getattr(energy, "last_status", None) or (energy.status() if energy else {})) or {}
+        live = []
+        for area, r in (status.get("rooms") or {}).items():
+            for p in r.get("parts") or []:
+                if p.get("kind") in ("bundle", "switch", "meter") and (p.get("watts") or 0) >= 1:
+                    live.append({"area": area, "key": p["key"], "kind": p["kind"], "name": p.get("name") or p["key"],
+                                 "watts": round(p["watts"], 1)})
+        car = status.get("car") or {}
+        if car.get("charging") and car.get("kw"):
+            live.append({"area": None, "key": "car", "kind": "car", "name": car.get("name") or None, "watts": round(car["kw"] * 1000)})
+        live.sort(key=lambda x: -x["watts"])
+        return {"hour": now.hour, "minute": now.minute, "hours": hours, "filled": today.get("filled") or [], "live": live[:6],
+                "yesterday": {"house": round(ydays.get("house", 0.0), 2) if ydays else None, "house_upto": y_upto},
+                "parts": parts[:12], "tips": tips[:4]}
 
     def _room(self, area: str) -> dict[str, Any]:
         return next((r for r in self.hass.data.get(DOMAIN, {}).get("rooms", []) if r.get("area_id") == area), {})

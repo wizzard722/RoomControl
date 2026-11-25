@@ -11,6 +11,18 @@
 ### Room switches: no empty space under the temperature sensor
 - Fixed: a heater's temperature sensor picker (room → Settings → Switches) left a large empty space under it.
 
+### Energy: new tab "Overview 2" (chronograph)
+
+- Energy has a new tab **Overview 2** next to Overview (which stays as it is), in a black-and-gold "instrument" style:
+  - a **dial** with today's 24 hours around it (per hour: from the sun and from the grid, hours still to come greyed out), a hand at the current time, today's kWh and cost in the middle, and three small counters (Sun, Own use, Grid; tap one to switch between today and now);
+  - chips: compared with yesterday at the same time, and the base load;
+  - **On now**: small gauges for what uses power right now (tap a switch or light bundle to switch it off);
+  - **Coming up**: the next 24 hours with the price line, cheap / normal / expensive, the expected sun and what is planned;
+  - **Complications**: today's biggest users (devices, light bundles, switches, the car, not assigned) with their share, time on and how often they went on;
+  - **Notable**: the saving tips (light in an empty room, standby while nobody is home, a task at a dear hour) with Apply and dismiss;
+  - "What happened", folded.
+- The energy meter now also keeps kWh **per hour** (house, grid in/out, sun) and **per part** (kWh, minutes on, times switched on) for the last 8 days. Today's hours from before RoomControl counted are filled in from Home Assistant's Energy dashboard. New websocket command `roomcontrol/energy_overview2`.
+
 ### Rooms: change the order of the settings cards
 
 - A room's Settings tab has an "Order" button next to the search field. It shows the cards as a list: drag a card by its handle (mouse or finger) or use the up/down arrows, then tap Done.
