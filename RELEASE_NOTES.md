@@ -2,6 +2,18 @@
 
 ## 2.5.0
 
+### Energy → Saving (new)
+- New tab **Saving** on the Energy page, per week (this week so far, compared with the same days last week):
+  - **cost this week**, **wasted** (light in an empty room and standby while nobody is home) and **saved by RoomControl** (planning at the best moment);
+  - **tips** with what they bring per week, **Apply** where RoomControl can change the setting itself, and **Don't show again**:
+    - *light in an empty room*: a light bundle on for more than an hour without motion (not while its own time slot runs, an alarm clock rings or under manual control) → Apply: it also goes off after the grace period when switched on by hand;
+    - *standby while nobody is home*: a metered switch using power while nobody is home → Apply: Off with "Nobody home" and back on when someone comes home;
+    - *a program at a dear hour*: a dishwasher or washing machine started when the price was clearly higher than that day's cheapest hour → when to start it;
+    - *much not assigned*: more than 30 % of the house's use is not assigned to a room;
+  - **going well** (car charged in its planned stretch, lights off after the grace period, what planning saved) and the **cost per room** this week.
+- New light bundle option **Also off without motion when switched on by hand**: after the grace period without motion the light bundle goes off, also when it was switched on by hand.
+- On a phone the Energy page's tabs scroll sideways when they don't fit.
+
 ### Energy → Bill (new)
 - New tab **Bill** on the Energy page, per month (‹ › to earlier months):
   - **so far**: electricity (taken at the price you pay at each moment, minus what returning brought), gas and fixed costs;

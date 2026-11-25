@@ -3085,6 +3085,8 @@ class RoomControlLight(LightEntity):
             lamps |= set(self._motion_lamps()) | set(self._door_lamps())
         self._after_clock &= set(on)  # lamps of an ended alarm clock, still on
         lamps |= self._after_clock
+        # Bundle option "idle_off": also off after the grace period when switched on by hand.
+        lamps |= set(self._lamps_where("idle_off", False))
         return [e for e in on if e in lamps and e not in held]
 
     def _fan_run_on(self) -> int:

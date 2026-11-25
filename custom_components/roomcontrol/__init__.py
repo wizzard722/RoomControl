@@ -195,6 +195,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_battery)
     websocket_api.async_register_command(hass, ws_energy_overview)
     websocket_api.async_register_command(hass, ws_energy_bill)
+    websocket_api.async_register_command(hass, ws_energy_coach)
     websocket_api.async_register_command(hass, ws_battery_sim)
     websocket_api.async_register_command(hass, ws_battery_test)
     websocket_api.async_register_command(hass, ws_forget_learned)
@@ -972,6 +973,36 @@ async def ws_energy_bill(
     """Energy → Rekening: a month so far, the forecast and the advance payment."""
     meter = _data(hass).get("meter")
     connection.send_result(msg["id"], await meter.async_bill(msg.get("month")) if meter is not None else {})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/energy_coach",
+        vol.Optional("apply"): str,
+        vol.Optional("dismiss"): str,
+        vol.Optional("reset"): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_energy_coach(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Energy → Besparen: this week's tips; apply or dismiss one."""
+    meter = _data(hass).get("meter")
+    if meter is None:
+        connection.send_result(msg["id"], {})
+        return
+    result: dict[str, Any] = {}
+    if msg.get("apply"):
+        result["applied"] = await meter.async_apply(msg["apply"])
+    if msg.get("dismiss"):
+        meter.dismiss(msg["dismiss"])
+    if msg.get("reset"):
+        meter.dismissed = []
+        meter._save()
+    connection.send_result(msg["id"], {**meter.coach(), **result})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/battery"})

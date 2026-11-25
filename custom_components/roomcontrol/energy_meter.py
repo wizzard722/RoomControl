@@ -25,6 +25,16 @@ feed-in price then) + the fixed costs (per day of the month) + gas (the gas
 meter of Home Assistant's Energy dashboard, m³ per day × the gas price).
 The forecast for the whole month: so far plus the average day of the last
 14 days for each day still to come.
+
+Energy → Besparen (step 7c): per day also
+- "idle": light bundles on while their room saw no motion for IDLE_MIN
+  minutes (not while their own time slot runs, an alarm clock rings or the
+  room is under manual control): kWh, € and how often ("n");
+- "away": metered switches and meters using power while nobody is home:
+  kWh, € and hours.
+coach() turns a week of that into tips (with what they bring per week and,
+where RoomControl can, a setting to apply), what went well and the cost per
+room; dismissed tips are kept.
 """
 from __future__ import annotations
 
@@ -40,6 +50,7 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 
 SIGNAL_METER = f"{DOMAIN}_energy_meter"
+IDLE_MIN = 60
 KEEP_DAYS = 400
 NIGHT = (3, 5)  # local hours of the base load window
 VOLT = 230.0
@@ -65,15 +76,19 @@ class EnergyMeter:
         self.nights: dict[str, dict[str, Any]] = {}  # date → {"n", "house", "parts": {key: W}, "names"}
         self._last: datetime | None = None
         self._unsub: CALLBACK_TYPE | None = None
+        self.dismissed: list[str] = []
+        self._idle_flag: dict[str, bool] = {}
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
         self.days = {k: v for k, v in (data.get("days") or {}).items() if isinstance(v, dict)}
         self.totals = {k: float(v) for k, v in (data.get("totals") or {}).items() if isinstance(v, (int, float))}
         self.nights = {k: v for k, v in (data.get("nights") or {}).items() if isinstance(v, dict)}
+        self.dismissed = [x for x in data.get("dismissed") or [] if isinstance(x, str)]
 
     def _save(self) -> None:
-        self._store.async_delay_save(lambda: {"days": self.days, "totals": self.totals, "nights": self.nights}, 120)
+        self._store.async_delay_save(lambda: {"days": self.days, "totals": self.totals, "nights": self.nights,
+                                              "dismissed": self.dismissed}, 120)
 
     @callback
     def start(self) -> None:
@@ -144,6 +159,7 @@ class EnergyMeter:
         solar = [d.get("solar") for d in detail.values() if d.get("solar") is not None]
         if solar:
             _add(day, "solar", sum(solar) / 1000 * hours)
+        self._waste(day, rooms, hours, buy, now)
         if NIGHT[0] <= local.hour < NIGHT[1] and house_w is not None:
             night = self.nights.setdefault(local.strftime("%Y-%m-%d"), {"n": 0, "house": 0.0, "parts": {}, "names": {}})
             n = night["n"]
@@ -164,6 +180,232 @@ class EnergyMeter:
             self.nights = {k: v for k, v in self.nights.items() if k >= ncut}
         self._save()
         async_dispatcher_send(self.hass, SIGNAL_METER)
+
+    def _waste(self, day: dict[str, Any], rooms: dict[str, Any], hours: float, buy: float | None, now: datetime) -> None:
+        """Light in an empty room, and use while nobody is home."""
+        from .rooms import anyone_home  # noqa: PLC0415
+
+        entities = self.hass.data.get(DOMAIN, {}).get("entities", {})
+        names = day.setdefault("names", {})
+        home = anyone_home(self.hass)
+        for area, r in rooms.items():
+            light = entities.get(area)
+            for p in r.get("parts") or []:
+                w = p.get("watts") or 0.0
+                key = f"{area}|{p['key']}"
+                if p.get("kind") == "bundle":
+                    idle = False
+                    if w >= 1 and light is not None and getattr(light, "_motion_sensors", None) and light._motion_sensors():
+                        try:
+                            quiet = now - light._last_motion_at >= timedelta(minutes=IDLE_MIN) and not light._any_motion()
+                            lamps = self._bundle_lamps(area, p["key"])
+                            held = set(light._own_active()) | set(light._clock_lamps())
+                            idle = quiet and not light._manual and not (lamps & held)
+                        except Exception:  # noqa: BLE001 - a room that can't be read now
+                            idle = False
+                    if idle:
+                        rec = day.setdefault("idle", {}).setdefault(key, {"kwh": 0.0, "eur": 0.0, "n": 0})
+                        rec["kwh"] = round(rec["kwh"] + w / 1000 * hours, 5)
+                        rec["eur"] = round(rec["eur"] + (w / 1000 * hours * buy if buy is not None else 0.0), 5)
+                        if not self._idle_flag.get(key):
+                            rec["n"] += 1
+                            self._idle_flag[key] = True
+                        names[key] = p.get("name") or p["key"]
+                    else:
+                        self._idle_flag.pop(key, None)
+                elif p.get("kind") in ("switch", "meter") and not home and w >= 1:
+                    rec = day.setdefault("away", {}).setdefault(key, {"kwh": 0.0, "eur": 0.0, "h": 0.0, "w": 0.0})
+                    rec["kwh"] = round(rec["kwh"] + w / 1000 * hours, 5)
+                    rec["eur"] = round(rec["eur"] + (w / 1000 * hours * buy if buy is not None else 0.0), 5)
+                    rec["h"] = round(rec["h"] + hours, 4)
+                    rec["w"] = round(rec["kwh"] * 1000 / rec["h"], 1) if rec["h"] else w
+                    names[key] = p.get("name") or p["key"]
+
+    def _room(self, area: str) -> dict[str, Any]:
+        return next((r for r in self.hass.data.get(DOMAIN, {}).get("rooms", []) if r.get("area_id") == area), {})
+
+    def _bundle_lamps(self, area: str, part: str) -> set[str]:
+        gid = part.split(":", 1)[1] if part.startswith("bundle:") else None
+        for g in self._room(area).get("groups") or []:
+            if gid is not None and str(g.get("id")) == gid:
+                return set(g.get("lights") or [])
+        return set()
+
+    # ── the coach ──────────────────────────────────────────────────────────
+
+    def _week(self, offset: int = 0) -> list[str]:
+        """Local dates of this week (Monday to today), `offset` weeks back (same number of days)."""
+        today = dt_util.as_local(dt_util.utcnow()).date()
+        monday = today - timedelta(days=today.weekday())
+        return [(monday - timedelta(weeks=offset) + timedelta(days=i)).isoformat() for i in range(today.weekday() + 1)]
+
+    def coach(self) -> dict[str, Any]:
+        from .room_switches import room_switches  # noqa: PLC0415
+
+        week, prev = self._week(), self._week(1)
+        n_days = len(week)
+        scale = 7 / n_days
+
+        def cost(days: list[str]) -> float | None:
+            rows = [self.days[d] for d in days if "cost_in" in self.days.get(d, {})]
+            return round(sum(r.get("cost_in", 0.0) - r.get("earn_out", 0.0) for r in rows), 2) if rows else None
+
+        def merged(kind: str) -> dict[str, dict[str, float]]:
+            out: dict[str, dict[str, float]] = {}
+            for d in week:
+                for key, rec in (self.days.get(d, {}).get(kind) or {}).items():
+                    o = out.setdefault(key, {})
+                    for k, v in rec.items():
+                        if k == "w":
+                            o["w"] = max(o.get("w", 0.0), v)
+                        else:
+                            o[k] = o.get(k, 0.0) + v
+            return out
+
+        names: dict[str, str] = {}
+        for d in week:
+            names.update(self.days.get(d, {}).get("names") or {})
+        idle, away = merged("idle"), merged("away")
+        tips: list[dict[str, Any]] = []
+        for key, rec in idle.items():
+            if rec.get("n", 0) < 3 and rec.get("eur", 0.0) < 0.1:
+                continue
+            area, part = key.split("|", 1)
+            gid = part.split(":", 1)[1] if part.startswith("bundle:") else None
+            group = next((g for g in self._room(area).get("groups") or [] if str(g.get("id")) == gid), None)
+            can = group is not None and not group.get("idle_off")
+            tips.append({"id": f"idle|{key}", "kind": "idle", "area": area, "name": names.get(key, part),
+                         "n": int(rec.get("n", 0)), "kwh": round(rec["kwh"], 2), "per_week": round(rec["eur"] * scale, 2),
+                         "on_motion": bool(group.get("on_motion", True)) if group else None,
+                         "apply": {"type": "bundle_idle_off", "area": area, "group": gid} if can else None})
+        switches = {sw["entity_id"]: sw for r in self.hass.data.get(DOMAIN, {}).get("rooms", []) for sw in room_switches(r)}
+        for key, rec in away.items():
+            if rec.get("h", 0.0) < 10 or rec.get("eur", 0.0) < 0.05:
+                continue
+            area, part = key.split("|", 1)
+            entity = part.split(":", 1)[1] if part.startswith("switch:") else None
+            sw = switches.get(entity) if entity else None
+            can = entity is not None and (sw is None or ("nobody_home" not in sw["off_on"] and sw["may_off"]))
+            tips.append({"id": f"away|{key}", "kind": "away", "area": area, "name": names.get(key, part),
+                         "h": round(rec["h"], 1), "w": round(rec.get("w", 0.0)), "per_week": round(rec["eur"] * scale, 2),
+                         "apply": {"type": "switch_nobody_home", "area": area, "entity": entity} if can else None})
+        tips += self._task_tips(week, scale)
+        house = sum(self.days.get(d, {}).get("house", 0.0) for d in week)
+        unassigned = sum(self.days.get(d, {}).get("unassigned", 0.0) for d in week)
+        if house > 5 and unassigned / house > 0.3:
+            tips.append({"id": "unassigned", "kind": "unassigned", "pct": round(unassigned / house * 100), "per_week": None, "apply": None})
+        tips = [t for t in tips if t["id"] not in self.dismissed]
+        tips.sort(key=lambda t: -(t.get("per_week") or 0))
+        # What went well
+        planner = self.hass.data.get(DOMAIN, {}).get("planner")
+        runs = [r for r in (getattr(planner, "runs", None) or []) if dt_util.as_local(dt_util.parse_datetime(r["at"])).date().isoformat() in week]
+        saved_plan = sum((r.get("ref") or 0) - (r.get("cost") or 0) for r in runs if r.get("ref") is not None and r.get("cost") is not None)
+        grace = 0
+        for light in self.hass.data.get(DOMAIN, {}).get("entities", {}).values():
+            for e in list(getattr(getattr(light, "_debug", None), "entries", []) or []):
+                if e.get("kind") == "off" and e.get("reason") == "no_motion" and dt_util.as_local(dt_util.parse_datetime(e["at"])).date().isoformat() in week:
+                    grace += 1
+        good = []
+        car_runs = [r for r in runs if r.get("key") == "car"]
+        if car_runs:
+            good.append({"kind": "car", "n": len(car_runs)})
+        if grace:
+            good.append({"kind": "grace", "n": grace})
+        if runs and saved_plan > 0:
+            good.append({"kind": "plan", "eur": round(saved_plan, 2), "n": len(runs)})
+        # Cost per room this week
+        per_room: dict[str, float] = {}
+        house_cost = 0.0
+        for d in week:
+            day = self.days.get(d, {})
+            for area, eur in (day.get("rooms_cost") or {}).items():
+                per_room[area] = per_room.get(area, 0.0) + eur
+            house_cost += day.get("house_cost", 0.0)
+        avg = house_cost / house if house else None
+        rooms = [{"area": a, "eur": round(v, 2)} for a, v in sorted(per_room.items(), key=lambda kv: -kv[1])]
+        if avg is not None and unassigned:
+            rooms.append({"area": None, "eur": round(unassigned * avg, 2)})
+        wasted = sum(r.get("eur", 0.0) for r in idle.values()) + sum(r.get("eur", 0.0) for r in away.values())
+        today = dt_util.as_local(dt_util.utcnow()).date()
+        return {"week": today.isocalendar()[1], "days": n_days, "cost": cost(week), "cost_prev": cost(prev),
+                "wasted": round(wasted, 2), "saved": round(saved_plan, 2) if runs else None,
+                "tips_total": round(sum(t.get("per_week") or 0 for t in tips), 2),
+                "tips": tips[:6], "good": good, "rooms": rooms, "dismissed": len(self.dismissed)}
+
+    def _task_tips(self, week: list[str], scale: float) -> list[dict[str, Any]]:
+        """Programs started at a dear hour: what the cheapest hour of that day would have saved."""
+        from .offpay import hour_key  # noqa: PLC0415
+
+        offpay = self.hass.data.get(DOMAIN, {}).get("offpay")
+        if offpay is None:
+            return []
+        prices: dict[str, float] = getattr(offpay, "prices", {}) or {}
+        out = []
+        for key, entity in offpay.switches().items():
+            kind, _g = offpay.kind(key)
+            if kind != "task":
+                continue
+            learner = offpay.learning.learners.get(key)
+            saved, n, hours = 0.0, 0, []
+            for c in (learner.data.get("cycles") or []) if learner else []:
+                start = dt_util.parse_datetime(c["start"])
+                if start is None:
+                    continue
+                local = dt_util.as_local(start)
+                if local.date().isoformat() not in week:
+                    continue
+                day = [prices.get(f"{local.strftime('%Y-%m-%d')}T{h:02d}") for h in range(24)]
+                known = [(h, p) for h, p in enumerate(day) if p is not None]
+                at = prices.get(hour_key(start))
+                if not known or at is None:
+                    continue
+                best_h, best_p = min(known, key=lambda x: x[1])
+                if at - best_p > 0.05:
+                    saved += (at - best_p) * c["kwh"]
+                    n += 1
+                    hours.append(best_h)
+            if n >= 2 and saved >= 0.1:
+                usual = max(set(hours), key=hours.count)
+                out.append({"id": f"task|{key}", "kind": "task", "area": key.split("|", 1)[0],
+                            "name": offpay.learning.names.get(key, entity), "n": n, "best": f"{usual:02d}:00",
+                            "per_week": round(saved * scale, 2), "apply": None})
+        return out
+
+    async def async_apply(self, tip_id: str) -> bool:
+        """Apply a tip's setting (a light bundle off after the grace period, a
+        switch off when nobody is home)."""
+        from . import _async_save  # noqa: PLC0415
+
+        tip = next((t for t in self.coach()["tips"] if t["id"] == tip_id), None)
+        act = (tip or {}).get("apply")
+        if not act:
+            return False
+        rooms = [dict(r) for r in self.hass.data.get(DOMAIN, {}).get("rooms", [])]
+        for i, room in enumerate(rooms):
+            if room.get("area_id") != act["area"]:
+                continue
+            if act["type"] == "bundle_idle_off":
+                room["groups"] = [{**g, "idle_off": True} if str(g.get("id")) == act["group"] else g for g in room.get("groups") or []]
+            elif act["type"] == "switch_nobody_home":
+                sws = [dict(sw) for sw in room.get("switches") or []]
+                for sw in sws:
+                    if sw.get("entity_id") == act["entity"]:
+                        off_on = sw.get("off_on") if isinstance(sw.get("off_on"), list) else ["all_off", "nobody_home", "smoke"]
+                        sw["off_on"] = list(dict.fromkeys([*off_on, "nobody_home"]))
+                        sw["back_on"] = True
+                        break
+                else:
+                    sws.append({"entity_id": act["entity"], "off_on": ["all_off", "nobody_home", "smoke"], "back_on": True})
+                room["switches"] = sws
+            rooms[i] = room
+            await _async_save(self.hass, rooms=rooms)
+            return True
+        return False
+
+    def dismiss(self, tip_id: str) -> None:
+        if tip_id not in self.dismissed:
+            self.dismissed.append(tip_id)
+            self._save()
 
     # ── for the panel ──────────────────────────────────────────────────────
 
