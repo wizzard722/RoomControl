@@ -2,6 +2,13 @@
 
 ## 3.0.1
 
+### Energy → Planning: one overview, devices you choose
+- **Next 24 hours** now also shows the **home battery**: its expected level per hour, coloured by what it does (charge from the grid, own use, hold, feed in), and its charging stretch among the devices.
+- **To plan** is one list: the home battery (tap to go to its tab), the car and the switches you chose.
+- **Add device**: pick a switch that is set up in one of your rooms (room → Settings → Switches), choose its kind — **Keeps warm** (hours a day), **On in time** (the plug goes on in the best stretch; the device must start by itself when it gets power), **Charging** (kWh needed) or **Program** (advice only) — its power (its meter, learned, or watts you enter) and Direct / Cheapest / Sun only with a ready time. **Don't plan any more** takes it off again.
+- Planned switches show "Planned · Cheapest" (or the mode) at the switch in their room.
+- Changed: devices are no longer picked automatically from what device learning recognised as a boiler or dishwasher; add them yourself.
+
 ### Energy → Overview: the next 24 hours
 - The Energy page's Overview now shows the **Next 24 hours** chart (as on Planning: the price per hour with the expected sun, the CO₂ strip, a time every 4 hours and a bar per planned device), with a link to Planning.
 - The **Phases** card is gone from the Overview (with its main fuse setting and warning); it may come back with the phase guard.

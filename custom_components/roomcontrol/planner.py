@@ -9,7 +9,10 @@ Inside the general setting "energy":
                                                      # CO2 Signal); hours ahead come from
                                                      # its "forecast" attribute, else from
                                                      # what it showed per hour of the day
- "plan": {"car" | device key: {"mode": "direct" | "cheap" | "sun",
+ "plan": {"car" | "sw:<switch>": {"mode": "direct" | "cheap" | "sun",
+                               "planned": true,      # a room switch chosen for planning
+                               "kind": "warm" | "timer" | "charge" | "task",
+                               "watts": n,           # its power (default: learned / the room's)
                                "ready": "HH:MM",     # ready by (default 07:00)
                                "hours": h,           # keeps warm: hours a day
                                "kwh": n}}            # the car: kWh a charge (default:
@@ -18,9 +21,11 @@ Inside the general setting "energy":
 
 Devices:
 - the car: switched only when a charging station is chosen, else advice;
-- metered switches that keep something warm (boiler; device_learning "warm");
-- task devices (dishwasher, washing machine): advice only, the best start
-  for their usual program.
+- the room switches the user chose (Energy → Planning → Add): "warm" keeps
+  something warm (hours a day), "timer" is on for a while in the best
+  stretch (the device starts when it gets power), "charge" needs kWh, and
+  "task" (dishwasher, washing machine) gets advice only: the best start.
+- the home battery is shown (battery.py plans it; status() → "battery").
 Per day (the window: the 24 hours up to "ready") a device in "cheap" gets the
 best unbroken stretch of its hours; "sun" runs while the own surplus covers
 half its power, and with a ready time the best stretch fills in the hours
@@ -54,6 +59,7 @@ SUN_ON = 0.5  # share of its power the surplus must cover to switch on
 SUN_OFF = 0.2
 MIN_SWITCH = timedelta(minutes=5)
 MODES = ("direct", "cheap", "sun")
+SWITCH_KINDS = ("warm", "timer", "charge", "task")
 PLAN_ON = ("price", "co2", "both")
 KEEP_RUNS = 400
 
@@ -157,30 +163,70 @@ class Planner:
             out.append({"key": "car", "kind": "car", "name": (cfg.get("car_name") or "").strip() or None,
                         "entity": cfg.get("charger_entity") or None, "kw": kw, "kwh": round(kwh, 1),
                         "hours": round(kwh / kw, 2) if kw > 0 else 0.0, "area": cfg.get("charger_room")})
-        offpay = hass.data.get(DOMAIN, {}).get("offpay")
-        if offpay is None:
-            return out
-        may_off = {sw["entity_id"]: sw["may_off"] for room in hass.data.get(DOMAIN, {}).get("rooms", [])
-                   for sw in room_switches(room)}
-        for key, entity in sorted(offpay.switches().items()):
-            kind, _guessed = offpay.kind(key)
-            if kind not in ("warm", "task") or may_off.get(entity) is False:
+        for sw in self.switches():
+            if not sw["planned"]:
                 continue
-            learner = offpay.learning.learners.get(key)
-            data = learner.data if learner else {}
-            kw = (_num(data.get("run_w"), 0.0) or _num(data.get("peak_w"), 1000.0)) / 1000
-            cycles = data.get("cycles") or []
+            conf = self._conf(sw["key"])
+            kind = conf.get("kind") if conf.get("kind") in SWITCH_KINDS else "warm"
+            kw = sw["kw"]
             if kind == "task":
-                if not cycles:
+                hours = _num(conf.get("hours"), sw["task_hours"] or 2.0)
+                kwh = sw["task_kwh"] if sw["task_kwh"] else kw * hours
+            elif kind == "charge":
+                kwh = _num(conf.get("kwh"), 2.0)
+                hours = kwh / kw if kw > 0 else 0.0
+            else:  # warm, timer: hours a day / how long it must be on
+                hours = _num(conf.get("hours"), DEFAULT_WARM_HOURS if kind == "warm" else 1.5)
+                kwh = kw * hours
+            out.append({"key": sw["key"], "kind": kind, "name": sw["name"], "entity": sw["entity"],
+                        "kw": round(kw, 3), "kwh": round(kwh, 2), "hours": round(hours, 2), "area": sw["area"],
+                        "meter": sw["meter"]})
+        return out
+
+    def switches(self) -> list[dict[str, Any]]:
+        """Every switch set up in a room (that RoomControl may switch off), with
+        its power: the user's watts, else what was learned, else the room's
+        power setting, else 1 kW. "planned": chosen in Energy → Planning."""
+        from .energy import room_parts  # noqa: PLC0415
+        from .room_switches import room_switches  # noqa: PLC0415
+        from .rooms import managed_areas  # noqa: PLC0415
+
+        hass = self.hass
+        plan = _cfg(hass).get("plan") or {}
+        offpay = hass.data.get(DOMAIN, {}).get("offpay")
+        learners = getattr(getattr(offpay, "learning", None), "learners", {}) or {}
+        out = []
+        managed = managed_areas(hass)
+        for room in hass.data.get(DOMAIN, {}).get("rooms", []):
+            area = room.get("area_id")
+            if area not in managed:
+                continue
+            try:
+                parts = {p["key"]: p for p in room_parts(hass, room)}
+            except Exception:  # noqa: BLE001
+                parts = {}
+            for sw in room_switches(room):
+                entity = sw["entity_id"]
+                if not sw["may_off"]:
                     continue
+                key = f"sw:{entity}"
+                conf = plan.get(key) if isinstance(plan.get(key), dict) else {}
+                part = parts.get(f"switch:{entity}") or {}
+                learner = learners.get(f"{area}|switch:{entity}")
+                data = learner.data if learner else {}
+                power_conf = ((room.get("power") or {}).get(f"switch:{entity}") or {})
+                watts = (_num(conf.get("watts"), 0.0) or _num(data.get("run_w"), 0.0)
+                         or _num(power_conf.get("watts"), 0.0) or 1000.0)
+                cycles = data.get("cycles") or []
                 minutes = sorted(c["min"] for c in cycles[-20:])
                 kwhs = sorted(c["kwh"] for c in cycles[-20:])
-                hours, kwh = minutes[len(minutes) // 2] / 60, kwhs[len(kwhs) // 2]
-            else:
-                hours = _num(self._conf(key).get("hours"), DEFAULT_WARM_HOURS)
-                kwh = kw * hours
-            out.append({"key": key, "kind": kind, "name": offpay.learning.names.get(key, entity), "entity": entity,
-                        "kw": round(kw, 3), "kwh": round(kwh, 2), "hours": round(hours, 2), "area": key.split("|", 1)[0]})
+                st = hass.states.get(entity)
+                out.append({"key": key, "entity": entity, "area": area,
+                            "name": (st.attributes.get("friendly_name") if st else None) or entity,
+                            "kw": watts / 1000, "meter": bool(part.get("sensor")),
+                            "task_hours": minutes[len(minutes) // 2] / 60 if minutes else None,
+                            "task_kwh": kwhs[len(kwhs) // 2] if kwhs else None,
+                            "planned": bool(conf.get("planned"))})
         return out
 
     # ── prices, sun, CO2 per quarter ───────────────────────────────────────
@@ -500,10 +546,22 @@ class Planner:
         for plan in self.plans.values():
             dev = plan["device"]
             devices.append({**{k: v for k, v in plan.items() if k != "device"}, **{k: dev[k] for k in (
-                "kind", "name", "entity", "kw", "kwh", "hours")},
+                "kind", "name", "entity", "kw", "kwh", "hours")}, "area": dev.get("area"), "meter": dev.get("meter"),
+                "watts_set": self._conf(dev["key"]).get("watts"),
                 "on": self._is_on(dev["entity"]) if dev.get("entity") else None,
                 "hours_set": self._conf(dev["key"]).get("hours"), "kwh_set": self._conf(dev["key"]).get("kwh")})
+        battery = None
+        hb = self.hass.data.get(DOMAIN, {}).get("battery")
+        if hb is not None and hb.configured():
+            bst = hb.status()
+            if bst.get("strategy") and bst["strategy"] != "off":
+                battery = {"soc": bst.get("soc"), "strategy": bst["strategy"], "plan": bst.get("plan") or [],
+                           "blocks": [b for b in bst.get("blocks") or [] if b["action"] in ("charge", "discharge")]}
         return {
+            "candidates": [{"key": sw["key"], "entity": sw["entity"], "area": sw["area"], "name": sw["name"],
+                            "meter": sw["meter"], "watts": round(sw["kw"] * 1000)}
+                           for sw in self.switches() if not sw["planned"]],
+            "battery": battery,
             "plan_on": cfg.get("plan_on") if cfg.get("plan_on") in PLAN_ON else "price",
             "co2_sensor": cfg.get("co2_sensor") or None,
             "charger": cfg.get("charger_entity") or None,
