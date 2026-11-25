@@ -1,6 +1,8 @@
 # Release notes
 
-## 2.5.0
+## 3.0.0
+
+A big release: RoomControl now has full energy management (an Energy page with Overview, Planning, Saving, Home battery and Bill), device profiles that learn what metered devices use and when, a Debug tab per room, and many fixes.
 
 ### Energy → Saving (new)
 - New tab **Saving** on the Energy page, per week (this week so far, compared with the same days last week):
@@ -96,8 +98,6 @@
 ### Switches: off during a time slot
 - New moment **Time slot** under *Off with*: the switch goes off while one of its own time slots runs (the usual time slot editor, with Normal / Leave / Vacation) and back on when it ends (with *Back on when someone comes home*).
 
-## 2.4.0
-
 ### Watching devices
 - Per metered device (switch or meter with a power sensor), in a room's **Power** card → **Profile** → **Watch**:
   - **Done message**: when a run is over and someone is home, e.g. "Dishwasher is done (Eco · 0.92 kWh · € 0.23)", with the program name you gave it and the cost at the current price.
@@ -107,8 +107,6 @@
 
 ### Night mode for switches
 - Switches have a new moment **Night (Armed Home)** under *Off with*: they go off when the alarm goes to Armed Home, and back on at Disarmed (with *Back on when someone comes home*). Not while the vacuum has disarmed the alarm for a run.
-
-## 2.3.2
 
 ### Energy contract: choose the Nord Pool service
 - Under *Feeding in brings* there is a new choice **Market price from Nord Pool**: you pick the Nord Pool service (e.g. "Nord Pool NL") instead of one of its sensors; RoomControl uses its prices itself, today's and tomorrow's. *Market price from another sensor* stays for other integrations (e.g. ENTSO-e). On *automatic* Nord Pool is still found by itself.
