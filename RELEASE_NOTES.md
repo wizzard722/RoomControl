@@ -1,5 +1,11 @@
 # Release notes
 
+## 3.0.1
+
+### Energy → Overview: the next 24 hours
+- The Energy page's Overview now shows the **Next 24 hours** chart (as on Planning: the price per hour with the expected sun, the CO₂ strip, a time every 4 hours and a bar per planned device), with a link to Planning.
+- The **Phases** card is gone from the Overview (with its main fuse setting and warning); it may come back with the phase guard.
+
 ## 3.0.0
 
 A big release: RoomControl now has full energy management (an Energy page with Overview, Planning, Saving, Home battery and Bill), device profiles that learn what metered devices use and when, a Debug tab per room, and many fixes.
