@@ -93,7 +93,7 @@ mode, F bill & charging, G "does switching off pay?", H settings: energy
 contract + home battery + simulation, I device profile / learned use).
 
 Build order agreed with the user (each step: analysis + proposal first):
-Done so far: 1 and 2 in 2.3.0 (Nord Pool in 2.3.1/2.3.2), 3 in 2.4.0, 4 and 4b (learned use → time slots) in 2.5.0, 5a (Energy page → Planning: flexible devices, charging station, CO₂) and 6 (Energy page → Home battery: simulation on the phase sensors checked against the Energy dashboard, linking, strategy, plan) in 2.5.0. Still to do: 5b (Zon & prijs tab: own sun use, follow the surplus, negative prices, phase guard) and 7.
+Done so far: 1 and 2 in 2.3.0 (Nord Pool in 2.3.1/2.3.2), 3 in 2.4.0, 4 and 4b (learned use → time slots) in 2.5.0, 5a (Energy page → Planning: flexible devices, charging station, CO₂) and 6 (Energy page → Home battery: simulation on the phase sensors checked against the Energy dashboard, linking, strategy, plan) in 2.5.0. 7a (Energy page → Overview: flow now, phases + fuse, rooms now/today, base load, upcoming/recent; energy_meter.py with kWh per room/day and a kWh sensor per room) in 2.5.0. Still to do: 5b (Zon & prijs tab: own sun use, follow the surplus, negative prices, phase guard), 7b (Rekening: month so far, forecast, termijnbedrag, fixed costs, gas from the Energy dashboard) and 7c (Besparen: coach tips with Apply).
 1. Energy contract (H): dynamic tariffs, feed-in price and costs, net
    metering until a date.
 2. Learning devices (I): profile per metered device (standby, running

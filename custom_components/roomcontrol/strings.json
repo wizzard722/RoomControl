@@ -192,6 +192,9 @@
             "name": "Battery level from the car at"
           }
         }
+      },
+      "room_energy": {
+        "name": "Energy"
       }
     },
     "switch": {}

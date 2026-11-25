@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
-from homeassistant.const import UnitOfPower
+from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -59,6 +59,32 @@ async def async_setup_entry(
 
     _sync()
     entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_CONFIG_UPDATED, _sync))
+
+    # "Energie" per room (kWh, energy_meter.py): while energy management is on
+    # and phase sensors are set; for Home Assistant's Energy dashboard.
+    energy_entities: dict[str, RoomEnergySensor] = {}
+
+    @callback
+    def _sync_energy(*_: Any) -> None:
+        from .const import energy_enabled  # noqa: PLC0415
+
+        energy = hass.data.get(DOMAIN, {}).get("settings", {}).get("energy") or {}
+        on = energy_enabled(hass) and bool(energy.get("phase_sensors"))
+        areas = managed_areas(hass)
+        wanted = {r["area_id"] for r in hass.data.get(DOMAIN, {}).get("rooms", []) if r.get("area_id") in areas} if on else set()
+        new = [RoomEnergySensor(a) for a in wanted - energy_entities.keys()]
+        for entity in new:
+            energy_entities[entity.area_id] = entity
+        if new:
+            async_add_entities(new)
+        ent_reg = er.async_get(hass)
+        for area_id in list(energy_entities.keys() - wanted):
+            del energy_entities[area_id]
+            if entity_id := ent_reg.async_get_entity_id("sensor", DOMAIN, f"{DOMAIN}_{area_id}_energy"):
+                ent_reg.async_remove(entity_id)
+
+    _sync_energy()
+    entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_CONFIG_UPDATED, _sync_energy))
     # "Auto laden" on the General device: is the car charging, and how fast.
     async_add_entities([EvChargingSensor()])
 
@@ -116,6 +142,45 @@ class CoversStateSensor(SensorEntity):
         if self._unsub:
             self._unsub()
             self._unsub = None
+
+
+class RoomEnergySensor(SensorEntity):
+    """The room's energy use (kWh, ever increasing), added up by RoomControl
+    from the power of its light bundles, switches and meters."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+    _attr_translation_key = "room_energy"
+    _rc_id_name = "Energie"  # for the entity ID (entity_ids.py)
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:lightning-bolt"
+
+    def __init__(self, area_id: str) -> None:
+        self.area_id = area_id
+        self._attr_unique_id = f"{DOMAIN}_{area_id}_energy"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(identifiers={(DOMAIN, self.area_id)})
+
+    async def async_added_to_hass(self) -> None:
+        from .energy_meter import SIGNAL_METER  # noqa: PLC0415
+
+        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_METER, self._refresh))
+        self._refresh()
+
+    @callback
+    def _refresh(self, *_: Any) -> None:
+        meter = self.hass.data.get(DOMAIN, {}).get("meter")
+        value = (getattr(meter, "totals", {}) or {}).get(self.area_id) if meter is not None else None
+        new = None if value is None else round(value, 3)
+        if new != self._attr_native_value or not self.entity_id:
+            self._attr_native_value = new if new is not None else 0.0
+            if self.entity_id:
+                self.async_write_ha_state()
 
 
 class EvChargingSensor(SensorEntity):

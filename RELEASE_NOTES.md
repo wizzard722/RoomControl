@@ -2,6 +2,16 @@
 
 ## 2.5.0
 
+### Energy → Overview (new)
+- The Energy page opens on a new tab **Overview**:
+  - chips with the grid, the sun and the price now;
+  - **Where the power goes now**: tiles for the solar panels, the grid (taken and returned, today in kWh and €), the house (and how much of it is known per room) and the car, and a bar of the house now per room plus "not assigned";
+  - **Phases**: the current per phase against the main fuse (new setting, default 25 A), with a warning when adding the car would go over it;
+  - **Rooms now · today**: power now with the biggest users, and today's kWh and cost per room;
+  - **Base load**: what is always on, measured each night 03:00–05:00 (the last 7 nights), what it costs per month and which devices it is;
+  - **Upcoming** (planning and home battery) and **What happened** (switches and planning).
+- RoomControl now adds up the kWh per room, the house, the grid (taken and returned), the sun, the car and "not assigned" per day with their cost (kept 400 days), and makes an **energy sensor (kWh) per room** for Home Assistant's Energy dashboard (Individual devices).
+
 ### Energy management can be switched off
 - New switch **Use energy management** in the general settings → Display (default on). Off: the Energy and EV charger buttons and pages, the Energy, Energy contract and Device messages cards and the rooms' Power card are hidden, and everything behind them pauses: nothing is measured, learned, fetched, planned or switched for it. What RoomControl held off for the planning goes back on, a home battery goes back to its own mode, and a trial night gives its switch back. Settings and what was learned are kept; switching it on carries on where it was.
 

@@ -193,6 +193,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_get_debug)
     websocket_api.async_register_command(hass, ws_plan)
     websocket_api.async_register_command(hass, ws_battery)
+    websocket_api.async_register_command(hass, ws_energy_overview)
     websocket_api.async_register_command(hass, ws_battery_sim)
     websocket_api.async_register_command(hass, ws_battery_test)
     websocket_api.async_register_command(hass, ws_forget_learned)
@@ -376,6 +377,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _data(hass)["planner"] = planner
     await planner.async_load()
     planner.start()
+    from .energy_meter import EnergyMeter  # noqa: PLC0415
+
+    meter = EnergyMeter(hass)
+    _data(hass)["meter"] = meter
+    await meter.async_load()
+    meter.start()
     from .battery import HomeBattery  # noqa: PLC0415
 
     battery = HomeBattery(hass)
@@ -466,6 +473,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             planner.shutdown()
         if (battery := _data(hass).pop("battery", None)) is not None:
             battery.shutdown()
+        if (meter := _data(hass).pop("meter", None)) is not None:
+            meter.shutdown()
         nspanel_stop(hass)
         if (tags := _data(hass).pop("tags", None)) is not None:
             tags.stop()
@@ -936,6 +945,18 @@ def ws_get_debug(
     else:
         result["entries"] = entity.debug_log(msg.get("limit", 300))
     connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/energy_overview"})
+@callback
+def ws_energy_overview(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Energy → Overzicht: the house now and today, rooms, phases, base load."""
+    meter = _data(hass).get("meter")
+    connection.send_result(msg["id"], meter.overview() if meter is not None else {})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/battery"})
