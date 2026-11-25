@@ -14,7 +14,7 @@ General setting "energy":
  "car_name": "Audi A3", "battery_kwh": 8.8,
  "soc_sensor": sensor (%), "charging_sensor": entity, "plug_sensor": entity,  # optional
  "price_kwh": 0.25,              # fixed price per kWh (without a price sensor)
- "history_days": 365}            # how long charging sessions are kept (0: forever)
+ "history_days": 730}            # how long charging sessions are kept (0: forever)
 
 Charging sessions (Store "roomcontrol.ev_sessions"): [{"start", "end", "kwh"
 (the charger's use, the estimate added up), "grid_kwh" / "solar_kwh" (the
@@ -412,7 +412,7 @@ class Energy:
         self._store.async_delay_save(data, 5)
 
     def _prune(self) -> None:
-        days = _num(_cfg(self.hass).get("history_days"), 365)
+        days = _num(_cfg(self.hass).get("history_days"), 730)
         if days > 0:
             since = (dt_util.utcnow() - timedelta(days=days)).isoformat()
             self.sessions = [s for s in self.sessions if (s.get("end") or "") >= since]
@@ -592,8 +592,8 @@ class Energy:
 
     def history(self) -> dict[str, Any]:
         """Totals for today (the running session included), this month, the
-        last 30 and 365 days, and the sessions of the last 365 days, newest
-        first, each with its average grid price."""
+        last 30 and 365 days, and every session kept (the running one too),
+        newest first, each with its average grid price."""
         now = dt_util.now()
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         month = today.replace(day=1)
@@ -630,8 +630,9 @@ class Energy:
             "today": total(after(today)), "month": total(after(month)),
             "days30": total(after(now - timedelta(days=30))), "days365": total(year),
             "all": total(self.sessions),
-            "days": _num(_cfg(self.hass).get("history_days"), 365),
-            "sessions": [with_price(r) for r in reversed(year)][:500],
+            "days": _num(_cfg(self.hass).get("history_days"), 730),
+            # every session kept (the panel's week / month / year), newest first
+            "sessions": [with_price(r) for r in reversed(rows)],
         }
 
     def status(self) -> dict[str, Any]:
