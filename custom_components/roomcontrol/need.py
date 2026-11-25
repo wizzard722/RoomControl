@@ -86,7 +86,8 @@ def predict(firsts: dict[date, int], use: dict[str, Any] | None = None, which: s
             blocks: list[Any] | None = None) -> dict[str, Any]:
     """{"week": [{"q", "learned"} × 7 (Mon–Sun)], "learned", "days", "hours": [[share] × 24] × 7}."""
     today = dt_util.as_local(dt_util.utcnow()).date()
-    seen = [d for d in [*(firsts or {}), *(date.fromisoformat(k) for k in (use or {}) if _iso(k))] if d <= today]
+    keys = [k for k, v in (use or {}).items() if which != "e" or which in (v or {})]
+    seen = [d for d in [*(firsts or {}), *(date.fromisoformat(k) for k in keys if _iso(k))] if d <= today]
     first_day = min(seen) if seen else today
     days = max(0, (today - first_day).days)
     per = [[q for d, q in firsts.items() if d.weekday() == wd] for wd in range(7)]

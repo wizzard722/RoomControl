@@ -2,6 +2,11 @@
 
 ## 3.0.10
 
+### Planning: a coffee maker's short use is learned, and shown per time slot
+- Making a cup draws power for less than a minute: too short to count as a run, so a coffee maker stayed at "nothing seen yet". RoomControl now also counts per quarter of an hour the energy above standby; a quarter with at least 3 Wh above standby counts as used. **On while in use** learns from this (heat map, time slot suggestion), and **Add device** recognises such a device as On while in use.
+- Each time slot of **On while in use** shows what was learned in it, e.g. "learned: mostly 07:00–08:00" (or "seen so far: …", "nothing seen yet"), and below the time slots: "Seen outside your time slots: Mon–Fri 06:00–07:00; Sat–Sun 21:00–22:00."
+- Counting per quarter starts with this version.
+
 ### Solar forecast back sooner after a restart
 - After a restart Home Assistant's solar forecast integration may not be ready yet, and the expected sun stayed away from the **Next 24 hours** chart (and from planning) for up to 15 minutes. While the forecast gives nothing, RoomControl now asks again every minute; once it has it, every 15 minutes as before.
 - Still no forecast after 30 minutes: the chart says "No solar forecast: check the solar forecast integration (general settings → Energy)."

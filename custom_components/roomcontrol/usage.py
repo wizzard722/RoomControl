@@ -37,7 +37,8 @@ def _fmt(q: int) -> str:
     return f"{q // 4:02d}:{q % 4 * 15:02d}"
 
 
-def usage(offpay: Any, key: str) -> dict[str, Any] | None:
+def usage(offpay: Any, key: str, which: str | None = None) -> dict[str, Any] | None:
+    """`which`: the kind of use to look at ("all", "big", "e"); default by the device's kind."""
     learner = offpay.learning.learners.get(key)
     if learner is None:
         return None
@@ -47,8 +48,11 @@ def usage(offpay: Any, key: str) -> dict[str, Any] | None:
     use = learner.data.get("use") or {}
     if not use:
         return {"kind": kind, "enough": False, "days": 0}
-    which = "big" if kind == "warm" else "all"
-    first = dt_util.parse_datetime(min(use) + "T00:00:00")
+    which = which or ("big" if kind == "warm" else "all")
+    days_with = [d for d, v in use.items() if which in (v or {})] if which == "e" else list(use)
+    if not days_with:
+        return {"kind": kind, "enough": False, "days": 0}
+    first = dt_util.parse_datetime(min(days_with) + "T00:00:00")
     today = dt_util.as_local(dt_util.utcnow()).date()
     first_day = first.date() if first else today
     span = (today - first_day).days

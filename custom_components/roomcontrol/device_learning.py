@@ -14,7 +14,9 @@ Per device (key "<area id>|<part key>", e.g. "keuken|switch:switch.vaatwasser"):
   per local hour (last 60 days, "YYYY-MM-DDTHH"), for offpay.py;
 - kind: guessed from the pattern (guess_kind), the user's choice wins;
 - use: per day the quarters of an hour it was in use (last USE_DAYS days),
-  for usage.py.
+  for usage.py: "all" (a run), "big" (a run clearly bigger than usual) and
+  "e" (the quarter used at least USE_WH above standby: also the short peaks of
+  a coffee maker making a cup, which are too short to count as a run).
 
 A new device first replays the history Home Assistant still has of its
 power sensor (recorder), so it doesn't start from nothing. Kept in
@@ -46,6 +48,7 @@ SIG_POINTS = 20
 MAX_GAP = 1800  # s: a longer gap (sensor away) is not counted as energy
 DAYS_KEPT = 60
 USE_DAYS = 42  # six weeks of use per quarter of an hour
+USE_WH = 3.0  # Wh above standby in a quarter of an hour that counts as use ("e")
 MONTHS_KEPT = 24
 
 
@@ -135,9 +138,34 @@ class Learner:
         sb = 0.0 if sb is None else sb
         return max(sb + 15.0, sb * 1.5, 20.0)
 
+    def _add_quarters(self, t0: float, w0: float, t1: float) -> None:
+        """Energy above standby per quarter of an hour; a quarter reaching USE_WH is "e" use."""
+        sb = self.data.get("standby") or 0.0
+        above = w0 - sb
+        if above <= 0:
+            return
+        qe = self.data.setdefault("qe", {})
+        t = t0
+        while t < t1:
+            end = min(t1, t - t % 900 + 900)
+            local = dt_util.as_local(dt_util.utc_from_timestamp(t))
+            day, q = local.strftime("%Y-%m-%d"), local.hour * 4 + local.minute // 15
+            k = f"{day}|{q}"
+            before = qe.get(k, 0.0)
+            qe[k] = round(before + above * (end - t) / 3600, 3)
+            if before < USE_WH <= qe[k]:
+                used = self.data["use"].setdefault(day, {"all": [], "big": []}).setdefault("e", [])
+                if q not in used:
+                    used.append(q)
+            t = end
+        if len(qe) > 8:  # only the quarters still being filled are needed
+            for old in sorted(qe)[:-8]:
+                qe.pop(old, None)
+
     def _add_energy(self, t0: float, w0: float, t1: float) -> float:
         if t1 <= t0 or t1 - t0 > MAX_GAP:
             return 0.0
+        self._add_quarters(t0, w0, t1)
         kwh = w0 * (t1 - t0) / 3_600_000
         local = dt_util.as_local(dt_util.utc_from_timestamp(t0))
         days, months, hours = self.data["days"], self.data["months"], self.data["hours"]

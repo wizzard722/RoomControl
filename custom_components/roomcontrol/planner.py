@@ -96,6 +96,19 @@ def _short_often(cycles: list[dict[str, Any]]) -> bool:
     return minutes[len(minutes) // 2] <= 15 and len(recent) / 14 >= 2
 
 
+def _cups(data: dict[str, Any]) -> bool:
+    """Short peaks several times a day that are mostly too short to be a run (a coffee
+    maker making cups): on at least 3 of the last 14 days, on average 2 quarters a day."""
+    since = (dt_util.as_local(dt_util.utcnow()) - timedelta(days=14)).strftime("%Y-%m-%d")
+    days = {d: v.get("e") or [] for d, v in (data.get("use") or {}).items() if d >= since and isinstance(v, dict)}
+    seen = [d for d, qs in days.items() if qs]
+    if len(seen) < 3:
+        return False
+    quarters = sum(len(days[d]) for d in seen)
+    runs = sum(1 for c in data.get("cycles") or [] if str(c.get("start") or "")[:10] >= since)
+    return quarters / len(seen) >= 2 and runs < quarters / 2
+
+
 def auto_of(conf: dict[str, Any]) -> bool:
     """Does RoomControl switch it? Old settings: mode cheap or sun."""
     if isinstance(conf.get("auto"), bool):
@@ -267,7 +280,7 @@ class Planner:
         learners = getattr(getattr(offpay, "learning", None), "learners", {}) or {}
         learner = learners.get(learn_key) if learn_key else None
         use = (learner.data.get("use") if learner else None) or {}
-        which = "big" if kind == "warm" else "all"
+        which = "big" if kind == "warm" else "e" if kind == "use" else "all"
         blocks = self.blocks.get(key, [])
         firsts = first_uses(use, which, blocks, self.needs.get(key, []))
         out = predict(firsts, use, which, blocks)
@@ -527,7 +540,7 @@ class Planner:
         if offpay is None or not learn_key or learn_key not in learners:
             return []
         try:
-            u = usage(offpay, learn_key) or {}
+            u = usage(offpay, learn_key, "e") or {}
         except Exception:  # noqa: BLE001 - a proposal must never break planning
             return []
         if not u.get("enough"):
@@ -752,7 +765,9 @@ class Planner:
                 continue
             learner = learners.get(sw["learn_key"])
             guess = None
-            if learner is not None and learner.data.get("cycles") and offpay is not None:
+            if learner is not None and offpay is not None and _cups(learner.data):
+                guess = "use"
+            elif learner is not None and learner.data.get("cycles") and offpay is not None:
                 guess = "use" if _short_often(learner.data.get("cycles") or []) else \
                     {"warm": "warm", "task": "task"}.get(offpay.kind(sw["learn_key"])[0], "timer")
             kind = guess or "timer"
