@@ -1,5 +1,10 @@
 # Release notes
 
+## 3.0.8
+
+### EV charger: Charged appears after the first charge
+- The **Charged** card on the EV charger page is hidden until the car has charged at least once (a finished charge, or one going on now), instead of showing empty bars and 0 kWh.
+
 ## 3.0.7
 
 ### Energy page: only Overview and Planning
