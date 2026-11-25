@@ -2,6 +2,10 @@
 
 ## 3.0.8
 
+### Energy page: Rooms on its own tab
+- The Energy page has three tabs: **Overview · Planning · Rooms**. **Rooms now · today** (power now, the biggest users, kWh and cost today, the unassigned difference) moved from Overview to **Rooms**.
+- Tap a room to open that room. On Overview, **Per room** on the House tile opens the Rooms tab.
+
 ### EV charger: Charged appears after the first charge
 - The **Charged** card on the EV charger page is hidden until the car has charged at least once (a finished charge, or one going on now), instead of showing empty bars and 0 kWh.
 
