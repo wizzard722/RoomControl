@@ -194,6 +194,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_plan)
     websocket_api.async_register_command(hass, ws_battery)
     websocket_api.async_register_command(hass, ws_energy_overview)
+    websocket_api.async_register_command(hass, ws_energy_bill)
     websocket_api.async_register_command(hass, ws_battery_sim)
     websocket_api.async_register_command(hass, ws_battery_test)
     websocket_api.async_register_command(hass, ws_forget_learned)
@@ -957,6 +958,20 @@ def ws_energy_overview(
     """Energy → Overzicht: the house now and today, rooms, phases, base load."""
     meter = _data(hass).get("meter")
     connection.send_result(msg["id"], meter.overview() if meter is not None else {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/energy_bill", vol.Optional("month"): vol.Match(r"^\d{4}-\d{2}$")}
+)
+@websocket_api.async_response
+async def ws_energy_bill(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Energy → Rekening: a month so far, the forecast and the advance payment."""
+    meter = _data(hass).get("meter")
+    connection.send_result(msg["id"], await meter.async_bill(msg.get("month")) if meter is not None else {})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/battery"})

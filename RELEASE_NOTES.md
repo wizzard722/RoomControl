@@ -2,6 +2,15 @@
 
 ## 2.5.0
 
+### Energy → Bill (new)
+- New tab **Bill** on the Energy page, per month (‹ › to earlier months):
+  - **so far**: electricity (taken at the price you pay at each moment, minus what returning brought), gas and fixed costs;
+  - **expected for the whole month** (so far plus the average day of the last 14 days for the days to come) against your **advance payment**, e.g. "± € 28 a month too low";
+  - a chart of the cost added up per day with the forecast and the advance payment as dashed lines;
+  - use: kWh taken and returned, m³ gas, the average day.
+- Settings: advance payment, fixed costs per month (standing charges and grid costs minus the energy tax rebate) and gas price. Gas comes from the gas meter in Home Assistant's Energy dashboard; without one it is left out.
+- On a phone the Energy page's tabs now fit on one row.
+
 ### Energy → Overview (new)
 - The Energy page opens on a new tab **Overview**:
   - chips with the grid, the sun and the price now;

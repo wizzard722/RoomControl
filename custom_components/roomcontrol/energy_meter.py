@@ -14,9 +14,21 @@ power and that of each metered part, the last 7 nights averaged.
 
 General setting "energy" → "fuse_a": the main fuse per phase (default 25 A),
 for the phase bars.
+
+Energy → Rekening (step 7b), general setting "energy" → "bill":
+ {"termijn": € a month (the advance payment),
+  "fixed_month": € a month (standing charges, grid costs, minus the energy
+                 tax rebate; may be negative),
+  "gas_price": € per m³}
+A month = electricity (per day: taken × the price then − returned × the
+feed-in price then) + the fixed costs (per day of the month) + gas (the gas
+meter of Home Assistant's Energy dashboard, m³ per day × the gas price).
+The forecast for the whole month: so far plus the average day of the last
+14 days for each day still to come.
 """
 from __future__ import annotations
 
+import calendar
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -235,6 +247,97 @@ class EnergyMeter:
             "rooms": room_rows, "base": base,
             "upcoming": self._upcoming(), "recent": self._recent(),
         }
+
+    # ── the bill ───────────────────────────────────────────────────────────
+
+    async def _gas_days(self, start: datetime, end: datetime) -> tuple[dict[str, float], bool]:
+        """m³ per local day from the Energy dashboard's gas meter(s), and whether there is one."""
+        try:
+            from homeassistant.components.energy.data import async_get_manager  # noqa: PLC0415
+
+            manager = await async_get_manager(self.hass)
+            ids = {s["stat_energy_from"] for s in (manager.data or {}).get("energy_sources") or []
+                   if s.get("type") == "gas" and s.get("stat_energy_from")}
+        except Exception:  # noqa: BLE001 - no Energy dashboard
+            return {}, False
+        if not ids:
+            return {}, False
+        try:
+            from homeassistant.components.recorder import get_instance  # noqa: PLC0415
+            from homeassistant.components.recorder.statistics import statistics_during_period  # noqa: PLC0415
+
+            stats = await get_instance(self.hass).async_add_executor_job(
+                statistics_during_period, self.hass, start, end, ids, "hour", None, {"change"})
+        except Exception:  # noqa: BLE001
+            return {}, True
+        out: dict[str, float] = {}
+        for rows in stats.values():
+            for r in rows:
+                if r.get("change") is None:
+                    continue
+                t = dt_util.utc_from_timestamp(r["start"]) if isinstance(r["start"], (int, float)) else r["start"]
+                key = dt_util.as_local(t).strftime("%Y-%m-%d")
+                out[key] = round(out.get(key, 0.0) + max(0.0, r["change"]), 4)
+        return out, True
+
+    async def async_bill(self, month: str | None = None) -> dict[str, Any]:
+        """One month (YYYY-MM, default this one): per day electricity, gas and
+        fixed costs, the total so far, the forecast and the advance payment."""
+        cfg = _cfg(self.hass).get("bill") or {}
+        now = dt_util.as_local(dt_util.utcnow())
+        this_month = now.strftime("%Y-%m")
+        month = month or this_month
+        year, mon = (int(x) for x in month.split("-"))
+        days_in = calendar.monthrange(year, mon)[1]
+        first = now.replace(year=year, month=mon, day=1, hour=0, minute=0, second=0, microsecond=0)
+        current = month == this_month
+        upto = now.day if current else days_in
+        termijn = cfg.get("termijn") if isinstance(cfg.get("termijn"), (int, float)) else None
+        fixed = float(cfg.get("fixed_month") or 0.0)
+        gas_price = cfg.get("gas_price") if isinstance(cfg.get("gas_price"), (int, float)) else None
+        gas_from = first - timedelta(days=14) if current else first
+        gas, has_gas = await self._gas_days(dt_util.as_utc(gas_from), dt_util.as_utc(first + timedelta(days=days_in)))
+        rows = []
+        for d in range(1, days_in + 1):
+            key = f"{month}-{d:02d}"
+            day = self.days.get(key) or {}
+            elec = None if "cost_in" not in day else round(day.get("cost_in", 0.0) - day.get("earn_out", 0.0), 3)
+            m3 = gas.get(key)
+            rows.append({"day": d, "elec": elec, "kwh_in": round(day.get("grid_in", 0.0), 2) if day else None,
+                         "kwh_out": round(day.get("grid_out", 0.0), 2) if day else None,
+                         "gas_m3": m3, "gas": None if m3 is None or gas_price is None else round(m3 * gas_price, 3),
+                         "fixed": round(fixed / days_in, 3), "future": current and d > upto})
+        past = [r for r in rows if not r["future"]]
+        elec_so_far = round(sum(r["elec"] or 0.0 for r in past), 2)
+        gas_so_far = round(sum(r["gas"] or 0.0 for r in past), 2) if gas_price is not None and has_gas else None
+        fixed_so_far = round(fixed / days_in * upto, 2)
+        total = round(elec_so_far + (gas_so_far or 0.0) + fixed_so_far, 2)
+        measured = [k for k, v in sorted(self.days.items()) if "cost_in" in v]
+        out: dict[str, Any] = {
+            "month": month, "current": current, "days": days_in, "upto": upto, "rows": rows,
+            "elec": elec_so_far, "gas": gas_so_far, "fixed": fixed_so_far, "total": total,
+            "kwh_in": round(sum(r["kwh_in"] or 0 for r in past), 1), "kwh_out": round(sum(r["kwh_out"] or 0 for r in past), 1),
+            "gas_m3": round(sum(r["gas_m3"] or 0 for r in past), 2) if has_gas else None,
+            "has_gas": has_gas, "gas_price": gas_price, "termijn": termijn, "fixed_month": fixed,
+            "since": measured[0] if measured else None,
+            "months": sorted({k[:7] for k in self.days} | {this_month}),
+        }
+        if current:
+            # The average day of the last 14 days (electricity + gas), for the days to come.
+            last = [(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(1, 15)]
+            elec_days = [self.days[k].get("cost_in", 0.0) - self.days[k].get("earn_out", 0.0) for k in last if "cost_in" in self.days.get(k, {})]
+            gas_days = [gas[k] * gas_price for k in last if k in gas and gas_price is not None]
+            per_day = (sum(elec_days) / len(elec_days) if elec_days else 0.0) + (sum(gas_days) / len(gas_days) if gas_days else 0.0)
+            left = days_in - upto
+            # today is only partly gone: count what is left of it too
+            frac = 1 - (now.hour * 60 + now.minute) / 1440
+            out["forecast"] = round(total + per_day * (left + frac) + fixed / days_in * left, 2) if elec_days else None
+            out["per_day"] = round(per_day, 2) if elec_days else None
+            if out["forecast"] is not None and termijn is not None:
+                out["diff"] = round(out["forecast"] - termijn, 2)
+        elif termijn is not None:
+            out["diff"] = round(total - termijn, 2)
+        return out
 
     def _upcoming(self) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
