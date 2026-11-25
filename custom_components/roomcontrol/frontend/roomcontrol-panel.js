@@ -6733,6 +6733,7 @@ static{this.styles=[Me,o`
 
       .sw-auto { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--secondary-background-color, #f2f3f5); display: flex; flex-direction: column; gap: 8px; }
       .sw-auto-row { display: flex; align-items: center; gap: 12px; }
+      .sw-auto ha-entity-picker.hpk { flex: none; }
       .sw-auto-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
       .sw-auto-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
       .sw-num { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
