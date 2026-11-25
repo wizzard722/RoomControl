@@ -1,5 +1,14 @@
 # Release notes
 
+## 3.0.3
+
+### Planning: "On while in use" for devices like a coffee maker
+- New kind **On while in use** in Energy → Planning: the device is on during your time slots and off in between, for a device that only uses power when you use it (coffee maker) but wastes standby the rest of the day. There is no price planning for it.
+- Several time slots a day, in the usual time slot editor (name, days, start, end, Normal / Leave / Vacation), plus **On earlier** (minutes before a slot starts).
+- RoomControl proposes the time slots from the device's learned use (its usage windows per weekday, e.g. "Mon–Fri 07:00–07:30 and 12:30–13:00; Sat–Sun 08:30–10:00"), with **Use these** / **Replace mine with these**.
+- **Add device** recognises such a device (short runs of at most 15 minutes, at least twice a day) and takes the learned time slots straight away.
+- Without time slots it is not switched (advice only). Switched on by hand in between, it stays on until the next change.
+
 ## 3.0.2
 
 ### Planning: devices switch automatically, RoomControl predicts when they are needed

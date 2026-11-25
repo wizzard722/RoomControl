@@ -12,7 +12,10 @@ Inside the general setting "energy":
  "plan": {"car" | "sw:<switch>": {"auto": bool,     # RoomControl switches it (else advice)
                                "mode": "cheap" | "sun",
                                "planned": true,      # a room switch chosen for planning
-                               "kind": "warm" | "timer" | "charge" | "task",
+                               "kind": "warm" | "timer" | "charge" | "task" | "use",
+                               "slots": [slot],      # "use": on during these time slots
+                                                     # (light-bundle slot format)
+                               "lead": min,          # "use": on this many minutes earlier
                                "watts": n,           # its power (default: learned / the room's)
                                "ready": "HH:MM",     # old: ready by; now only the fallback
                                                      # while the need is not learned yet
@@ -27,7 +30,10 @@ Devices:
   something warm (hours a day), "timer" is on for a while in the best
   stretch (the device starts when it gets power), "charge" needs kWh, and
   "task" (dishwasher, washing machine) runs its usual program in the best
-  stretch (the plug stays off until then).
+  stretch (the plug stays off until then), and "use" (coffee maker) is on
+  during the user's time slots and off in between (no price planning: it
+  uses power when it is used); RoomControl proposes the slots from its
+  learned use (usage.py).
 - the home battery is shown (battery.py plans it; status() → "battery").
 "auto" on: RoomControl switches the device; off: advice only (the best stretch
 is shown). Old settings without "auto": mode "cheap" or "sun" means on.
@@ -66,7 +72,7 @@ SUN_ON = 0.5  # share of its power the surplus must cover to switch on
 SUN_OFF = 0.2
 MIN_SWITCH = timedelta(minutes=5)
 MODES = ("cheap", "sun")
-SWITCH_KINDS = ("warm", "timer", "charge", "task")
+SWITCH_KINDS = ("warm", "timer", "charge", "task", "use")
 PLAN_ON = ("price", "co2", "both")
 KEEP_RUNS = 400
 
@@ -77,6 +83,17 @@ def _cfg(hass: HomeAssistant) -> dict[str, Any]:
 
 def _num(value: Any, default: float) -> float:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else default
+
+
+def _short_often(cycles: list[dict[str, Any]]) -> bool:
+    """Used briefly, several times a day (coffee maker): runs of at most 15 minutes
+    (median), on average at least 2 a day over the last two weeks."""
+    since = (dt_util.utcnow() - timedelta(days=14)).isoformat()
+    recent = [c for c in cycles if isinstance(c, dict) and str(c.get("start") or "") >= since]
+    if len(recent) < 10:
+        return False
+    minutes = sorted(c.get("min") or 0 for c in recent)
+    return minutes[len(minutes) // 2] <= 15 and len(recent) / 14 >= 2
 
 
 def auto_of(conf: dict[str, Any]) -> bool:
@@ -176,7 +193,9 @@ class Planner:
             conf = self._conf(sw["key"])
             kind = conf.get("kind") if conf.get("kind") in SWITCH_KINDS else "warm"
             kw = sw["kw"]
-            if kind == "task":
+            if kind == "use":
+                hours, kwh = 0.0, 0.0
+            elif kind == "task":
                 hours = _num(conf.get("hours"), sw["task_hours"] or 2.0)
                 kwh = sw["task_kwh"] if sw["task_kwh"] else kw * hours
             elif kind == "charge":
@@ -380,6 +399,8 @@ class Planner:
 
         key = dev["key"]
         conf = self._conf(key)
+        if dev["kind"] == "use":
+            return self._plan_use(dev, conf, now)
         mode = conf.get("mode") if conf.get("mode") in MODES else "cheap"
         auto = auto_of(conf)
         controllable = bool(dev.get("entity"))
@@ -429,6 +450,80 @@ class Planner:
                              sum(r["co2"] or 0 for r in rows if best["start"] <= r["start"] < best["end"])
                              / max(1, sum(1 for r in rows if best["start"] <= r["start"] < best["end"])))}
         return plan
+
+    # ── "use": on during the user's time slots ─────────────────────────────
+
+    def _use_slots(self, conf: dict[str, Any]) -> list[dict[str, Any]]:
+        from .slots import mode_slots  # noqa: PLC0415
+
+        return mode_slots([x for x in conf.get("slots") or [] if isinstance(x, dict)],
+                          self.hass.data.get(DOMAIN, {}).get("vacation"))
+
+    def _use_on(self, slots: list[dict[str, Any]], lead_min: float, when: datetime,
+                phase: str | None = None, sun_down: bool | None = None) -> bool:
+        """Is one of the slots running at `when` (or within the lead time after it)?"""
+        from .slots import slot_part  # noqa: PLC0415
+
+        local = dt_util.as_local(when)
+        if phase is None:
+            from .switch import _sun_phase  # noqa: PLC0415
+
+            phase, sun_down = _sun_phase(self.hass)
+        moments = [local, local + timedelta(minutes=lead_min)] if lead_min > 0 else [local]
+        return any(slot_part(x, t, phase, bool(sun_down)) is not None for x in slots for t in moments)
+
+    def _use_next(self, slots: list[dict[str, Any]], lead_min: float, now: datetime) -> dict[str, str] | None:
+        """The current or next stretch it is on (start, end), looked for in 5 minute steps up to 8 days;
+        schemer / donker ahead are guessed from the hour (dark from 18:00 to 07:00)."""
+        def guess(t: datetime) -> tuple[str, bool]:
+            h = dt_util.as_local(t).hour
+            return ("dark", True) if h >= 18 or h < 7 else ("light", False)
+
+        step = timedelta(minutes=5)
+        t = now.replace(minute=now.minute // 5 * 5, second=0, microsecond=0)
+        start = None
+        for i in range(8 * 288):
+            at = now if i == 0 else t + step * i
+            on = self._use_on(slots, lead_min, at, *guess(at)) if i else self._use_on(slots, lead_min, at)
+            if on and start is None:
+                start = at
+            elif not on and start is not None:
+                return {"start": start.isoformat(), "end": at.isoformat()}
+        return {"start": start.isoformat(), "end": (t + step * 8 * 288).isoformat()} if start else None
+
+    def _use_proposal(self, learn_key: str | None) -> list[dict[str, Any]]:
+        """The usage windows learned per weekday (usage.py), as "use" time slots."""
+        from .usage import usage  # noqa: PLC0415
+
+        offpay = self.hass.data.get(DOMAIN, {}).get("offpay")
+        learners = getattr(getattr(offpay, "learning", None), "learners", {}) or {}
+        if offpay is None or not learn_key or learn_key not in learners:
+            return []
+        try:
+            u = usage(offpay, learn_key) or {}
+        except Exception:  # noqa: BLE001 - a proposal must never break planning
+            return []
+        if not u.get("enough"):
+            return []
+        out = []
+        for g in u.get("groups") or []:
+            for w in g.get("windows") or []:
+                a, _sep, b = w.partition("–")
+                if a and b and a != b:
+                    out.append({"days": list(g["days"]), "start": {"type": "time", "time": a},
+                                "end": {"type": "time", "time": b}})
+        return out
+
+    def _plan_use(self, dev: dict[str, Any], conf: dict[str, Any], now: datetime) -> dict[str, Any]:
+        slots = self._use_slots(conf)
+        lead = _num(conf.get("lead"), 0.0)
+        controllable = bool(dev.get("entity"))
+        auto = conf["auto"] if isinstance(conf.get("auto"), bool) else True
+        nxt = self._use_next(slots, lead, now) if slots else None
+        return {"key": dev["key"], "mode": "use", "mode_used": "use" if controllable and auto and slots else "advice", "auto": auto,
+                "controllable": controllable, "lead": lead, "slots_count": len(slots),
+                "window_end": (nxt or {}).get("end") or now.isoformat(),
+                "block": nxt, "need": None, "proposal": self._use_proposal(dev.get("learn_key"))}
 
     @callback
     def plan(self) -> None:
@@ -507,50 +602,54 @@ class Planner:
             self._plugged = plugged
         for key, plan in list(self.plans.items()):
             dev = plan["device"]
-            if not plan.get("controllable") or plan["mode_used"] not in ("cheap", "sun"):
+            if not plan.get("controllable") or plan["mode_used"] not in ("cheap", "sun", "use"):
                 self._running.pop(key, None)
                 if self._want.pop(key, None) is False and plan.get("controllable") and self._is_on(dev["entity"]) is False:
                     self.hass.async_create_task(self._switch(dev, True, "block"))  # no longer automatic: back on
                 continue
-            block = plan.get("block")
-            in_block = False
-            if block:
-                b_start, b_end = dt_util.parse_datetime(block["start"]), dt_util.parse_datetime(block["end"])
-                in_block = b_start is not None and b_end is not None and b_start <= now < b_end
-                if in_block and key not in self._running:
-                    self._running[key] = {**block, "window_end": plan["window_end"]}
-                    from .need import prune  # noqa: PLC0415
+            if plan["mode_used"] == "use":
+                want = self._use_on(self._use_slots(self._conf(key)), _num(self._conf(key).get("lead"), 0.0), now)
+                in_block = want
+            else:
+                block = plan.get("block")
+                in_block = False
+                if block:
+                    b_start, b_end = dt_util.parse_datetime(block["start"]), dt_util.parse_datetime(block["end"])
+                    in_block = b_start is not None and b_end is not None and b_start <= now < b_end
+                    if in_block and key not in self._running:
+                        self._running[key] = {**block, "window_end": plan["window_end"]}
+                        from .need import prune  # noqa: PLC0415
 
-                    self.blocks[key] = prune([*self.blocks.get(key, []), [block["start"], block["end"]]], now,
-                                             lambda b: b[1])[-200:]
+                        self.blocks[key] = prune([*self.blocks.get(key, []), [block["start"], block["end"]]], now,
+                                                 lambda b: b[1])[-200:]
+                        self._save()
+                if not in_block and key in self._running:
+                    run = self._running.pop(key)
+                    self._note_run(key, dev, run, now)
+                    self.done[key] = run.get("window_end") or plan["window_end"]
+                    if dev["kind"] == "car" and car_charging:
+                        self._finishing.add(key)
                     self._save()
-            if not in_block and key in self._running:
-                run = self._running.pop(key)
-                self._note_run(key, dev, run, now)
-                self.done[key] = run.get("window_end") or plan["window_end"]
-                if dev["kind"] == "car" and car_charging:
-                    self._finishing.add(key)
-                self._save()
-                self._planned_at = None
-            want = in_block
-            if plan["mode_used"] == "sun" and not want:
-                surplus = self._surplus_w()
-                was = self._want.get(key, False)
-                own = dev["kw"] * 1000 if self._is_on(dev["entity"]) else 0.0
-                if surplus is not None:
-                    spare = surplus + own
-                    want = spare >= SUN_ON * dev["kw"] * 1000 if not was else spare >= SUN_OFF * dev["kw"] * 1000
-                else:
-                    want = was
-                last = self._switched.get(key)
-                if want != was and last is not None and now - last < MIN_SWITCH:
-                    want = was
+                    self._planned_at = None
+                want = in_block
+                if plan["mode_used"] == "sun" and not want:
+                    surplus = self._surplus_w()
+                    was = self._want.get(key, False)
+                    own = dev["kw"] * 1000 if self._is_on(dev["entity"]) else 0.0
+                    if surplus is not None:
+                        spare = surplus + own
+                        want = spare >= SUN_ON * dev["kw"] * 1000 if not was else spare >= SUN_OFF * dev["kw"] * 1000
+                    else:
+                        want = was
+                    last = self._switched.get(key)
+                    if want != was and last is not None and now - last < MIN_SWITCH:
+                        want = was
             if key in self._finishing:
                 if car_charging:
                     want = True
                 else:
                     self._finishing.discard(key)
-            if self._want.get(key) is False and not want and key != "car":
+            if self._want.get(key) is False and not want and key != "car" and dev["kind"] != "use":
                 last = self._switched.get(key)
                 if self._is_on(dev["entity"]) and (last is None or now - last >= timedelta(minutes=2)):
                     if key not in self._held:
@@ -610,7 +709,8 @@ class Planner:
             learner = learners.get(sw["learn_key"])
             guess = None
             if learner is not None and learner.data.get("cycles") and offpay is not None:
-                guess = {"warm": "warm", "task": "task"}.get(offpay.kind(sw["learn_key"])[0], "timer")
+                guess = "use" if _short_often(learner.data.get("cycles") or []) else \
+                    {"warm": "warm", "task": "task"}.get(offpay.kind(sw["learn_key"])[0], "timer")
             kind = guess or "timer"
             need = self.need(sw["key"], kind, sw["learn_key"])
             out.append({"key": sw["key"], "entity": sw["entity"], "area": sw["area"], "name": sw["name"],
@@ -618,7 +718,8 @@ class Planner:
                         "runs": len(learner.data.get("cycles") or []) if learner else 0,
                         "hours": round(sw["task_hours"], 2) if sw["task_hours"] else None,
                         "need": {"week": [fmt_q(w["q"]) if w["learned"] else None for w in need["week"]],
-                                 "days": need["days"], "learned": need["learned"]}})
+                                 "days": need["days"], "learned": need["learned"]},
+                        "proposal": self._use_proposal(sw["learn_key"]) if kind == "use" else []})
         out.sort(key=lambda c: (not c["known"], -c["runs"], c["name"].lower()))
         return out
 
