@@ -3,7 +3,7 @@
 ## 2.5.0
 
 ### EV charger fixes
-- The **Charged** card now shows **Week · Month · Year** (calendar periods) instead of Today / This month / 30 days / 365 days, with ‹ › to go back to earlier weeks, months and years, and a bar chart of the kWh per day (week, month) or per month (year), split into sun and grid. Tap a bar to see that day or month: its totals and its charging sessions. The list below shows the charging sessions of the period chosen.
+- The **Charged** card now shows **Week · Month · Year** (calendar periods) instead of Today / This month / 30 days / 365 days. The choice and ‹ › (to go back to earlier weeks, months and years) sit just above the list of charging sessions, whose heading names the period with its year (e.g. "Charging sessions November 2026"); the card's title names it too. Above them: a bar chart of the kWh per day (week, month) or per month (year), split into sun and grid. Tap a bar to see that day or month: its totals and its charging sessions. The list below shows the charging sessions of the period chosen.
 - Charging sessions are now kept for 2 years by default (was 1 year), so this year can be compared with last year.
 - **Cheapest time to charge** now shows the price you actually pay in that stretch; the expected sun is shown apart. It used to show a price with the sun already taken off (e.g. € 0.32 instead of € 0.35).
 - The cost of a charge now counts own sun at what it would have brought when fed in (the money you miss), not as free, and **charging now** is worked out the same way, so both costs compare fairly. Choosing the cheapest stretch uses the same sum.
