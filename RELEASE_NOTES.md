@@ -11,6 +11,11 @@
 ### Room switches: no empty space under the temperature sensor
 - Fixed: a heater's temperature sensor picker (room → Settings → Switches) left a large empty space under it.
 
+### Rooms: change the order of the settings cards
+
+- A room's Settings tab has an "Order" button next to the search field. It shows the cards as a list: drag a card by its handle (mouse or finger) or use the up/down arrows, then tap Done.
+- The order applies to all rooms (general setting `room_card_order`); cards a room does not use are skipped, and new cards keep their default place. "Default order" resets it.
+
 ### Alarm: Dim is part of "Not on motion"
 
 - In a room's alarm settings (Armed Home), the Dim switch now sits inside the "Not on motion" option card, below its explanation, instead of as a separate row under the options. It still only shows when "Not on motion" is chosen.
