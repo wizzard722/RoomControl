@@ -192,6 +192,9 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_call_service)
     websocket_api.async_register_command(hass, ws_get_debug)
     websocket_api.async_register_command(hass, ws_plan)
+    websocket_api.async_register_command(hass, ws_battery)
+    websocket_api.async_register_command(hass, ws_battery_sim)
+    websocket_api.async_register_command(hass, ws_battery_test)
     websocket_api.async_register_command(hass, ws_forget_learned)
     websocket_api.async_register_command(hass, ws_smoke_clear)
     websocket_api.async_register_command(hass, ws_restore_auto)
@@ -373,6 +376,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _data(hass)["planner"] = planner
     await planner.async_load()
     planner.start()
+    from .battery import HomeBattery  # noqa: PLC0415
+
+    battery = HomeBattery(hass)
+    _data(hass)["battery"] = battery
+    await battery.async_load()
+    battery.start()
     tags = Tags(hass)
     _data(hass)["tags"] = tags
     tags.start()
@@ -455,6 +464,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             energy.stop()
         if (planner := _data(hass).pop("planner", None)) is not None:
             planner.shutdown()
+        if (battery := _data(hass).pop("battery", None)) is not None:
+            battery.shutdown()
         nspanel_stop(hass)
         if (tags := _data(hass).pop("tags", None)) is not None:
             tags.stop()
@@ -925,6 +936,64 @@ def ws_get_debug(
     else:
         result["entries"] = entity.debug_log(msg.get("limit", 300))
     connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/battery"})
+@callback
+def ws_battery(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Energy → Thuisbatterij: live values, the plan and the last simulation."""
+    battery = _data(hass).get("battery")
+    connection.send_result(msg["id"], battery.status() if battery is not None else {})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/battery_sim",
+        vol.Optional("days", default=90): vol.All(int, vol.Range(min=7, max=365)),
+        vol.Optional("sizes"): [
+            {vol.Required("kwh"): vol.Coerce(float), vol.Required("kw"): vol.Coerce(float),
+             vol.Optional("price"): vol.Any(None, vol.Coerce(float))}
+        ],
+    }
+)
+@websocket_api.async_response
+async def ws_battery_sim(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Run the simulation: what would these batteries have brought?"""
+    battery = _data(hass).get("battery")
+    if battery is None:
+        connection.send_error(msg["id"], "not_ready", "RoomControl is not loaded")
+        return
+    connection.send_result(msg["id"], await battery.async_simulate(msg["days"], msg.get("sizes")))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/battery_test",
+        vol.Required("action"): vol.In(["charge", "discharge", "self", "idle"]),
+        vol.Optional("power", default=500): vol.All(int, vol.Range(min=0, max=20000)),
+    }
+)
+@websocket_api.async_response
+async def ws_battery_test(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Test the battery's steering for one minute, then back to its own mode."""
+    battery = _data(hass).get("battery")
+    if battery is None:
+        connection.send_error(msg["id"], "not_ready", "RoomControl is not loaded")
+        return
+    await battery.async_test(msg["action"], msg["power"])
+    connection.send_result(msg["id"], {"success": True})
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/plan"})

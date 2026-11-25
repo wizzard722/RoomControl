@@ -2,6 +2,14 @@
 
 ## 2.5.0
 
+### Energy → Home battery (new)
+- New tab **Home battery** on the Energy page.
+- **What would a battery bring?** Worked out hour by hour on your own use and sun from RoomControl's phase sensors (hourly statistics), checked against Home Assistant's Energy dashboard (how well they match is shown; with no statistics on the phase sensors the dashboard is used), and your prices per hour. Compares 5 kWh · 2.4 kW, 10 kWh · 3.6 kW and a battery of your own, each in the maker's own-use mode and with RoomControl's plan, over 30, 60 or 90 days and per year; with a purchase price, the payback time. Uses your battery details (efficiency, reserve, wear).
+- **Link the battery**: level (%) and power sensor; steering by a number (power), a select for the mode plus a number for the power, or a script per action (with the power as variable). Test buttons: charge 1 min at 500 W, feed in 1 min, back to own use.
+- **Battery details**: capacity, max. charging and discharging, round-trip efficiency, level range, reserve for a power cut (default 20 %), wear (default € 0.03/kWh).
+- **Strategy**: Off, Own use, or Price (optimal): every quarter of an hour RoomControl plans the next 24 hours (expected use per hour of the day minus the solar forecast, the prices) and holds the level for dearer hours, charges from the grid when that pays after losses and wear (can be switched off) and feeds in when the price is high. Optionally it may not discharge into the car. The plan shows the expected level per hour and **why** in plain words.
+- What the battery brought this month is measured from its power and the price it replaced.
+
 ### Energy → Planning (new)
 - New page **Energy** (lightning button in the top bar) with the tab **Planning**:
   - **Next 24 hours**: the price per hour with the expected sun, a CO₂ strip (green = clean) when a CO₂ sensor is chosen, a time every 4 hours, and a bar per planned device.
