@@ -2,6 +2,12 @@
 
 ## 3.0.10
 
+### Room switches: off after a time, a heater off at a temperature
+- Every switch of a room (Settings → Switches) can go **off after a time**: after so many minutes on (also when switched on by hand or by an automation), counted from switching on or from the last motion in the room.
+- **Kind of device**: Normal or **Heater** (infrared panel, electric heater). A heater can go **off at a temperature**: choose a temperature sensor and the temperature; once the room reaches it, RoomControl switches it off. RoomControl never switches it on again; switched on while it is already that warm, it stays on until the temperature has dropped and reached it again. For a heater "off after a time" is the safety limit, and **Window or door open** (the room's door/window sensors) can switch it off too.
+- The room's Overview tile shows it ("off at 16:05", "19.4 → 21.0 °C · off by 21:46 at the latest"), Coming up shows when it goes off (for a heater an estimate from the last half hour's rise), and What happened gives the reason.
+- A switch that may never go off is never switched off by these either.
+
 ### Rooms: a prediction model per room
 - RoomControl now learns per room whether it will be in use soon. Every minute it takes a snapshot — the time slot (workday or weekend, hour), who of the household is home, how long ago the last motion was, motion in linked rooms, light bundles on, media playing and dark outside — and a quarter later it notes whether the room was really in use (motion or a lamp on). Two small, explainable models learn from this (logistic regression; light enough for a Raspberry Pi). Kept across restarts.
 - Room → **Analysis** shows a new card **Prediction · today**: in use now and probably for how much longer (from the remembered sessions), or the chance in the next quarter; a timeline of today with the predicted chance per quarter and what really happened (motion, light bundles on); the coming hours; **what weighs most now** (e.g. "Paul home +35 %", "Motion less than 5 min ago +28 %"); and **how certain** it is, per day.

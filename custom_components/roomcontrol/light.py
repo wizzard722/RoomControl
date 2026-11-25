@@ -1656,6 +1656,24 @@ class RoomControlLight(LightEntity):
         # The running grace period.
         if self._grace_until is not None:
             add(dt_util.as_local(self._grace_until), "grace_off", self._bundle_names(self._idle_lamps()))
+        # Room switches that go off by themselves: after a time, a heater at its temperature.
+        try:
+            from .room_switches import room_switches as _rs  # noqa: PLC0415
+
+            rsw = self.hass.data.get(DOMAIN, {}).get("room_switches")
+            for sw in _rs(self._room):
+                st = self.hass.states.get(sw["entity_id"])
+                if st is None or st.state != "on" or not sw["may_off"]:
+                    continue
+                name = st.attributes.get("friendly_name") or sw["entity_id"]
+                if sw["off_after"] and sw["off_after_from"] == "on":
+                    add(dt_util.as_local(st.last_changed + timedelta(minutes=sw["off_after"])), "switch_timer", [name])
+                if sw["kind"] == "heater" and sw["off_at_temp"] is not None and rsw is not None:
+                    eta = rsw.heater_eta(sw["entity_id"], sw["off_at_temp"])
+                    if eta is not None:
+                        add(dt_util.as_local(eta), "switch_temp", [f"{name} ({sw['off_at_temp']:.1f} °C)".replace(".", ",")])
+        except Exception:  # noqa: BLE001
+            pass
         # The prediction model (room option predict.soon).
         if self._predict_on("soon") and (pr := self._predictor()) is not None:
             try:

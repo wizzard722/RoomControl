@@ -26,12 +26,23 @@ chosen for it (default: All off, nobody home and smoke):
 - "vacation_home" / "vacation_away": while vacation at home / elsewhere is
                  on (switch.py "Vakantie"); back on when it ends or changes
                  to a kind the switch is not set for.
+- "window":      (a heater) one of the room's door/window sensors is open;
+                 not back on.
 A switch that may never go off ("may_off": false) is never switched off by
 RoomControl, also not by the smoke action's own list of switches.
+
+Off by itself (also when switched on by hand or by an automation):
+- "off_after": minutes; "off_after_from": "on" (default: since it went on)
+  | "motion" (since the last motion in the room, or since on if later);
+- "kind": "normal" | "heater" (an infrared panel, electric heater): with
+  "temp_sensor" and "off_at_temp" (°C) it goes off once the room reaches
+  that temperature. RoomControl never switches it on again: switched on
+  while it is already that warm, it stays on until the temperature has
+  dropped below and reached it again.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 from typing import Any
 
@@ -50,7 +61,8 @@ _LOGGER = logging.getLogger(__name__)
 CONF_SWITCHES = "switches"
 STANDBY_WINDOW = 120  # s after a plug "back on in standby" in which what wakes by itself goes off again
 IDLE_BACK_OFF = 30  # minutes at standby before a switch turned on by hand during its slot goes off again
-OFF_MOMENTS = ("all_off", "nobody_home", "room_away", "night", "slot", "smoke", "vacation_home", "vacation_away")
+OFF_MOMENTS = ("all_off", "nobody_home", "room_away", "night", "slot", "smoke", "vacation_home", "vacation_away", "window")
+SWITCH_KINDS = ("normal", "heater")
 DEFAULT_OFF_ON = ["all_off", "nobody_home", "smoke"]
 SWITCH_DOMAINS = ("switch.", "remote.")  # what a room's Switches may hold
 CONF_MEDIA_OFF_AWAY = "media_off_away"  # room option: media players off when nobody is home
@@ -64,6 +76,14 @@ async def async_turn(hass: HomeAssistant, entities: list[str], on: bool) -> None
         by_domain.setdefault(entity.split(".", 1)[0], []).append(entity)
     for domain, ids in by_domain.items():
         await hass.services.async_call(domain, "turn_on" if on else "turn_off", {ATTR_ENTITY_ID: ids}, blocking=True)
+
+
+def _temp(hass: HomeAssistant, sensor: str | None) -> float | None:
+    st = hass.states.get(sensor) if sensor else None
+    try:
+        return float(st.state) if st is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _awake(state: str | None) -> bool:
@@ -83,6 +103,11 @@ def room_switches(room: dict[str, Any] | None) -> list[dict[str, Any]]:
             "may_off": item.get("may_off", True) is not False,
             "back_on": item.get("back_on", True) is not False,
             "standby": item.get("back_on") == "standby",
+            "kind": item.get("kind") if item.get("kind") in SWITCH_KINDS else "normal",
+            "off_after": int(item["off_after"]) if isinstance(item.get("off_after"), (int, float)) and item["off_after"] > 0 else None,
+            "off_after_from": "motion" if item.get("off_after_from") == "motion" else "on",
+            "temp_sensor": item.get("temp_sensor") or None,
+            "off_at_temp": float(item["off_at_temp"]) if isinstance(item.get("off_at_temp"), (int, float)) else None,
             "off_on": list(dict.fromkeys("nobody_home" if m == "armed_away" else m for m in off_on if m in (*OFF_MOMENTS, "armed_away")))
             if isinstance(off_on, list) else list(DEFAULT_OFF_ON),
             "slots": [x for x in item.get("slots") or [] if isinstance(x, dict)],
@@ -171,6 +196,8 @@ class RoomSwitches:
         self._track_rooms: CALLBACK_TYPE | None = None
         self._sb_until: dict[str, Any] = {}  # media player / remote → until when it goes off again if it wakes
         self._sb_track: CALLBACK_TYPE | None = None
+        self._temp_armed: dict[str, bool] = {}  # heater: was below its temperature while on
+        self._temps: dict[str, list[tuple[float, float]]] = {}  # heater: (timestamp, °C) of the last half hour
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
@@ -346,8 +373,79 @@ class RoomSwitches:
                 self.hass.async_create_task(self.async_room_away(area))
 
     @callback
+    def _auto_off_tick(self) -> None:
+        """Off after a time, a heater off at its temperature or with a window open."""
+        now = dt_util.utcnow()
+        managed = managed_areas(self.hass)
+        lights = self.hass.data.get(DOMAIN, {}).get("entities", {})
+        todo: dict[str, list[str]] = {}
+        for room in self.hass.data.get(DOMAIN, {}).get("rooms", []):
+            area = room.get("area_id")
+            if area not in managed:
+                continue
+            for sw in room_switches(room):
+                entity = sw["entity_id"]
+                st = self.hass.states.get(entity)
+                on = st is not None and st.state == "on"
+                if not on:
+                    self._temp_armed.pop(entity, None)
+                    self._temps.pop(entity, None)
+                    continue
+                if not sw["may_off"]:
+                    continue
+                if sw["off_after"]:
+                    since = st.last_changed
+                    if sw["off_after_from"] == "motion" and (light := lights.get(area)) is not None:
+                        last = getattr(light, "_last_motion_at", None)
+                        try:
+                            moving = bool(light._own_motion())
+                        except Exception:  # noqa: BLE001
+                            moving = False
+                        if moving:
+                            since = now
+                        elif last is not None and last > since:
+                            since = last
+                    if now - since >= timedelta(minutes=sw["off_after"]):
+                        todo.setdefault("timer", []).append(entity)
+                        continue
+                if sw["kind"] != "heater":
+                    continue
+                if "window" in sw["off_on"] and any(
+                    (d := self.hass.states.get(s)) is not None and d.state == "on" for s in room.get("door_sensors", []) or []
+                ):
+                    todo.setdefault("window", []).append(entity)
+                    continue
+                temp = _temp(self.hass, sw["temp_sensor"])
+                if temp is None or sw["off_at_temp"] is None:
+                    continue
+                hist = [h for h in self._temps.get(entity, []) if now.timestamp() - h[0] <= 1800]
+                self._temps[entity] = [*hist, (now.timestamp(), temp)]
+                if temp < sw["off_at_temp"]:
+                    self._temp_armed[entity] = True
+                elif self._temp_armed.get(entity):
+                    self._temp_armed.pop(entity, None)
+                    todo.setdefault("temp", []).append(entity)
+        for why, entities in todo.items():
+            self.hass.async_create_task(async_switch_off(self.hass, entities, f"auto {why}"))
+
+    def heater_eta(self, entity: str, target: float) -> datetime | None:
+        """When a heater probably reaches its temperature, from the last half hour's rise."""
+        hist = self._temps.get(entity) or []
+        if len(hist) < 2:
+            return None
+        (t0, v0), (t1, v1) = hist[0], hist[-1]
+        if t1 - t0 < 300 or v1 <= v0 or v1 >= target:
+            return None
+        rate = (v1 - v0) / (t1 - t0)
+        return dt_util.utc_from_timestamp(t1 + (target - v1) / rate)
+
+    @callback
     def _slot_tick(self, _now: Any = None) -> None:
         """Switches with the moment "slot": off while one of their slots runs, back on after."""
+        try:
+            self._auto_off_tick()
+        except Exception:  # noqa: BLE001 - never break the other switching
+            _LOGGER.exception("Switches: off after a time / temperature failed")
         from .slots import mode_slots, slot_part  # noqa: PLC0415
         from .switch import _sun_phase  # noqa: PLC0415
 
