@@ -1,6 +1,6 @@
 # Release notes
 
-## 4.0.1
+## 4.0.1 – Sun & use axes
 
 ### Energy: the 24-hour chart gets axes and the expected use
 
