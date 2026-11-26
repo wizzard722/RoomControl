@@ -11,20 +11,26 @@ Room option "heating":
   "scope": "room" (own selector) | "house" (the general one),
   "selector": input_number / input_boolean (scope "room"),
   "schedules": [schedule.*, ...] in selector order (for names and preview),
-  "rules": {"armed_away": n, "vacation": n, "nobody": n} (value to switch to),
+  "rules": {"armed_away": n, "vacation": n, "nobody": n, "armed_home": n,
+            "holiday": n, "summer": n} (value to switch to),
   "nobody_h": hours nobody home before "nobody" applies (default 2),
   "tile": bool (Overview card, default True),
   "device": "electric" | "heatpump"}
 General setting "heating":
  {"selector": the house's selector, "names": {"1": "Normaal", ...},
-  "rules": {"armed_away": n, "vacation": n, "nobody": n}, "nobody_h": hours,
+  "rules": {...as for a room}, "nobody_h": hours,
+  "holiday_calendar": a calendar (e.g. the Holiday integration's) — a day
+  with an event on is a holiday; "holiday_dates": ["MM-DD", ...] own days,
+  "season_sensor": the Season integration's sensor (default sensor.season;
+  "summer" = summer),
   "gas_price": € per m³ (else Energy › bill gas price), "efficiency": % of
   the gas boiler (default 90), "gas_kwh": kWh per m³ (default 9.77),
   "cop": heat pump COP (default 3.5)}
 
-Rules: while the alarm is armed away (or armed vacation), RoomControl's
-vacation mode is "away", or nobody has been home for nobody_h hours, the
-selector is set to the rule's value (the first that applies, in that order).
+Rules, in this order (the first that applies wins): the alarm is armed away
+(or armed vacation), RoomControl's vacation mode is "away", nobody has been
+home for nobody_h hours, the alarm is armed home, today is a holiday, it is
+summer. The selector is set to that rule's value.
 The value it had is kept and put back when no rule applies any more, unless
 someone changed the selector in between.
 
@@ -52,7 +58,7 @@ DEFAULT_EFFICIENCY = 90.0
 DEFAULT_GAS_KWH = 9.77
 DEFAULT_COP = 3.5
 DEFAULT_NOBODY_H = 2.0
-RULE_ORDER = ("armed_away", "vacation", "nobody")
+RULE_ORDER = ("armed_away", "vacation", "nobody", "armed_home", "holiday", "summer")
 
 
 def heating_cfg(room: dict[str, Any] | None) -> dict[str, Any]:
@@ -67,6 +73,14 @@ def general_cfg(hass: HomeAssistant) -> dict[str, Any]:
 
 def _num(v: Any, default: float) -> float:
     return float(v) if isinstance(v, (int, float)) and v > 0 else default
+
+
+def season_sensor(hass: HomeAssistant) -> str | None:
+    """The Season integration's sensor: the one set, else sensor.season."""
+    chosen = general_cfg(hass).get("season_sensor")
+    if chosen:
+        return chosen
+    return "sensor.season" if hass.states.get("sensor.season") else None
 
 
 def gas_equivalent(hass: HomeAssistant, kwh: float, eur: float | None, device: str = "electric") -> dict[str, Any]:
@@ -160,7 +174,9 @@ class Heating:
         if self._watch:
             self._watch()
         settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
-        ids = [e for e in [settings.get(SETTING_ALARM_ENTITY)] if e] + list(household_persons(self.hass))
+        g = general_cfg(self.hass)
+        ids = [e for e in [settings.get(SETTING_ALARM_ENTITY), g.get("holiday_calendar"), season_sensor(self.hass)] if e]
+        ids += list(household_persons(self.hass))
         self._watch = async_track_state_change_event(self.hass, ids, self._on_state) if ids else None
         self._tick()
 
@@ -183,7 +199,16 @@ class Heating:
         elif self.nobody_since is None:
             self.nobody_since = now.isoformat()
         since = dt_util.parse_datetime(self.nobody_since) if self.nobody_since else None
+        g = general_cfg(hass)
+        cal = hass.states.get(g["holiday_calendar"]) if g.get("holiday_calendar") else None
+        today = dt_util.as_local(now).strftime("%m-%d")
+        dates = {str(d) for d in g.get("holiday_dates") or []}
+        season = hass.states.get(season_sensor(hass) or "")
         return {"armed_away": st is not None and st.state in ("armed_away", "armed_vacation"),
+                "armed_home": st is not None and st.state == "armed_home",
+                "holiday": (cal is not None and cal.state == "on") or today in dates,
+                "summer": season is not None and season.state == "summer",
+                "season": season.state if season is not None else None,
                 "vacation": hass.data.get(DOMAIN, {}).get("vacation") == "away",
                 "nobody_h": 0.0 if since is None else (now - since).total_seconds() / 3600}
 
@@ -316,5 +341,9 @@ def house_status(hass: HomeAssistant) -> dict[str, Any]:
         if climate or h:
             rooms.append({"area": r.get("area_id"), "climate": climate, "scope": h.get("scope", "room"), "selector": h.get("selector")})
     found = sorted(s.entity_id for s in hass.states.async_all("climate") if s.entity_id.startswith("climate.roommind_"))
+    ctl = hass.data.get(DOMAIN, {}).get("heating_ctl") or Heating(hass)
+    sit = ctl.situations()
     return {"selector": sel, "value": selector_value(hass, sel), "min": lo, "max": hi, "rooms": rooms,
+            "now": {k: sit[k] for k in ("armed_away", "armed_home", "holiday", "summer", "season", "vacation")},
+            "season_sensor": season_sensor(hass), "held": ctl.held.get(sel) if sel else None,
             "roommind": found, "month": gas_equivalent(hass, month["kwh"], month.get("eur"))}
