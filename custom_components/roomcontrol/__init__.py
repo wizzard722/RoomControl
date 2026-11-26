@@ -196,6 +196,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_battery)
     websocket_api.async_register_command(hass, ws_energy_overview)
     websocket_api.async_register_command(hass, ws_energy_overview2)
+    websocket_api.async_register_command(hass, ws_heating)
     websocket_api.async_register_command(hass, ws_energy_bill)
     websocket_api.async_register_command(hass, ws_energy_coach)
     websocket_api.async_register_command(hass, ws_battery_sim)
@@ -394,6 +395,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _data(hass)["predict"] = predictor
     await predictor.async_load()
     predictor.start()
+    from .heating import Heating  # noqa: PLC0415
+
+    heating = Heating(hass)
+    _data(hass)["heating_ctl"] = heating
+    await heating.async_load()
+    heating.start()
     tags = Tags(hass)
     _data(hass)["tags"] = tags
     tags.start()
@@ -483,6 +490,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if (meter := _data(hass).pop("meter", None)) is not None:
             meter.shutdown()
         nspanel_stop(hass)
+        if (heating := _data(hass).pop("heating_ctl", None)) is not None:
+            heating.shutdown()
         if (tags := _data(hass).pop("tags", None)) is not None:
             tags.stop()
         if (memory := _data(hass).pop("memory", None)) is not None:
@@ -609,6 +618,7 @@ PANEL_SERVICES = {
     "lock": ("lock", "unlock", "open"),
     "switch": ("turn_on", "turn_off"),  # a room's switches (room → Switches)
     "remote": ("turn_on", "turn_off"),  # a room's switches can be remotes (e.g. an NVIDIA Shield)
+    "climate": ("set_preset_mode", "set_temperature"),  # a room's heating (room → Heating)
 }
 
 
@@ -639,6 +649,8 @@ async def ws_call_service(
         known.update(c for c in room.get("covers", []) or [] if c)
         known.update(l.get("entity_id") for l in room.get("locks", []) or [] if isinstance(l, dict))
         known.update(sw.get("entity_id") for sw in room.get("switches", []) or [] if isinstance(sw, dict))
+        heat = room.get("heating") if isinstance(room.get("heating"), dict) else {}
+        known.add(heat.get("climate") or f"climate.roommind_{room.get('area_id')}")
     own = {
         s.entity_id for s in hass.states.async_all(domain)
         if s.attributes.get("roomcontrol_area") is not None
@@ -967,6 +979,28 @@ def ws_energy_overview(
     """Energy → Overzicht: the house now and today, rooms, phases, base load."""
     meter = _data(hass).get("meter")
     connection.send_result(msg["id"], meter.overview() if meter is not None else {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/heating", vol.Optional("area_id"): str,
+     vol.Optional("set"): vol.All(int, vol.Range(min=0, max=99))}
+)
+@websocket_api.async_response
+async def ws_heating(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Heating (RoomMind): a room's thermostat, schedule and heaters, or the
+    house; "set": choose schedule n (sets the room's or the house's selector)."""
+    from .heating import async_set_selector, house_status, room_status  # noqa: PLC0415
+
+    area = msg.get("area_id")
+    if "set" in msg:
+        sel = (room_status(hass, area) if area else house_status(hass)).get("selector")
+        if sel:
+            await async_set_selector(hass, sel, msg["set"])
+    connection.send_result(msg["id"], room_status(hass, area) if area else house_status(hass))
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/energy_overview2"})

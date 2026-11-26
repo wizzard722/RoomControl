@@ -1,0 +1,320 @@
+"""Heating with RoomMind: the schedule a room (or the house) uses, rules that
+switch it, and what an electric heater's power would have cost as gas.
+
+RoomMind (a separate integration) heats each room through its thermostat
+climate.roommind_<area>, following one or more schedule helpers; a selector
+(input_number, value 1 = first schedule, 2 = second, ...; or input_boolean:
+off = 1, on = 2) chooses the schedule. RoomControl only reads and sets those.
+
+Room option "heating":
+ {"climate": climate entity,
+  "scope": "room" (own selector) | "house" (the general one),
+  "selector": input_number / input_boolean (scope "room"),
+  "schedules": [schedule.*, ...] in selector order (for names and preview),
+  "rules": {"armed_away": n, "vacation": n, "nobody": n} (value to switch to),
+  "nobody_h": hours nobody home before "nobody" applies (default 2),
+  "tile": bool (Overview card, default True),
+  "device": "electric" | "heatpump"}
+General setting "heating":
+ {"selector": the house's selector, "names": {"1": "Normaal", ...},
+  "rules": {"armed_away": n, "vacation": n, "nobody": n}, "nobody_h": hours,
+  "gas_price": € per m³ (else Energy › bill gas price), "efficiency": % of
+  the gas boiler (default 90), "gas_kwh": kWh per m³ (default 9.77),
+  "cop": heat pump COP (default 3.5)}
+
+Rules: while the alarm is armed away (or armed vacation), RoomControl's
+vacation mode is "away", or nobody has been home for nobody_h hours, the
+selector is set to the rule's value (the first that applies, in that order).
+The value it had is kept and put back when no rule applies any more, unless
+someone changed the selector in between.
+
+Gas: heat = kWh × COP (electric: 1); m³ = heat ÷ (gas_kwh × efficiency).
+The kWh and their cost come from energy_meter (day "heat": the room switches
+of kind "heater").
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+import logging
+from typing import Any
+
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
+from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
+
+from .const import DOMAIN, SETTING_ALARM_ENTITY, SIGNAL_CONFIG_UPDATED, SIGNAL_VACATION
+
+_LOGGER = logging.getLogger(__name__)
+
+DEFAULT_EFFICIENCY = 90.0
+DEFAULT_GAS_KWH = 9.77
+DEFAULT_COP = 3.5
+DEFAULT_NOBODY_H = 2.0
+RULE_ORDER = ("armed_away", "vacation", "nobody")
+
+
+def heating_cfg(room: dict[str, Any] | None) -> dict[str, Any]:
+    h = (room or {}).get("heating")
+    return h if isinstance(h, dict) else {}
+
+
+def general_cfg(hass: HomeAssistant) -> dict[str, Any]:
+    h = hass.data.get(DOMAIN, {}).get("settings", {}).get("heating")
+    return h if isinstance(h, dict) else {}
+
+
+def _num(v: Any, default: float) -> float:
+    return float(v) if isinstance(v, (int, float)) and v > 0 else default
+
+
+def gas_equivalent(hass: HomeAssistant, kwh: float, eur: float | None, device: str = "electric") -> dict[str, Any]:
+    """kWh of electricity → heat, m³ of gas and what that gas would cost."""
+    g = general_cfg(hass)
+    cop = _num(g.get("cop"), DEFAULT_COP) if device == "heatpump" else 1.0
+    eff = _num(g.get("efficiency"), DEFAULT_EFFICIENCY) / 100
+    per_m3 = _num(g.get("gas_kwh"), DEFAULT_GAS_KWH)
+    price = g.get("gas_price")
+    if not isinstance(price, (int, float)):
+        bill = (hass.data.get(DOMAIN, {}).get("settings", {}).get("energy") or {}).get("bill") or {}
+        price = bill.get("gas_price") if isinstance(bill.get("gas_price"), (int, float)) else None
+    heat = kwh * cop
+    m3 = heat / (per_m3 * eff) if per_m3 * eff > 0 else 0.0
+    return {"kwh": round(kwh, 3), "heat": round(heat, 3), "m3": round(m3, 3),
+            "eur_el": None if eur is None else round(eur, 2),
+            "eur_gas": None if price is None else round(m3 * price, 2)}
+
+
+def selector_value(hass: HomeAssistant, entity: str | None) -> int | None:
+    st = hass.states.get(entity) if entity else None
+    if st is None:
+        return None
+    if entity.startswith("input_boolean."):
+        return 2 if st.state == "on" else 1 if st.state == "off" else None
+    try:
+        return int(round(float(st.state)))
+    except (TypeError, ValueError):
+        return None
+
+
+def selector_range(hass: HomeAssistant, entity: str | None) -> tuple[int, int]:
+    st = hass.states.get(entity) if entity else None
+    if st is None or entity.startswith("input_boolean."):
+        return 1, 2
+    try:
+        lo = int(round(float(st.attributes.get("min", 1))))
+        hi = int(round(float(st.attributes.get("max", 3))))
+    except (TypeError, ValueError):
+        return 1, 3
+    return max(0, lo), max(lo, min(hi, lo + 19))
+
+
+async def async_set_selector(hass: HomeAssistant, entity: str, value: int) -> None:
+    if entity.startswith("input_boolean."):
+        await hass.services.async_call("input_boolean", "turn_on" if value >= 2 else "turn_off", {"entity_id": entity}, blocking=False)
+    else:
+        domain = entity.split(".", 1)[0]
+        await hass.services.async_call(domain, "set_value", {"entity_id": entity, "value": value}, blocking=False)
+
+
+class Heating:
+    """Switches the RoomMind schedule selectors by the rules."""
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+        self._store: Store[dict[str, Any]] = Store(hass, 1, f"{DOMAIN}.heating")
+        self.held: dict[str, dict[str, Any]] = {}  # selector → {"prev", "set", "rule"}
+        self.nobody_since: str | None = None
+        self._unsubs: list[CALLBACK_TYPE] = []
+        self._watch: CALLBACK_TYPE | None = None
+
+    async def async_load(self) -> None:
+        data = await self._store.async_load() or {}
+        self.held = {k: v for k, v in (data.get("held") or {}).items() if isinstance(v, dict)}
+        self.nobody_since = data.get("nobody_since") if isinstance(data.get("nobody_since"), str) else None
+
+    def _save(self) -> None:
+        self._store.async_delay_save(lambda: {"held": self.held, "nobody_since": self.nobody_since}, 10)
+
+    @callback
+    def start(self) -> None:
+        self._unsubs.append(async_track_time_interval(self.hass, self._tick, timedelta(seconds=60)))
+        self._unsubs.append(async_dispatcher_connect(self.hass, SIGNAL_VACATION, self._tick))
+        self._unsubs.append(async_dispatcher_connect(self.hass, SIGNAL_CONFIG_UPDATED, self._rewatch))
+        self._rewatch()
+
+    @callback
+    def shutdown(self) -> None:
+        for u in self._unsubs:
+            u()
+        self._unsubs.clear()
+        if self._watch:
+            self._watch()
+            self._watch = None
+
+    @callback
+    def _rewatch(self, *_: Any) -> None:
+        from .rooms import household_persons  # noqa: PLC0415
+
+        if self._watch:
+            self._watch()
+        settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
+        ids = [e for e in [settings.get(SETTING_ALARM_ENTITY)] if e] + list(household_persons(self.hass))
+        self._watch = async_track_state_change_event(self.hass, ids, self._on_state) if ids else None
+        self._tick()
+
+    @callback
+    def _on_state(self, _event: Event) -> None:
+        self._tick()
+
+    # ── what applies now ──────────────────────────────────────────────────
+
+    def situations(self, now: datetime | None = None) -> dict[str, Any]:
+        from .rooms import anyone_home  # noqa: PLC0415
+
+        hass = self.hass
+        now = now or dt_util.utcnow()
+        alarm = hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_ALARM_ENTITY)
+        st = hass.states.get(alarm) if alarm else None
+        home = anyone_home(hass)
+        if home:
+            self.nobody_since = None
+        elif self.nobody_since is None:
+            self.nobody_since = now.isoformat()
+        since = dt_util.parse_datetime(self.nobody_since) if self.nobody_since else None
+        return {"armed_away": st is not None and st.state in ("armed_away", "armed_vacation"),
+                "vacation": hass.data.get(DOMAIN, {}).get("vacation") == "away",
+                "nobody_h": 0.0 if since is None else (now - since).total_seconds() / 3600}
+
+    @staticmethod
+    def wanted(cfg: dict[str, Any], sit: dict[str, Any]) -> tuple[str | None, int | None]:
+        rules = cfg.get("rules") if isinstance(cfg.get("rules"), dict) else {}
+        for rule in RULE_ORDER:
+            value = rules.get(rule)
+            if not isinstance(value, (int, float)):
+                continue
+            if rule == "nobody":
+                if sit["nobody_h"] >= _num(cfg.get("nobody_h"), DEFAULT_NOBODY_H):
+                    return rule, int(value)
+            elif sit[rule]:
+                return rule, int(value)
+        return None, None
+
+    def targets(self) -> list[tuple[str, dict[str, Any], str | None]]:
+        """(selector, config with the rules, area or None for the house)."""
+        out = []
+        g = general_cfg(self.hass)
+        if g.get("selector"):
+            out.append((g["selector"], g, None))
+        for room in self.hass.data.get(DOMAIN, {}).get("rooms", []):
+            h = heating_cfg(room)
+            if h.get("scope", "room") == "room" and h.get("selector") and h["selector"] != g.get("selector"):
+                out.append((h["selector"], h, room.get("area_id")))
+        return out
+
+    @callback
+    def _tick(self, *_: Any) -> None:
+        sit = self.situations()
+        seen = set()
+        for sel, cfg, area in self.targets():
+            seen.add(sel)
+            rule, want = self.wanted(cfg, sit)
+            cur = selector_value(self.hass, sel)
+            held = self.held.get(sel)
+            if want is not None:
+                if held is None:
+                    self.held[sel] = {"prev": cur, "set": want, "rule": rule}
+                    if cur != want:
+                        self._set(sel, want, rule, area)
+                elif held.get("set") != want:
+                    held.update(set=want, rule=rule)
+                    self._set(sel, want, rule, area)
+            elif held is not None:
+                del self.held[sel]
+                if cur == held.get("set") and isinstance(held.get("prev"), int) and held["prev"] != cur:
+                    self._set(sel, held["prev"], "back", area)
+        for sel in [s for s in self.held if s not in seen]:
+            del self.held[sel]
+        self._save()
+
+    def _set(self, sel: str, value: int, rule: str | None, area: str | None) -> None:
+        _LOGGER.debug("Heating: %s → %s (%s)", sel, value, rule)
+        self.hass.async_create_task(async_set_selector(self.hass, sel, value))
+        areas = [area] if area else [r.get("area_id") for r in self.hass.data.get(DOMAIN, {}).get("rooms", [])
+                                     if heating_cfg(r).get("climate") and heating_cfg(r).get("scope") == "house"]
+        name = schedule_name(self.hass, area, value)
+        for a in areas:
+            light = self.hass.data.get(DOMAIN, {}).get("entities", {}).get(a)
+            if light is not None and hasattr(light, "_debug"):
+                light._debug.append({"at": dt_util.utcnow().isoformat(), "kind": "info",
+                                     "reason": f"heating_{rule or 'back'}", "bundles": [name], "items": [sel]})
+
+
+def schedule_name(hass: HomeAssistant, area: str | None, value: int) -> str:
+    """The name of schedule `value`: the room's schedule helper, else the general name."""
+    room = next((r for r in hass.data.get(DOMAIN, {}).get("rooms", []) if r.get("area_id") == area), None)
+    scheds = heating_cfg(room).get("schedules") or []
+    if 1 <= value <= len(scheds):
+        st = hass.states.get(scheds[value - 1])
+        if st is not None:
+            return st.attributes.get("friendly_name") or scheds[value - 1]
+    name = (general_cfg(hass).get("names") or {}).get(str(value))
+    return f"{value} · {name}" if name else str(value)
+
+
+def room_status(hass: HomeAssistant, area: str) -> dict[str, Any]:
+    """Panel: the room's thermostat, selector, schedules, heaters and gas."""
+    from .room_switches import room_switches  # noqa: PLC0415
+
+    room = next((r for r in hass.data.get(DOMAIN, {}).get("rooms", []) if r.get("area_id") == area), None) or {}
+    h = heating_cfg(room)
+    g = general_cfg(hass)
+    climate = h.get("climate") or (f"climate.roommind_{area}" if hass.states.get(f"climate.roommind_{area}") else None)
+    st = hass.states.get(climate) if climate else None
+    sel = g.get("selector") if h.get("scope") == "house" else h.get("selector")
+    lo, hi = selector_range(hass, sel)
+    heaters = [sw["entity_id"] for sw in room_switches(room) if sw["kind"] == "heater"]
+    meter = hass.data.get(DOMAIN, {}).get("meter")
+    energy = hass.data.get(DOMAIN, {}).get("energy")
+    status = (getattr(energy, "last_status", None) or {}) if energy else {}
+    parts = {p["key"]: p for p in ((status.get("rooms") or {}).get(area) or {}).get("parts") or []}
+    device = h.get("device") if h.get("device") in ("electric", "heatpump") else "electric"
+    totals = meter.heat_totals(area) if meter is not None else {}
+    held = (hass.data.get(DOMAIN, {}).get("heating_ctl") or Heating(hass)).held.get(sel or "") if sel else None
+    return {
+        "climate": climate,
+        "found": f"climate.roommind_{area}" if hass.states.get(f"climate.roommind_{area}") else None,
+        "thermostat": None if st is None else {
+            "state": st.state, "current": st.attributes.get("current_temperature"),
+            "target": st.attributes.get("temperature"), "action": st.attributes.get("hvac_action"),
+            "preset": st.attributes.get("preset_mode"), "presets": st.attributes.get("preset_modes") or [],
+            "override_until": st.attributes.get("override_until"), "window_open": st.attributes.get("window_open"),
+            "presence_away": st.attributes.get("presence_away"), "name": st.attributes.get("friendly_name")},
+        "selector": sel, "value": selector_value(hass, sel), "min": lo, "max": hi,
+        "names": {str(v): schedule_name(hass, area, v) for v in range(max(1, lo), hi + 1)},
+        "held": held,
+        "heaters": [{"entity": e, "name": (hass.states.get(e).attributes.get("friendly_name") if hass.states.get(e) else e),
+                     "watts": (parts.get(f"switch:{e}") or {}).get("watts"),
+                     "on": bool(hass.states.get(e) and hass.states.get(e).state == "on")} for e in heaters],
+        "gas": {k: gas_equivalent(hass, v["kwh"], v.get("eur"), device) for k, v in totals.items()},
+        "device": device,
+    }
+
+
+def house_status(hass: HomeAssistant) -> dict[str, Any]:
+    """Panel (general settings): the house selector and this month's heaters as gas."""
+    g = general_cfg(hass)
+    sel = g.get("selector")
+    lo, hi = selector_range(hass, sel)
+    meter = hass.data.get(DOMAIN, {}).get("meter")
+    month = (meter.heat_totals(None) if meter is not None else {}).get("month") or {"kwh": 0.0, "eur": None}
+    rooms = []
+    for r in hass.data.get(DOMAIN, {}).get("rooms", []):
+        h = heating_cfg(r)
+        climate = h.get("climate") or (f"climate.roommind_{r.get('area_id')}" if hass.states.get(f"climate.roommind_{r.get('area_id')}") else None)
+        if climate or h:
+            rooms.append({"area": r.get("area_id"), "climate": climate, "scope": h.get("scope", "room"), "selector": h.get("selector")})
+    found = sorted(s.entity_id for s in hass.states.async_all("climate") if s.entity_id.startswith("climate.roommind_"))
+    return {"selector": sel, "value": selector_value(hass, sel), "min": lo, "max": hi, "rooms": rooms,
+            "roommind": found, "month": gas_equivalent(hass, month["kwh"], month.get("eur"))}

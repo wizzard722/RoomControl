@@ -11,6 +11,17 @@
 ### Room switches: no empty space under the temperature sensor
 - Fixed: a heater's temperature sensor picker (room → Settings → Switches) left a large empty space under it.
 
+### Rooms: Heating (RoomMind)
+
+- A room has a new settings card **Heating** for [RoomMind](https://github.com/snazzybean/roommind) (or another thermostat):
+  - the room's thermostat (`climate.roommind_<room>` is found by itself), with the temperature now, the target and its status;
+  - **schedule choice**: RoomMind switches schedules with an `input_number` (1 = first schedule, …) or an `input_boolean` (off = 1, on = 2), for **this room** or for the **whole house**; the room's schedule helpers are listed in that order, with today's blocks, and a tap makes one active;
+  - **switching by RoomControl**: on Alarm Armed Away (or Armed Vacation), RoomControl's vacation mode, or nobody home for a number of hours, the selector goes to a chosen schedule and back afterwards (unless someone changed it in between); this shows in the room's Debug log;
+  - the room's **heater with power metering** (the room switches of kind "Heater") and **what it would have used as gas**: heat = kWh × COP (electric 1, heat pump e.g. 3.5), m³ = heat ÷ (9.77 kWh/m³ × 90 % boiler efficiency), with the cost of the electricity against the same heat from gas, for today, 7 days and the month.
+- The room's **Overview** gets a heating card: a gauge from now to the target, the schedule, Comfort · Eco · +1° · Back to schedule, the schedules to choose from and the heater's use today as gas.
+- **General settings › Heating**: the whole house's selector with a name per value, which rooms follow it, the house rules, and the gas comparison settings (gas price, boiler efficiency, energy in gas, heat pump COP) with this month's total.
+- The energy meter keeps heaters' kWh and cost per day; new websocket command `roomcontrol/heating`, and the panel may set a room thermostat's preset and temperature.
+
 ### Energy: new tab "Overview 2" (chronograph)
 
 - Energy has a new tab **Overview 2** next to Overview (which stays as it is), in a black-and-gold "instrument" style:

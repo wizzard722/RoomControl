@@ -173,7 +173,7 @@ class EnergyMeter:
             _add(day, "solar", sum(solar) / 1000 * hours)
         self._waste(day, rooms, hours, buy, now)
         self._per_hour(day, local.hour, hours, house_w, detail, solar)
-        self._per_part(day, rooms, hours)
+        self._per_part(day, rooms, hours, buy)
         if NIGHT[0] <= local.hour < NIGHT[1] and house_w is not None:
             night = self.nights.setdefault(local.strftime("%Y-%m-%d"), {"n": 0, "house": 0.0, "parts": {}, "names": {}})
             n = night["n"]
@@ -257,10 +257,19 @@ class EnergyMeter:
         if solar:
             hrs["solar"][hour] = round(hrs["solar"][hour] + sum(solar) / 1000 * hours, 5)
 
-    def _per_part(self, day: dict[str, Any], rooms: dict[str, Any], hours: float) -> None:
-        """kWh, minutes on and switch-ons of each room part."""
+    def _heaters(self) -> set[str]:
+        """"<area>|switch:<entity>" of the room switches of kind "heater"."""
+        from .room_switches import room_switches  # noqa: PLC0415
+
+        return {f"{r.get('area_id')}|switch:{sw['entity_id']}" for r in self.hass.data.get(DOMAIN, {}).get("rooms", [])
+                for sw in room_switches(r) if sw["kind"] == "heater"}
+
+    def _per_part(self, day: dict[str, Any], rooms: dict[str, Any], hours: float, buy: float | None = None) -> None:
+        """kWh, minutes on and switch-ons of each room part; heaters also into
+        "heat" (kWh and €, kept as long as the day)."""
         parts = day.setdefault("parts", {})
         names = day.setdefault("names", {})
+        heaters = self._heaters()
         for area, r in rooms.items():
             for p in r.get("parts") or []:
                 if p.get("kind") not in ("bundle", "switch", "meter") or p.get("watts") is None:
@@ -270,6 +279,11 @@ class EnergyMeter:
                 on = w >= 1
                 rec = parts.setdefault(key, {"kwh": 0.0, "min": 0.0, "n": 0})
                 rec["kwh"] = round(rec["kwh"] + w / 1000 * hours, 5)
+                if key in heaters and w > 0:
+                    heat = day.setdefault("heat", {}).setdefault(key, {"kwh": 0.0, "eur": 0.0})
+                    heat["kwh"] = round(heat["kwh"] + w / 1000 * hours, 5)
+                    if buy is not None:
+                        heat["eur"] = round(heat["eur"] + w / 1000 * hours * buy, 5)
                 if on:
                     rec["min"] = round(rec["min"] + hours * 60, 3)
                     if self._part_on.get(key) is False:
@@ -355,6 +369,25 @@ class EnergyMeter:
         if filled:
             day["filled"] = sorted(filled)
             self._save()
+
+    def heat_totals(self, area: str | None) -> dict[str, dict[str, Any]]:
+        """Heaters' kWh and € today, the last 7 days and this month (one room, or all)."""
+        now = dt_util.as_local(dt_util.utcnow())
+        today = now.strftime("%Y-%m-%d")
+        week = {(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)}
+        month = now.strftime("%Y-%m")
+        out = {k: {"kwh": 0.0, "eur": 0.0} for k in ("day", "week", "month")}
+        for key, day in self.days.items():
+            if not (key == today or key in week or key.startswith(month)):
+                continue
+            for pk, rec in (day.get("heat") or {}).items():
+                if area is not None and not pk.startswith(f"{area}|"):
+                    continue
+                for period, hit in (("day", key == today), ("week", key in week), ("month", key.startswith(month))):
+                    if hit:
+                        out[period]["kwh"] += rec.get("kwh", 0.0)
+                        out[period]["eur"] += rec.get("eur", 0.0)
+        return {k: {"kwh": round(v["kwh"], 3), "eur": round(v["eur"], 2)} for k, v in out.items()}
 
     def overview2(self) -> dict[str, Any]:
         """Energy → Overzicht 2: the hours of today, yesterday, the parts and the tips."""
