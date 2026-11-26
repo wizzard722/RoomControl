@@ -1794,7 +1794,7 @@ var e=globalThis,t=e.ShadowRoot&&(e.ShadyCSS===void 0||e.ShadyCSS.nativeShadow)&
       .hg-room span { flex: 1; } .hg-room small { color: var(--secondary-text-color); overflow-wrap: anywhere; }
       .hg-rule { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 48px; border-top: 1px solid var(--divider-color, rgba(0,0,0,.08)); padding-top: 6px; }
       .hg-rt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; } .hg-rt small { font-size: 12px; color: var(--secondary-text-color); }
-      .hg-rule > .hg-rt { flex: 1 1 220px; }
+      .hg-rule > .hg-rt { flex: 1 1 220px; min-width: 200px; }
       .hg-rule > select { flex: 1 1 180px; }
       .hg-rule select { min-height: 40px; max-width: 100%; border-radius: 8px; border: 1px solid var(--vr-border, #c9ced4); background: var(--card-background-color, #fff); color: var(--primary-text-color); font: inherit; font-size: 13px; padding: 0 8px; }
       .hg-now { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -5545,7 +5545,7 @@ static{this.styles=[Me,o`
       .ht-strip i { position: absolute; top: 0; bottom: 0; background: #e5533d; }
       .ht-today { flex: 1 0 100%; font-size: 11px; color: var(--secondary-text-color); }
       .ht-rule { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 48px; border-top: 1px solid var(--divider-color, rgba(0,0,0,.08)); padding-top: 6px; }
-      .ht-rule > .ht-rt { flex: 1 1 220px; }
+      .ht-rule > .ht-rt { flex: 1 1 220px; min-width: 200px; }
       .ht-rule > select { flex: 1 1 180px; }
       .ht-rule select { min-height: 40px; max-width: 100%; border-radius: 8px; border: 1px solid var(--vr-border, #c9ced4); background: var(--card-background-color, #fff); color: var(--primary-text-color); font: inherit; font-size: 13px; padding: 0 8px; }
       .ht-ac { border: 1px solid var(--vr-border, #e1e4e8); border-radius: 12px; overflow: hidden; }

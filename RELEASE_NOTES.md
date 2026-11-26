@@ -10,7 +10,7 @@
 
 ### Heating & cooling: layout
 
-- "Switching by RoomControl" is now **"Switch schedule automatically"**, with one line explaining it. On a phone the schedule choice sits below the situation, full width, instead of squeezing the text into a narrow column.
+- "Switching by RoomControl" is now **"Switch schedule automatically"**, with one line explaining it. On a phone the schedule choice sits below the situation, full width, instead of squeezing the text into a narrow column (with long schedule names the text was shown one letter per line); the situation text always keeps at least 200 px.
 - Fixed: large empty spaces under the entity pickers in General settings › Heating & cooling.
 
 ## 4.0.3 – More schedules
