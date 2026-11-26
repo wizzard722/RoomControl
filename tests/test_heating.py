@@ -210,7 +210,34 @@ async def main():
     st3["phases"]["L2"] = 2050  # 600 rooms + 250 unknown + 1200 outdoor unit
     u2 = HT.outdoor_split(hass, st3)[0]
     check("estimate minus the unknown: 1200 W", (u2["watts"], u2["unknown"]), (1200.0, 250))
-    del hass.data[DOMAIN]["heating_ctl"]; S(c1.entity_id, "off", {})
+    # split by fan speed: High (1.4) and Low (0.6) share 1200 W as 840 / 360
+    del hass.data[DOMAIN]["heating_ctl"]
+    hass.data[DOMAIN]["settings"]["heating"]["outdoor"][0]["units"] = [c1.entity_id, c2.entity_id]
+    S(c1.entity_id, "heat", {"hvac_action": "heating", "fan_mode": "high", "fan_modes": ["auto", "low", "mid", "high", "power"]})
+    S(c2.entity_id, "cool", {"hvac_action": "cooling", "fan_mode": "low", "fan_modes": ["auto", "low", "mid", "high", "power"]})
+    st3["phases"]["L2"] = 1800  # rooms 600 + 1200
+    u3 = HT.outdoor_split(hass, st3)[0]
+    check("split by fan speed", (u3["split"][c1.entity_id], u3["split"][c2.entity_id]), (840.0, 360.0))
+    check("weights: fan only 0.1, dry 0.7, auto by ΔT, unknown name by place",
+          (HT.fan_weight(types.SimpleNamespace(state="fan_only", attributes={})), HT.fan_weight(types.SimpleNamespace(state="dry", attributes={})),
+           HT.fan_weight(types.SimpleNamespace(state="heat", attributes={"fan_mode": "auto", "current_temperature": 19, "temperature": 21})),
+           HT.fan_weight(types.SimpleNamespace(state="heat", attributes={"fan_mode": "f3", "fan_modes": ["auto", "f1", "f2", "f3", "f4", "f5"]}))),
+          (0.1, 0.7, 1.2, 1.2))
+    # learning watts per unit and fan speed while it runs alone
+    ctl = HT.Heating(hass); hass.data[DOMAIN]["heating_ctl"] = ctl
+    S(c2.entity_id, "off", {})
+    t0 = dt_util.utcnow()
+    for k in range(12):  # 12 ticks alone at 900 W (high)
+        st3["phases"]["L2"] = 1500
+        with patch.object(HT.dt_util, "utcnow", return_value=t0 + timedelta(seconds=30 * k)):
+            HT.outdoor_split(hass, st3)
+    check("learned: c1 high ≈ 900 W", ctl.learned_w(c1.entity_id, "heat|high"), 900.0)
+    S(c2.entity_id, "cool", {"hvac_action": "cooling", "fan_mode": "low", "fan_modes": ["auto", "low", "mid", "high", "power"]})
+    st3["phases"]["L2"] = 1800
+    u4 = HT.outdoor_split(hass, st3)[0]
+    # c1 learned 900 (ratio 900/1.4), c2 not learned: 0.6 × 900/1.4 ≈ 386 → 1200 × 900/1286 ≈ 840
+    check("learned + scaled heuristic", (round(u4["split"][c1.entity_id]), round(u4["split"][c2.entity_id])), (840, 360))
+    del hass.data[DOMAIN]["heating_ctl"]; S(c1.entity_id, "off", {}); S(c2.entity_id, "off", {})
     hass.data[DOMAIN]["settings"]["heating"]["outdoor"].append({"name": "Buiten 1", "sensor": "sensor.buiten1", "phase": "L1", "units": []})
     check("metered outdoor units per phase (for the car estimate)", HT.metered_outdoor(hass, True), {"L1": 1200.0})
     rooms[0]["heating"]["devices"] = [c2.entity_id]

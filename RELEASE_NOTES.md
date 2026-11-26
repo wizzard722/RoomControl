@@ -8,6 +8,13 @@
 - **Maximum power (type plate)** – the field "Maximum" is renamed and explained: it is only a safety cap, the input power on the type plate (e.g. 2 kW), not a minimum.
 - **Indoor units** of an outdoor unit: only the air conditioners chosen in a room are listed (no more thermostats such as the Atag).
 
+### Heating & cooling: use per air conditioner
+
+- An outdoor unit's power (measured or estimated) is now split over its running indoor units **by fan speed** instead of equally: quiet/low 0.6, mid 1.0, high 1.4, power/turbo 1.8, auto 0.8–1.4 by how far the room is from its target, fan only 0.1, dry 0.7 (unknown fan mode names by their place in the device's list).
+- **Learned**: while an indoor unit runs alone on its outdoor unit, RoomControl learns its watts per mode and fan speed; learned values are used for the split (and scale the others). Shown per air conditioner ("Learned use: Heat · High ≈ 900 W").
+- **In the room**: each air conditioner shows its estimated use now ("≈ 840 W") in the Heating & cooling card and on Overview. On Overview the air conditioner is **folded** to one line (mode, temperatures, ≈ watts); the arrow unfolds the outdoor unit line ("MU3R19 ± 1.2 kW (estimated via L3) · today 2.4 kWh") and the quick buttons.
+- The gauge on Overview shows a heating/cooling target range ("→ 16.0°–27.0°") smaller, so it no longer runs over the arc.
+
 ### Heating & cooling: layout
 
 - "Switching by RoomControl" is now **"Switch schedule automatically"**, with one line explaining it. On a phone the schedule choice sits below the situation, full width, instead of squeezing the text into a narrow column (with long schedule names the text was shown one letter per line); the situation text always keeps at least 200 px.

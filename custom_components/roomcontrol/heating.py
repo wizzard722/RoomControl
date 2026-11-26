@@ -46,7 +46,14 @@ General setting "heating":
              (learned per hour of the day while none of the phase's
              estimated units runs: what is left on the phase then is the
              fridge, router, …), only while one of its indoor units heats or
-             cools; at most max_kw (a safety cap, the type plate's input). The power is split over the indoor units that run and
+             cools; at most max_kw (a safety cap, the type plate's input).
+             The power is split over the running indoor units by weight:
+             learned watts per unit and fan mode (Heating.ac_learn, learned
+             while the unit runs alone on its outdoor unit), else a weight
+             from the fan speed (fan_weight: quiet/low 0.6, mid 1.0, high
+             1.4, power/turbo 1.8, auto 0.8–1.4 by how far the room is from
+             its target, fan only 0.1, dry 0.7; unknown names by their place
+             in the device's fan modes). The power is split over the indoor units that run and
              added to their rooms (energy.py status: part kind "ac"; energy_meter
              day "ac": kWh, and while heating "heat" for the gas comparison)}
 
@@ -246,6 +253,44 @@ def _running(hass: HomeAssistant, climates: list[str]) -> tuple[list[str], dict[
     return run, heating
 
 
+_FAN_WORDS = (
+    (("quiet", "silent", "sleep", "stil", "low", "laag", "min"), 0.6),
+    (("mid", "medium", "middle", "normal"), 1.0),
+    (("high", "hoog"), 1.4),
+    (("power", "turbo", "max", "boost", "strong"), 1.8),
+)
+
+
+def fan_weight(st: Any) -> float:
+    """How much of the outdoor unit an indoor unit uses, from its mode and fan speed."""
+    if st is None:
+        return 1.0
+    a = st.attributes
+    if st.state == "fan_only" or a.get("hvac_action") == "fan":
+        return 0.1
+    if st.state == "dry" or a.get("hvac_action") == "drying":
+        return 0.7
+    fan = str(a.get("fan_mode") or "").lower()
+    if not fan:
+        return 1.0
+    if fan == "auto":
+        cur, tgt = a.get("current_temperature"), a.get("temperature")
+        if isinstance(cur, (int, float)) and isinstance(tgt, (int, float)):
+            return round(0.8 + 0.2 * min(3.0, abs(tgt - cur)), 2)
+        return 1.0
+    for words, w in _FAN_WORDS:
+        if any(x in fan for x in words):
+            return w
+    modes = [str(m).lower() for m in a.get("fan_modes") or [] if str(m).lower() != "auto"]
+    if fan in modes and len(modes) > 1:
+        return round(0.6 + 1.2 * modes.index(fan) / (len(modes) - 1), 2)
+    return 1.0
+
+
+def _fan_key(st: Any) -> str:
+    return f"{st.state}|{st.attributes.get('fan_mode') or ''}" if st is not None else ""
+
+
 def outdoor_split(hass: HomeAssistant, status: dict[str, Any]) -> list[dict[str, Any]]:
     """Each outdoor unit's power now (measured or estimated) and its split over
     the indoor units that run."""
@@ -301,11 +346,25 @@ def outdoor_split(hass: HomeAssistant, status: dict[str, Any]) -> list[dict[str,
                 if three and house is not None:
                     est = min(est, house - sum(on_phase.values()) - car_w - sum(metered.values()) - unk)
                 watts = min(max(0.0, est), _num(u.get("max_kw"), DEFAULT_OUTDOOR_KW) * 1000)
-        split = {c: round(watts / len(run), 1) for c in run} if watts and run else {}
+        split: dict[str, float] = {}
+        weights: dict[str, float] = {}
+        if watts and run:
+            states = {c: hass.states.get(c) for c in run}
+            if ctl is not None and len(run) == 1:
+                ctl.learn_ac(run[0], _fan_key(states[run[0]]), watts)
+            learned = {c: ctl.learned_w(c, _fan_key(states[c])) if ctl is not None else None for c in run}
+            heur = {c: fan_weight(states[c]) for c in run}
+            ratios = [learned[c] / heur[c] for c in run if learned[c] and heur[c]]
+            scale = sorted(ratios)[len(ratios) // 2] if ratios else None
+            for c in run:
+                weights[c] = learned[c] if learned[c] else (heur[c] * scale if scale else heur[c])
+            total = sum(weights.values()) or 1.0
+            split = {c: round(watts * weights[c] / total, 1) for c in run}
         out.append({"index": i, "name": u.get("name") or f"#{i + 1}", "mode": mode, "phase": ph if mode == "phase" else u.get("phase"),
                     "unknown": round(ctl.unknown_for(ph)) if ctl is not None and mode == "phase" else None,
                     "watts": None if watts is None else round(watts, 1), "split": split,
-                    "heating": {c: heating.get(c, False) for c in split}})
+                    "heating": {c: heating.get(c, False) for c in split},
+                    "weights": {c: round(w, 2) for c, w in weights.items()}})
     return out
 
 
@@ -374,6 +433,8 @@ class Heating:
         self._was_home_armed: bool | None = None
         self.dev_held: dict[str, dict[str, Any]] = {}  # climate → {"key", "prev", "set"}
         self.unknown: dict[str, list[float | None]] = {}  # phase → W per hour, while the ACs are off
+        self.ac_learn: dict[str, dict[str, list[float]]] = {}  # climate → {"<mode>|<fan>": [W, n]}
+        self._ac_at: dict[str, datetime] = {}
         self._unk_at: dict[str, datetime] = {}
 
     async def async_load(self) -> None:
@@ -382,10 +443,12 @@ class Heating:
         self.nobody_since = data.get("nobody_since") if isinstance(data.get("nobody_since"), str) else None
         self.dev_held = {k: v for k, v in (data.get("dev_held") or {}).items() if isinstance(v, dict)}
         self.unknown = {k: v for k, v in (data.get("unknown") or {}).items() if isinstance(v, list) and len(v) == 24}
+        self.ac_learn = {k: v for k, v in (data.get("ac_learn") or {}).items() if isinstance(v, dict)}
 
     def _save(self) -> None:
         self._store.async_delay_save(lambda: {"held": self.held, "nobody_since": self.nobody_since,
-                                              "dev_held": self.dev_held, "unknown": self.unknown}, 10)
+                                              "dev_held": self.dev_held, "unknown": self.unknown,
+                                              "ac_learn": self.ac_learn}, 10)
 
     @callback
     def start(self) -> None:
@@ -434,6 +497,27 @@ class Heating:
         h = dt_util.as_local(now).hour
         row[h] = round(watts if row[h] is None else row[h] * 0.95 + watts * 0.05, 1)
         self._save()
+
+    def learn_ac(self, climate: str, key: str, watts: float, now: datetime | None = None) -> None:
+        """An indoor unit running alone on its outdoor unit: its watts for this
+        mode and fan speed (moving average, at most every 25 s)."""
+        if not key or watts <= 0:
+            return
+        now = now or dt_util.utcnow()
+        last = self._ac_at.get(climate)
+        if last is not None and (now - last).total_seconds() < 25:
+            return
+        self._ac_at[climate] = now
+        rec = self.ac_learn.setdefault(climate, {}).setdefault(key, [watts, 0])
+        n = min(rec[1] + 1, 40)
+        rec[0] = round(rec[0] + (watts - rec[0]) / n, 1)
+        rec[1] = rec[1] + 1
+        self._save()
+
+    def learned_w(self, climate: str, key: str, min_n: int = 10) -> float | None:
+        """Learned watts of a unit for this mode and fan speed (after about 5 minutes alone)."""
+        rec = (self.ac_learn.get(climate) or {}).get(key)
+        return rec[0] if rec and rec[1] >= min_n else None
 
     def unknown_for(self, phase: str, now: datetime | None = None) -> float:
         row = self.unknown.get(phase) or []
@@ -699,7 +783,8 @@ def room_status(hass: HomeAssistant, area: str) -> dict[str, Any]:
         "via_roommind": bool(climate and climate.startswith("climate.roommind_") and st is not None),
         "explicit": isinstance(h.get("devices"), list),
         "schedule_ids": schedule_ids(hass, h.get("schedules") or []),
-        "devices": [device_status(hass, c, meter.device_today(area, c) if meter is not None else None) for c in room_devices(hass, room)],
+        "devices": [_with_share(device_status(hass, c, meter.device_today(area, c) if meter is not None else None), outdoor_now(hass))
+                    for c in room_devices(hass, room)],
         "outdoor": outdoor_now(hass),
         "suggest": [{"entity": c, "name": (hass.states.get(c).attributes.get("friendly_name") if hass.states.get(c) else None) or c}
                     for c in area_climates(hass, room)],
@@ -712,8 +797,20 @@ def outdoor_now(hass: HomeAssistant) -> list[dict[str, Any]]:
     energy = hass.data.get(DOMAIN, {}).get("energy")
     last = {u["index"]: u for u in ((getattr(energy, "last_status", None) or {}).get("outdoor") or [])} if energy else {}
     return [{**u, "watts": (last.get(i) or {}).get("watts"), "unknown": (last.get(i) or {}).get("unknown"),
+             "split": (last.get(i) or {}).get("split") or {}, "weights": (last.get(i) or {}).get("weights") or {},
              "unit": "W", "estimated": _unit_mode(u) == "phase"}
             for i, u in enumerate(outdoor_units(hass))]
+
+
+def _with_share(dev: dict[str, Any], units: list[dict[str, Any]]) -> dict[str, Any]:
+    """The device's outdoor unit and its share of it now."""
+    for u in units:
+        if dev["entity"] in (u.get("units") or []):
+            return {**dev, "outdoor": {"name": u.get("name"), "watts": u.get("watts"), "estimated": u.get("estimated"),
+                                       "phase": u.get("phase")},
+                    "share_w": (u.get("split") or {}).get(dev["entity"], 0.0) if u.get("watts") is not None else None,
+                    "weight": (u.get("weights") or {}).get(dev["entity"])}
+    return dev
 
 
 def device_status(hass: HomeAssistant, climate: str, today: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -735,6 +832,8 @@ def device_status(hass: HomeAssistant, climate: str, today: dict[str, Any] | Non
                                           "max": ts.attributes.get("max"), "step": ts.attributes.get("step"),
                                           "unit": ts.attributes.get("unit_of_measurement")},
         "today": today,
+        "learned": {k: round(v[0]) for k, v in ((hass.data.get(DOMAIN, {}).get("heating_ctl").ac_learn.get(climate) or {})
+                                              if hass.data.get(DOMAIN, {}).get("heating_ctl") is not None else {}).items() if v[1] >= 10},
     }
 
 
