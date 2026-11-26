@@ -1,5 +1,13 @@
 # Release notes
 
+## 4.0.3 – More schedules
+
+### Heating & cooling: add several schedules
+
+- Fixed: after adding a schedule, the picker "Add a schedule" kept it selected, so a second schedule could not be added. The picker is empty again after each choice; the same for "Add a device".
+- The schedules of a room can be put in order with **up / down arrows**: the first is value 1 of the schedule selector, the second value 2, and so on.
+- The hint under the schedules now says that Time slots edits a schedule (no longer "edit them in RoomMind").
+
 ## 4.0.2 – Your choice of devices
 
 ### Heating & cooling: devices only when you choose them
