@@ -45,6 +45,7 @@ A charging cable sensor that says "not connected" means: not charging.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import logging
 from typing import Any
 
 from homeassistant.const import STATE_ON
@@ -65,6 +66,7 @@ PHASES = ("L1", "L2", "L3")
 SUN_MISSING_MIN = 30  # minutes without a solar forecast before the panel says so
 CHARGE_EFFICIENCY = 0.9  # of the power drawn, this much ends up in the battery
 SOC_BRIDGE_MAX = 10.0  # percent points: a car reading further below the estimate wins
+_LOGGER = logging.getLogger(__name__)
 CHARGING_STATES = {"charging", "on", "true", "laden", "bezig met laden"}
 
 
@@ -656,7 +658,31 @@ class Energy:
         }
 
     def status(self) -> dict[str, Any]:
-        """For the panel: per room its power and phase; per phase its power; the car."""
+        """For the panel: per room its power and phase; per phase its power; the
+        car; the outdoor units of the air conditioners (heating.py), added to
+        the rooms of their indoor units (part kind "ac")."""
+        out = self._status()
+        try:
+            from .heating import device_room, outdoor_split  # noqa: PLC0415
+
+            units = outdoor_split(self.hass, out)
+        except Exception:  # noqa: BLE001 - never break the energy status
+            _LOGGER.exception("Energy: outdoor units failed")
+            units = []
+        rooms = out.get("rooms") or {}
+        for u in units:
+            for climate, w in u["split"].items():
+                area = device_room(self.hass, climate)
+                if area not in rooms:
+                    continue
+                st = self.hass.states.get(climate)
+                rooms[area]["parts"].append({"key": f"ac:{climate}", "kind": "ac", "name": (st.attributes.get("friendly_name") if st else None) or climate,
+                                             "watts": w, "source": "estimate" if u["mode"] == "phase" else "sensor", "unit": u["name"]})
+                rooms[area]["watts"] = round(rooms[area]["watts"] + w, 1)
+        out["outdoor"] = units
+        return out
+
+    def _status(self) -> dict[str, Any]:
         hass = self.hass
         cfg = _cfg(hass)
         three = int(_num(cfg.get("phases"), 1)) == 3
@@ -719,13 +745,16 @@ class Energy:
             return out
         phase_w = phases.get(charger_phase)
         on_phase = [(a, r["watts"]) for a, r in rooms.items() if r["phase"] == charger_phase]
-        est_phase = None if phase_w is None else max(0.0, (phase_w - sum(w for _, w in on_phase)) / 1000)
+        from .heating import metered_outdoor  # noqa: PLC0415
+
+        metered = metered_outdoor(hass, three)  # air conditioners' outdoor units with a meter
+        est_phase = None if phase_w is None else max(0.0, (phase_w - sum(w for _, w in on_phase) - metered.get(charger_phase, 0.0)) / 1000)
         # The whole house − every room: catches a room whose phase is not set
         # (it is then not on the charger's phase list). The lower one counts.
         no_phase = [(a, r["watts"]) for a, r in rooms.items() if three and not r["phase"] and r["watts"]]
         house_w = sum(v for v in phases.values() if v is not None) if phases and all(v is not None for v in phases.values()) else None
         rooms_w = sum(r["watts"] for r in rooms.values())
-        est_total = None if house_w is None or not three else max(0.0, (house_w - rooms_w) / 1000)
+        est_total = None if house_w is None or not three else max(0.0, (house_w - rooms_w - sum(metered.values())) / 1000)
         est_kw = est_phase if est_total is None or est_phase is None else min(est_phase, est_total)
         soc = None
         if (st := hass.states.get(cfg.get("soc_sensor") or "")) is not None:

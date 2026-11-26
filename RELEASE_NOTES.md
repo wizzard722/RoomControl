@@ -11,6 +11,12 @@
 ### Room switches: no empty space under the temperature sensor
 - Fixed: a heater's temperature sensor picker (room → Settings → Switches) left a large empty space under it.
 
+### Heating & cooling: outdoor units without a meter
+
+- An outdoor unit is measured with a **power meter** or, without one, **estimated via its phase**, the same way as the car charger: the use on its phase − the rooms on that phase − the car when it charges there − metered outdoor units on that phase (with 3 phases also at most the house − all rooms), only while one of its indoor units heats or cools, at most a maximum (default 2.5 kW).
+- Set up per room at the air conditioner (Heating & cooling › device › **Outdoor unit**: choose one, or "+ New outdoor unit"; name, power meter or phase + maximum, which other indoor units share it), and in General settings.
+- The outdoor units' power (measured or estimated) now counts for the **rooms** of their indoor units in Energy (room now and today, the room's kWh sensor, less "not assigned"), in Overview 2's On now and Complications, and as heat pump heat in the gas comparison. The car's estimate subtracts a metered outdoor unit on its phase.
+
 ### Heating & cooling: time slots for air conditioners and schedules
 
 - **Air conditioner time slots**: per device, one or more time slots (the usual time slot editor: days, start time / dusk / dark, end time / sunrise, normal / vacation) with the settings to use: fan, swing, horizontal swing, sleep timer and, without RoomMind, mode and temperature. At the start RoomControl sets them; at the end it puts back what it changed (unless someone changed it in between; the sleep timer runs out). Shown in the room's Debug log.

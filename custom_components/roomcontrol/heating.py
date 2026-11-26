@@ -37,9 +37,16 @@ General setting "heating":
   "gas_price": € per m³ (else Energy › bill gas price), "efficiency": % of
   the gas boiler (default 90), "gas_kwh": kWh per m³ (default 9.77),
   "cop": heat pump COP (default 3.5),
-  "outdoor": [{"name", "sensor": power sensor (W), "units": [climate, ...]}]
-             outdoor units with their own meter: their power is split over
-             their indoor units that run (energy_meter day "ac")}
+  "outdoor": [{"name", "mode": "meter" | "phase", "sensor": power sensor (W),
+              "phase": "L1".."L3", "max_kw": 2.5, "units": [climate, ...]}]
+             outdoor units: "meter" = their own power sensor; "phase" = no
+             meter, estimated like the car charger: the use on its phase −
+             the rooms on that phase − the car charging there − metered
+             outdoor units on that phase (3 phases: also at most the house −
+             all rooms), only while one of its indoor units heats or cools,
+             0..max_kw. The power is split over the indoor units that run and
+             added to their rooms (energy.py status: part kind "ac"; energy_meter
+             day "ac": kWh, and while heating "heat" for the gas comparison)}
 
 Devices: mode and temperature of a device go through the room's RoomMind
 thermostat when there is one (RoomMind sets them); fan, swing, horizontal
@@ -192,6 +199,85 @@ def season_sensor(hass: HomeAssistant) -> str | None:
     if chosen:
         return chosen
     return "sensor.season" if hass.states.get("sensor.season") else None
+
+
+DEFAULT_OUTDOOR_KW = 2.5
+
+
+def outdoor_units(hass: HomeAssistant) -> list[dict[str, Any]]:
+    return [u for u in general_cfg(hass).get("outdoor") or [] if isinstance(u, dict)]
+
+
+def _unit_mode(u: dict[str, Any]) -> str:
+    return "phase" if u.get("mode") == "phase" else "meter"
+
+
+def metered_outdoor(hass: HomeAssistant, three: bool) -> dict[str, float]:
+    """W of metered outdoor units per phase ("" = phase not set)."""
+    from .energy import _watts  # noqa: PLC0415
+
+    out: dict[str, float] = {}
+    for u in outdoor_units(hass):
+        if _unit_mode(u) != "meter":
+            continue
+        w = _watts(hass, u.get("sensor"))
+        if w:
+            ph = (u.get("phase") or "") if three else "L1"
+            out[ph] = out.get(ph, 0.0) + max(0.0, w)
+    return out
+
+
+def _running(hass: HomeAssistant, climates: list[str]) -> tuple[list[str], dict[str, bool]]:
+    states = {c: hass.states.get(c) for c in climates}
+    on = [c for c, st in states.items() if st is not None and st.state not in ("off", "unavailable", "unknown")]
+    active = [c for c in on if states[c].attributes.get("hvac_action") in ("heating", "cooling", "drying", "fan")]
+    run = active or [c for c in on if states[c].attributes.get("hvac_action") is None]
+    heating = {c: states[c].attributes.get("hvac_action") == "heating" or (
+        states[c].state == "heat" and states[c].attributes.get("hvac_action") is None) for c in run}
+    return run, heating
+
+
+def outdoor_split(hass: HomeAssistant, status: dict[str, Any]) -> list[dict[str, Any]]:
+    """Each outdoor unit's power now (measured or estimated) and its split over
+    the indoor units that run."""
+    from .energy import _watts  # noqa: PLC0415
+
+    three = bool(status.get("three"))
+    phases = status.get("phases") or {}
+    rooms = status.get("rooms") or {}
+    car = status.get("car") or {}
+    car_w = (car.get("kw") or 0.0) * 1000 if car.get("charging") else 0.0
+    metered = metered_outdoor(hass, three)
+    on_phase: dict[str, float] = {}
+    for r in rooms.values():
+        ph = (r.get("phase") or "") if three else "L1"
+        on_phase[ph] = on_phase.get(ph, 0.0) + (r.get("watts") or 0.0)
+    house = sum(v for v in phases.values() if v is not None) if phases and all(v is not None for v in phases.values()) else None
+    out = []
+    for i, u in enumerate(outdoor_units(hass)):
+        mode = _unit_mode(u)
+        run, heating = _running(hass, [c for c in u.get("units") or [] if isinstance(c, str)])
+        ph = (u.get("phase") or "L1") if three else "L1"
+        watts: float | None
+        if mode == "meter":
+            watts = _watts(hass, u.get("sensor"))
+            watts = None if watts is None else max(0.0, watts)
+        elif not run:
+            watts = 0.0
+        else:
+            pw = phases.get(ph)
+            if pw is None:
+                watts = None
+            else:
+                est = pw - on_phase.get(ph, 0.0) - (car_w if car.get("phase", "L1") == ph else 0.0) - metered.get(ph, 0.0)
+                if three and house is not None:
+                    est = min(est, house - sum(on_phase.values()) - car_w - sum(metered.values()))
+                watts = min(max(0.0, est), _num(u.get("max_kw"), DEFAULT_OUTDOOR_KW) * 1000)
+        split = {c: round(watts / len(run), 1) for c in run} if watts and run else {}
+        out.append({"index": i, "name": u.get("name") or f"#{i + 1}", "mode": mode, "phase": ph if mode == "phase" else u.get("phase"),
+                    "watts": None if watts is None else round(watts, 1), "split": split,
+                    "heating": {c: heating.get(c, False) for c in split}})
+    return out
 
 
 def gas_equivalent(hass: HomeAssistant, kwh: float, eur: float | None, device: str = "electric",
@@ -558,7 +644,17 @@ def room_status(hass: HomeAssistant, area: str) -> dict[str, Any]:
         "explicit": isinstance(h.get("devices"), list),
         "schedule_ids": schedule_ids(hass, h.get("schedules") or []),
         "devices": [device_status(hass, c, meter.device_today(area, c) if meter is not None else None) for c in room_devices(hass, room)],
+        "outdoor": outdoor_now(hass),
+        "three": int(_num((hass.data.get(DOMAIN, {}).get("settings", {}).get("energy") or {}).get("phases"), 1)) == 3,
     }
+
+
+def outdoor_now(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """The outdoor units with their power now (from the last energy tick)."""
+    energy = hass.data.get(DOMAIN, {}).get("energy")
+    last = {u["index"]: u for u in ((getattr(energy, "last_status", None) or {}).get("outdoor") or [])} if energy else {}
+    return [{**u, "watts": (last.get(i) or {}).get("watts"), "unit": "W", "estimated": _unit_mode(u) == "phase"}
+            for i, u in enumerate(outdoor_units(hass))]
 
 
 def device_status(hass: HomeAssistant, climate: str, today: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -605,12 +701,7 @@ def house_status(hass: HomeAssistant) -> dict[str, Any]:
     found = sorted(s.entity_id for s in hass.states.async_all("climate") if s.entity_id.startswith("climate.roommind_"))
     ctl = hass.data.get(DOMAIN, {}).get("heating_ctl") or Heating(hass)
     sit = ctl.situations()
-    outdoor = []
-    for u in g.get("outdoor") or []:
-        if isinstance(u, dict):
-            st = hass.states.get(u.get("sensor") or "")
-            outdoor.append({**u, "watts": _float(st.state) if st is not None else None,
-                            "unit": st.attributes.get("unit_of_measurement") if st is not None else None})
+    outdoor = outdoor_now(hass)
     climates = sorted(s.entity_id for s in hass.states.async_all("climate") if not s.entity_id.startswith("climate.roommind_"))
     return {"selector": sel, "value": selector_value(hass, sel), "min": lo, "max": hi, "rooms": rooms,
             "outdoor": outdoor, "climates": climates,

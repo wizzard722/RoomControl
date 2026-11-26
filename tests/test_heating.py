@@ -139,6 +139,7 @@ async def main():
     hass.data[DOMAIN]["settings"]["heating"]["outdoor"] = [{"name": "Buiten 1", "sensor": "sensor.buiten1", "units": [c1.entity_id, c2.entity_id]}]
     S("sensor.buiten1", "1.2", {"unit_of_measurement": "kW"})
     m2 = EM.EnergyMeter(hass); hass.data[DOMAIN]["meter"] = m2
+    st = {**st, "three": False}; st["outdoor"] = HT.outdoor_split(hass, st)
     t2 = dt_util.as_utc(dt_util.as_local(dt_util.utcnow()).replace(hour=9, minute=0, second=0, microsecond=0))
     with patch.object(EM.dt_util, "utcnow", return_value=t2 + timedelta(hours=1)):
         m2.add(st, t2)
@@ -183,6 +184,22 @@ async def main():
     svc.clear(); h._device_slots(day + timedelta(hours=9)); await hass.async_block_till_done()
     check("slot ends (07:00 next day): fan and temperature back, swing not (changed by hand)", sorted((x[1], [v for k, v in x[2].items() if k != "entity_id"][0]) for x in svc),
           [("set_fan_mode", "auto"), ("set_temperature", 21)])
+    # an outdoor unit without a meter: estimated on its phase like the car
+    S(c1.entity_id, "heat", {"hvac_action": "heating"}); S(c2.entity_id, "cool", {"hvac_action": "cooling"})
+    hass.data[DOMAIN]["settings"]["heating"]["outdoor"] = [{"name": "Buiten 2", "mode": "phase", "phase": "L2", "max_kw": 2.5, "units": [c1.entity_id, c2.entity_id]}]
+    st3 = {"three": True, "phases": {"L1": 500, "L2": 2300, "L3": 300},
+           "rooms": {"a": {"phase": "L2", "watts": 600, "parts": []}, "b": {"phase": "L1", "watts": 400, "parts": []}},
+           "car": {"charging": False}}
+    u = HT.outdoor_split(hass, st3)[0]
+    check("estimate: L2 2300 − rooms on L2 600 = 1700 W, split over 2", (u["watts"], sorted(u["split"].values())), (1700.0, [850.0, 850.0]))
+    st3["car"] = {"charging": True, "kw": 1.5, "phase": "L2"}
+    check("the car charging on L2 is taken off: 200 W", HT.outdoor_split(hass, st3)[0]["watts"], 200.0)
+    st3["car"] = {"charging": False}; st3["phases"]["L2"] = 6000
+    check("at most max_kw (2.5 kW)", HT.outdoor_split(hass, st3)[0]["watts"], 2500.0)
+    S(c1.entity_id, "off", {}); S(c2.entity_id, "off", {})
+    check("no indoor unit running: 0", HT.outdoor_split(hass, st3)[0]["watts"], 0.0)
+    hass.data[DOMAIN]["settings"]["heating"]["outdoor"].append({"name": "Buiten 1", "sensor": "sensor.buiten1", "phase": "L1", "units": []})
+    check("metered outdoor units per phase (for the car estimate)", HT.metered_outdoor(hass, True), {"L1": 1200.0})
     rooms[0]["heating"]["devices"] = [c2.entity_id]
     check("devices set by hand", HT.room_devices(hass, rooms[0]), [c2.entity_id])
     await hass.async_stop(); print("ALL PASS" if ok else "SOME FAILED")

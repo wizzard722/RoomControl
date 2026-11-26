@@ -174,7 +174,7 @@ class EnergyMeter:
         self._waste(day, rooms, hours, buy, now)
         self._per_hour(day, local.hour, hours, house_w, detail, solar)
         self._per_part(day, rooms, hours, buy)
-        self._per_outdoor(day, hours, buy)
+        self._per_outdoor(day, hours, buy, status)
         if NIGHT[0] <= local.hour < NIGHT[1] and house_w is not None:
             night = self.nights.setdefault(local.strftime("%Y-%m-%d"), {"n": 0, "house": 0.0, "parts": {}, "names": {}})
             n = night["n"]
@@ -273,7 +273,7 @@ class EnergyMeter:
         heaters = self._heaters()
         for area, r in rooms.items():
             for p in r.get("parts") or []:
-                if p.get("kind") not in ("bundle", "switch", "meter") or p.get("watts") is None:
+                if p.get("kind") not in ("bundle", "switch", "meter", "ac") or p.get("watts") is None:
                     continue
                 key = f"{area}|{p['key']}"
                 w = p["watts"] or 0.0
@@ -371,33 +371,21 @@ class EnergyMeter:
             day["filled"] = sorted(filled)
             self._save()
 
-    def _per_outdoor(self, day: dict[str, Any], hours: float, buy: float | None) -> None:
-        """Outdoor units with their own meter (general setting heating.outdoor):
-        the power is split over their indoor units that run; while heating
-        that is heat ("heat" in the record), counted × COP as gas."""
-        from .energy import _watts  # noqa: PLC0415
-        from .heating import device_room, general_cfg  # noqa: PLC0415
+    def _per_outdoor(self, day: dict[str, Any], hours: float, buy: float | None, status: dict[str, Any]) -> None:
+        """The air conditioners' outdoor units (measured or estimated, energy.py
+        status "outdoor"), split over their running indoor units; while
+        heating that is heat ("heat") for the gas comparison."""
+        from .heating import device_room  # noqa: PLC0415
 
-        for unit in general_cfg(self.hass).get("outdoor") or []:
-            if not isinstance(unit, dict):
-                continue
-            w = _watts(self.hass, unit.get("sensor"))
-            if w is None or w <= 0:
-                continue
-            states = {c: self.hass.states.get(c) for c in unit.get("units") or []}
-            on = [c for c, st in states.items() if st is not None and st.state not in ("off", "unavailable", "unknown")]
-            running = [c for c in on if states[c].attributes.get("hvac_action") not in ("idle", "off")] or on
-            if not running:
-                continue
-            kwh = w / len(running) / 1000 * hours
-            for c in running:
-                st = states[c]
+        for unit in status.get("outdoor") or []:
+            for c, w in (unit.get("split") or {}).items():
+                kwh = w / 1000 * hours
                 key = f"{device_room(self.hass, c) or ''}|ac:{c}"
                 rec = day.setdefault("ac", {}).setdefault(key, {"kwh": 0.0, "eur": 0.0, "heat": 0.0, "heat_eur": 0.0})
                 rec["kwh"] = round(rec["kwh"] + kwh, 5)
                 eur = kwh * buy if buy is not None else 0.0
                 rec["eur"] = round(rec["eur"] + eur, 5)
-                if st.attributes.get("hvac_action") == "heating" or (st.state == "heat" and st.attributes.get("hvac_action") is None):
+                if (unit.get("heating") or {}).get(c):
                     rec["heat"] = round(rec["heat"] + kwh, 5)
                     rec["heat_eur"] = round(rec["heat_eur"] + eur, 5)
 
@@ -462,7 +450,7 @@ class EnergyMeter:
         live = []
         for area, r in (status.get("rooms") or {}).items():
             for p in r.get("parts") or []:
-                if p.get("kind") in ("bundle", "switch", "meter") and (p.get("watts") or 0) >= 1:
+                if p.get("kind") in ("bundle", "switch", "meter", "ac") and (p.get("watts") or 0) >= 1:
                     live.append({"area": area, "key": p["key"], "kind": p["kind"], "name": p.get("name") or p["key"],
                                  "watts": round(p["watts"], 1)})
         car = status.get("car") or {}
