@@ -992,7 +992,7 @@ def ws_energy_overview(
 
 @websocket_api.websocket_command(
     {vol.Required("type"): f"{DOMAIN}/heating", vol.Optional("area_id"): str,
-     vol.Optional("set"): vol.All(int, vol.Range(min=0, max=99))}
+     vol.Optional("set"): vol.All(int, vol.Range(min=0, max=99)), vol.Optional("schedule_id"): str}
 )
 @websocket_api.async_response
 async def ws_heating(
@@ -1002,8 +1002,11 @@ async def ws_heating(
 ) -> None:
     """Heating (RoomMind): a room's thermostat, schedule and heaters, or the
     house; "set": choose schedule n (sets the room's or the house's selector)."""
-    from .heating import async_set_selector, house_status, room_status  # noqa: PLC0415
+    from .heating import async_set_selector, house_status, room_status, schedule_entity  # noqa: PLC0415
 
+    if "schedule_id" in msg:  # a schedule helper just made in the panel: its entity
+        connection.send_result(msg["id"], {"entity": schedule_entity(hass, msg["schedule_id"])})
+        return
     area = msg.get("area_id")
     if "set" in msg:
         sel = (room_status(hass, area) if area else house_status(hass)).get("selector")

@@ -164,6 +164,25 @@ async def main():
     check("armed home: fan low, sleep 2 h (swing already off)", sorted((x[1], list(x[2].values())[-1]) for x in svc), [("set_fan_mode", "low"), ("set_value", 2)])
     svc.clear(); h._tick(); await hass.async_block_till_done()
     check("only on the change to armed home", svc, [])
+    # device time slots: set at the start, back at the end
+    hass.services.async_register("climate", "set_swing_horizontal_mode", rec); hass.services.async_register("climate", "set_temperature", rec)
+    S(c1.entity_id, "heat", {"hvac_action": "heating", "fan_mode": "auto", "fan_modes": ["auto", "low", "high"], "swing_mode": "off", "swing_modes": ["off", "on"],
+                             "hvac_modes": ["off", "heat", "cool"], "temperature": 21})
+    rooms[0]["heating"].pop("climate", None); hass.states.async_remove(f"climate.roommind_{woon.id}")
+    tz = dt_util.get_default_time_zone(); day = datetime(2026, 11, 26, 22, 30, tzinfo=tz)  # Thursday
+    slot = {"days": [3], "start": {"type": "time", "time": "22:00"}, "end": {"type": "time", "time": "07:00"},
+            "set": {"fan_mode": "low", "swing_mode": "on", "sleep": 2, "temperature": 19}}
+    rooms[0]["heating"]["device_slots"] = {c1.entity_id: [slot]}
+    svc.clear(); h._device_slots(day); await hass.async_block_till_done()
+    check("slot starts: fan low, swing on, 19°, sleep 2", sorted((x[1], [v for k, v in x[2].items() if k != "entity_id"][0]) for x in svc),
+          [("set_fan_mode", "low"), ("set_swing_mode", "on"), ("set_temperature", 19), ("set_value", 2)])
+    S(c1.entity_id, "heat", {**hass.states.get(c1.entity_id).attributes, "fan_mode": "low", "swing_mode": "on", "temperature": 19})
+    svc.clear(); h._device_slots(day + timedelta(minutes=5)); await hass.async_block_till_done()
+    check("still in the slot: nothing again", svc, [])
+    S(c1.entity_id, "heat", {**hass.states.get(c1.entity_id).attributes, "swing_mode": "off"})  # changed by hand
+    svc.clear(); h._device_slots(day + timedelta(hours=9)); await hass.async_block_till_done()
+    check("slot ends (07:00 next day): fan and temperature back, swing not (changed by hand)", sorted((x[1], [v for k, v in x[2].items() if k != "entity_id"][0]) for x in svc),
+          [("set_fan_mode", "auto"), ("set_temperature", 21)])
     rooms[0]["heating"]["devices"] = [c2.entity_id]
     check("devices set by hand", HT.room_devices(hass, rooms[0]), [c2.entity_id])
     await hass.async_stop(); print("ALL PASS" if ok else "SOME FAILED")

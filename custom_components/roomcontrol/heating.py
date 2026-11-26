@@ -18,6 +18,11 @@ Room option "heating":
   "device_night": {climate: {"fan_mode", "swing_mode", "swing_horizontal_mode",
                   "sleep": value}} set on a device when the alarm goes to
                   armed home (the night); missing keys are left alone,
+  "device_slots": {climate: [slot, ...]} time slots (slots.py format) with
+                  "set": {"hvac_mode", "temperature", "fan_mode", "swing_mode",
+                  "swing_horizontal_mode", "sleep"}: set when the slot starts;
+                  when it ends, what was changed is put back (unless someone
+                  changed it in between; the sleep timer is left to run out),
   "devices": [climate, ...] the room's heating/cooling devices (e.g. LG ThinQ
              air conditioners); missing = the climates in the room's area
              (not the RoomMind thermostat),
@@ -126,6 +131,31 @@ def sleep_timer(hass: HomeAssistant, climate: str) -> str | None:
     return None
 
 
+def schedule_ids(hass: HomeAssistant, entities: list[str]) -> dict[str, str]:
+    """entity → the schedule helper's id (only helpers made in the UI can be edited)."""
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    out = {}
+    try:
+        reg = er.async_get(hass)
+    except (AttributeError, KeyError):
+        return out
+    for e in entities:
+        ent = reg.async_get(e) if isinstance(e, str) else None
+        if ent is not None and ent.platform == "schedule" and ent.unique_id:
+            out[e] = ent.unique_id
+    return out
+
+
+def schedule_entity(hass: HomeAssistant, schedule_id: str) -> str | None:
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    try:
+        return er.async_get(hass).async_get_entity_id("schedule", "schedule", schedule_id)
+    except (AttributeError, KeyError):
+        return None
+
+
 def heating_cfg(room: dict[str, Any] | None) -> dict[str, Any]:
     h = (room or {}).get("heating")
     return h if isinstance(h, dict) else {}
@@ -227,14 +257,17 @@ class Heating:
         self._unsubs: list[CALLBACK_TYPE] = []
         self._watch: CALLBACK_TYPE | None = None
         self._was_home_armed: bool | None = None
+        self.dev_held: dict[str, dict[str, Any]] = {}  # climate → {"key", "prev", "set"}
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
         self.held = {k: v for k, v in (data.get("held") or {}).items() if isinstance(v, dict)}
         self.nobody_since = data.get("nobody_since") if isinstance(data.get("nobody_since"), str) else None
+        self.dev_held = {k: v for k, v in (data.get("dev_held") or {}).items() if isinstance(v, dict)}
 
     def _save(self) -> None:
-        self._store.async_delay_save(lambda: {"held": self.held, "nobody_since": self.nobody_since}, 10)
+        self._store.async_delay_save(lambda: {"held": self.held, "nobody_since": self.nobody_since,
+                                              "dev_held": self.dev_held}, 10)
 
     @callback
     def start(self) -> None:
@@ -330,6 +363,10 @@ class Heating:
         if sit["armed_home"] and self._was_home_armed is False:
             self._night_devices()
         self._was_home_armed = sit["armed_home"]
+        try:
+            self._device_slots()
+        except Exception:  # noqa: BLE001 - never break the schedule rules
+            _LOGGER.exception("Heating: device time slots failed")
         seen = set()
         for sel, cfg, area in self.targets():
             seen.add(sel)
@@ -351,6 +388,83 @@ class Heating:
         for sel in [s for s in self.held if s not in seen]:
             del self.held[sel]
         self._save()
+
+    def _device_slots(self, now: datetime | None = None) -> None:
+        """Device time slots: set at the start, put back at the end."""
+        import json  # noqa: PLC0415
+
+        from .slots import mode_slots, slot_part  # noqa: PLC0415
+        from .switch import _sun_phase  # noqa: PLC0415
+
+        phase, sun_down = _sun_phase(self.hass)
+        now = dt_util.as_local(now or dt_util.now())
+        vacation = self.hass.data.get(DOMAIN, {}).get("vacation")
+        seen = set()
+        for room in self.hass.data.get(DOMAIN, {}).get("rooms", []):
+            h = heating_cfg(room)
+            via = (h.get("climate") or "").startswith("climate.roommind_") or bool(
+                self.hass.states.get(f"climate.roommind_{room.get('area_id')}"))
+            slots = h.get("device_slots") if isinstance(h.get("device_slots"), dict) else {}
+            for climate, items in slots.items():
+                if not isinstance(items, list):
+                    continue
+                seen.add(climate)
+                active = next(((i, x) for i, x in enumerate(items) if isinstance(x, dict)
+                               and x in mode_slots(items, vacation) and slot_part(x, now, phase, sun_down) is not None), None)
+                held = self.dev_held.get(climate)
+                if active is not None:
+                    want = {k: v for k, v in (active[1].get("set") or {}).items() if v not in (None, "")}
+                    if via:
+                        want.pop("hvac_mode", None)
+                        want.pop("temperature", None)
+                    key = f"{active[0]}|{json.dumps(want, sort_keys=True)}"
+                    if held is None or held.get("key") != key:
+                        prev = held["prev"] if held else self._device_now(climate)
+                        self.dev_held[climate] = {"key": key, "prev": prev, "set": want}
+                        self._device_apply(climate, want, room.get("area_id"), "heating_slot")
+                elif held is not None:
+                    del self.dev_held[climate]
+                    cur = self._device_now(climate)
+                    back = {k: held["prev"][k] for k, v in held.get("set", {}).items()
+                            if k != "sleep" and k in held.get("prev", {}) and cur.get(k) == v and held["prev"][k] != v}
+                    if back:
+                        self._device_apply(climate, back, room.get("area_id"), "heating_slot_end")
+        for climate in [c for c in self.dev_held if c not in seen]:
+            del self.dev_held[climate]
+
+    def _device_now(self, climate: str) -> dict[str, Any]:
+        st = self.hass.states.get(climate)
+        if st is None:
+            return {}
+        a = st.attributes
+        return {"hvac_mode": st.state, "temperature": a.get("temperature"), "fan_mode": a.get("fan_mode"),
+                "swing_mode": a.get("swing_mode"), "swing_horizontal_mode": a.get("swing_horizontal_mode")}
+
+    def _device_apply(self, climate: str, values: dict[str, Any], area: str | None, reason: str) -> None:
+        st = self.hass.states.get(climate)
+        if st is None or st.state == "unavailable":
+            return
+        a = st.attributes
+        calls: list[tuple[str, str, dict[str, Any]]] = []
+        if values.get("hvac_mode") in (a.get("hvac_modes") or []) and st.state != values["hvac_mode"]:
+            calls.append(("climate", "set_hvac_mode", {"hvac_mode": values["hvac_mode"]}))
+        if isinstance(values.get("temperature"), (int, float)) and a.get("temperature") != values["temperature"]:
+            calls.append(("climate", "set_temperature", {"temperature": values["temperature"]}))
+        for attr, service, options in (("fan_mode", "set_fan_mode", "fan_modes"), ("swing_mode", "set_swing_mode", "swing_modes"),
+                                       ("swing_horizontal_mode", "set_swing_horizontal_mode", "swing_horizontal_modes")):
+            v = values.get(attr)
+            if v and v in (a.get(options) or []) and a.get(attr) != v:
+                calls.append(("climate", service, {attr: v}))
+        for domain, service, data in calls:
+            self.hass.async_create_task(self.hass.services.async_call(domain, service, {"entity_id": climate, **data}, blocking=False))
+        timer = sleep_timer(self.hass, climate)
+        if timer and isinstance(values.get("sleep"), (int, float)):
+            self.hass.async_create_task(self.hass.services.async_call(
+                "number", "set_value", {"entity_id": timer, "value": values["sleep"]}, blocking=False))
+        light = self.hass.data.get(DOMAIN, {}).get("entities", {}).get(area)
+        if light is not None and hasattr(light, "_debug") and (calls or timer):
+            light._debug.append({"at": dt_util.utcnow().isoformat(), "kind": "info", "reason": reason,
+                                 "bundles": [a.get("friendly_name") or climate], "items": [climate]})
 
     def _night_devices(self) -> None:
         """Alarm went to armed home: each device's night settings."""
@@ -442,6 +556,7 @@ def room_status(hass: HomeAssistant, area: str) -> dict[str, Any]:
         "device": device,
         "via_roommind": bool(climate and climate.startswith("climate.roommind_") and st is not None),
         "explicit": isinstance(h.get("devices"), list),
+        "schedule_ids": schedule_ids(hass, h.get("schedules") or []),
         "devices": [device_status(hass, c, meter.device_today(area, c) if meter is not None else None) for c in room_devices(hass, room)],
     }
 

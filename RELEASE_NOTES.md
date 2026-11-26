@@ -11,6 +11,13 @@
 ### Room switches: no empty space under the temperature sensor
 - Fixed: a heater's temperature sensor picker (room → Settings → Switches) left a large empty space under it.
 
+### Heating & cooling: time slots for air conditioners and schedules
+
+- **Air conditioner time slots**: per device, one or more time slots (the usual time slot editor: days, start time / dusk / dark, end time / sunrise, normal / vacation) with the settings to use: fan, swing, horizontal swing, sleep timer and, without RoomMind, mode and temperature. At the start RoomControl sets them; at the end it puts back what it changed (unless someone changed it in between; the sleep timer runs out). Shown in the room's Debug log.
+- **Schedules as time slots**: each schedule helper of a room is shown as time slots (blocks with the same times and temperatures on several days become one slot; a block running past midnight is one slot), with **Heating** (`heat_temperature`) and **Cooling** (`cool_temperature`) or one **Temperature** (`temperature`). A change is written straight into the schedule in Home Assistant (`schedule/update`), so RoomMind follows it; other keys in a block are kept, the slot's name is kept as `name`. Overlapping slots are not saved (with a message); schedules made in YAML are shown read-only.
+- **New schedule**: create a schedule helper from the room's card; it is linked to the room straight away.
+- **Sleep timer up to 12 hours**: Off · 1 · 2 · 3 · 4 · 6 · 8 · 10 · 12 h.
+
 ### Rooms: air conditioners (LG ThinQ) in Heating & cooling
 
 - The room card is now **Heating & cooling**, with **Devices**: the room's climate devices (e.g. LG ThinQ air conditioners) are found in its area, or added and removed by hand.
