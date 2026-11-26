@@ -174,6 +174,7 @@ class EnergyMeter:
         self._waste(day, rooms, hours, buy, now)
         self._per_hour(day, local.hour, hours, house_w, detail, solar)
         self._per_part(day, rooms, hours, buy)
+        self._per_outdoor(day, hours, buy)
         if NIGHT[0] <= local.hour < NIGHT[1] and house_w is not None:
             night = self.nights.setdefault(local.strftime("%Y-%m-%d"), {"n": 0, "house": 0.0, "parts": {}, "names": {}})
             n = night["n"]
@@ -370,13 +371,47 @@ class EnergyMeter:
             day["filled"] = sorted(filled)
             self._save()
 
+    def _per_outdoor(self, day: dict[str, Any], hours: float, buy: float | None) -> None:
+        """Outdoor units with their own meter (general setting heating.outdoor):
+        the power is split over their indoor units that run; while heating
+        that is heat ("heat" in the record), counted × COP as gas."""
+        from .energy import _watts  # noqa: PLC0415
+        from .heating import device_room, general_cfg  # noqa: PLC0415
+
+        for unit in general_cfg(self.hass).get("outdoor") or []:
+            if not isinstance(unit, dict):
+                continue
+            w = _watts(self.hass, unit.get("sensor"))
+            if w is None or w <= 0:
+                continue
+            states = {c: self.hass.states.get(c) for c in unit.get("units") or []}
+            on = [c for c, st in states.items() if st is not None and st.state not in ("off", "unavailable", "unknown")]
+            running = [c for c in on if states[c].attributes.get("hvac_action") not in ("idle", "off")] or on
+            if not running:
+                continue
+            kwh = w / len(running) / 1000 * hours
+            for c in running:
+                st = states[c]
+                key = f"{device_room(self.hass, c) or ''}|ac:{c}"
+                rec = day.setdefault("ac", {}).setdefault(key, {"kwh": 0.0, "eur": 0.0, "heat": 0.0, "heat_eur": 0.0})
+                rec["kwh"] = round(rec["kwh"] + kwh, 5)
+                eur = kwh * buy if buy is not None else 0.0
+                rec["eur"] = round(rec["eur"] + eur, 5)
+                if st.attributes.get("hvac_action") == "heating" or (st.state == "heat" and st.attributes.get("hvac_action") is None):
+                    rec["heat"] = round(rec["heat"] + kwh, 5)
+                    rec["heat_eur"] = round(rec["heat_eur"] + eur, 5)
+
+    def device_today(self, area: str | None, climate: str) -> dict[str, Any] | None:
+        rec = (self.days.get(dt_util.as_local(dt_util.utcnow()).strftime("%Y-%m-%d")) or {}).get("ac", {}).get(f"{area or ''}|ac:{climate}")
+        return None if rec is None else {k: round(v, 3) for k, v in rec.items()}
+
     def heat_totals(self, area: str | None) -> dict[str, dict[str, Any]]:
         """Heaters' kWh and € today, the last 7 days and this month (one room, or all)."""
         now = dt_util.as_local(dt_util.utcnow())
         today = now.strftime("%Y-%m-%d")
         week = {(now - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)}
         month = now.strftime("%Y-%m")
-        out = {k: {"kwh": 0.0, "eur": 0.0} for k in ("day", "week", "month")}
+        out = {k: {"kwh": 0.0, "eur": 0.0, "kwh_hp": 0.0, "eur_hp": 0.0} for k in ("day", "week", "month")}
         for key, day in self.days.items():
             if not (key == today or key in week or key.startswith(month)):
                 continue
@@ -387,7 +422,14 @@ class EnergyMeter:
                     if hit:
                         out[period]["kwh"] += rec.get("kwh", 0.0)
                         out[period]["eur"] += rec.get("eur", 0.0)
-        return {k: {"kwh": round(v["kwh"], 3), "eur": round(v["eur"], 2)} for k, v in out.items()}
+            for pk, rec in (day.get("ac") or {}).items():
+                if area is not None and not pk.startswith(f"{area}|"):
+                    continue
+                for period, hit in (("day", key == today), ("week", key in week), ("month", key.startswith(month))):
+                    if hit:
+                        out[period]["kwh_hp"] += rec.get("heat", 0.0)
+                        out[period]["eur_hp"] += rec.get("heat_eur", 0.0)
+        return {k: {x: round(y, 3) for x, y in v.items()} for k, v in out.items()}
 
     def overview2(self) -> dict[str, Any]:
         """Energy → Overzicht 2: the hours of today, yesterday, the parts and the tips."""

@@ -15,6 +15,9 @@ Room option "heating":
             "holiday": n, "summer": n} (value to switch to),
   "nobody_h": hours nobody home before "nobody" applies (default 2),
   "tile": bool (Overview card, default True),
+  "devices": [climate, ...] the room's heating/cooling devices (e.g. LG ThinQ
+             air conditioners); missing = the climates in the room's area
+             (not the RoomMind thermostat),
   "device": "electric" | "heatpump"}
 General setting "heating":
  {"selector": the house's selector, "names": {"1": "Normaal", ...},
@@ -25,7 +28,15 @@ General setting "heating":
   "summer" = summer),
   "gas_price": € per m³ (else Energy › bill gas price), "efficiency": % of
   the gas boiler (default 90), "gas_kwh": kWh per m³ (default 9.77),
-  "cop": heat pump COP (default 3.5)}
+  "cop": heat pump COP (default 3.5),
+  "outdoor": [{"name", "sensor": power sensor (W), "units": [climate, ...]}]
+             outdoor units with their own meter: their power is split over
+             their indoor units that run (energy_meter day "ac")}
+
+Devices: mode and temperature of a device go through the room's RoomMind
+thermostat when there is one (RoomMind sets them); fan, swing, horizontal
+swing and the sleep timer (a number entity of the same device whose name or
+id says "sleep") are set on the device itself.
 
 Rules, in this order (the first that applies wins): the alarm is armed away
 (or armed vacation), RoomControl's vacation mode is "away", nobody has been
@@ -59,6 +70,57 @@ DEFAULT_GAS_KWH = 9.77
 DEFAULT_COP = 3.5
 DEFAULT_NOBODY_H = 2.0
 RULE_ORDER = ("armed_away", "vacation", "nobody", "armed_home", "holiday", "summer")
+
+
+def _area_of(hass: HomeAssistant, entity_id: str) -> str | None:
+    from homeassistant.helpers import device_registry as dr, entity_registry as er  # noqa: PLC0415
+
+    try:
+        ent = er.async_get(hass).async_get(entity_id)
+    except (AttributeError, KeyError):
+        return None
+    if ent is None:
+        return None
+    if ent.area_id:
+        return ent.area_id
+    dev = dr.async_get(hass).async_get(ent.device_id) if ent.device_id else None
+    return dev.area_id if dev else None
+
+
+def room_devices(hass: HomeAssistant, room: dict[str, Any] | None) -> list[str]:
+    """The room's climate devices: the ones set, else those in its area."""
+    h = heating_cfg(room)
+    if isinstance(h.get("devices"), list):
+        return [d for d in h["devices"] if isinstance(d, str) and d.startswith("climate.")]
+    area = (room or {}).get("area_id")
+    thermostat = h.get("climate") or f"climate.roommind_{area}"
+    return sorted(s.entity_id for s in hass.states.async_all("climate")
+                  if s.entity_id != thermostat and not s.entity_id.startswith("climate.roommind_")
+                  and _area_of(hass, s.entity_id) == area)
+
+
+def device_room(hass: HomeAssistant, climate: str) -> str | None:
+    for room in hass.data.get(DOMAIN, {}).get("rooms", []):
+        if climate in room_devices(hass, room):
+            return room.get("area_id")
+    return None
+
+
+def sleep_timer(hass: HomeAssistant, climate: str) -> str | None:
+    """A settable sleep timer (number) on the same device as the climate."""
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    try:
+        reg = er.async_get(hass)
+        ent = reg.async_get(climate)
+    except (AttributeError, KeyError):
+        return None
+    if ent is None or not ent.device_id:
+        return None
+    for e in er.async_entries_for_device(reg, ent.device_id):
+        if e.domain == "number" and "sleep" in " ".join(str(x or "") for x in (e.entity_id, e.translation_key, e.original_name, e.name)).lower():
+            return e.entity_id
+    return None
 
 
 def heating_cfg(room: dict[str, Any] | None) -> dict[str, Any]:
@@ -99,20 +161,23 @@ def season_sensor(hass: HomeAssistant) -> str | None:
     return "sensor.season" if hass.states.get("sensor.season") else None
 
 
-def gas_equivalent(hass: HomeAssistant, kwh: float, eur: float | None, device: str = "electric") -> dict[str, Any]:
-    """kWh of electricity → heat, m³ of gas and what that gas would cost."""
+def gas_equivalent(hass: HomeAssistant, kwh: float, eur: float | None, device: str = "electric",
+                   kwh_hp: float = 0.0, eur_hp: float = 0.0) -> dict[str, Any]:
+    """kWh of electricity → heat, m³ of gas and what that gas would cost.
+    kwh_hp: heating by heat pumps (air conditioners), always × COP."""
     g = general_cfg(hass)
-    cop = _num(g.get("cop"), DEFAULT_COP) if device == "heatpump" else 1.0
+    hp_cop = _num(g.get("cop"), DEFAULT_COP)
+    cop = hp_cop if device == "heatpump" else 1.0
     eff = _num(g.get("efficiency"), DEFAULT_EFFICIENCY) / 100
     per_m3 = _num(g.get("gas_kwh"), DEFAULT_GAS_KWH)
     price = g.get("gas_price")
     if not isinstance(price, (int, float)):
         bill = (hass.data.get(DOMAIN, {}).get("settings", {}).get("energy") or {}).get("bill") or {}
         price = bill.get("gas_price") if isinstance(bill.get("gas_price"), (int, float)) else None
-    heat = kwh * cop
+    heat = kwh * cop + kwh_hp * hp_cop
     m3 = heat / (per_m3 * eff) if per_m3 * eff > 0 else 0.0
-    return {"kwh": round(kwh, 3), "heat": round(heat, 3), "m3": round(m3, 3),
-            "eur_el": None if eur is None else round(eur, 2),
+    return {"kwh": round(kwh + kwh_hp, 3), "heat": round(heat, 3), "m3": round(m3, 3),
+            "eur_el": None if eur is None else round(eur + eur_hp, 2),
             "eur_gas": None if price is None else round(m3 * price, 2)}
 
 
@@ -339,9 +404,41 @@ def room_status(hass: HomeAssistant, area: str) -> dict[str, Any]:
         "heaters": [{"entity": e, "name": (hass.states.get(e).attributes.get("friendly_name") if hass.states.get(e) else e),
                      "watts": (parts.get(f"switch:{e}") or {}).get("watts"),
                      "on": bool(hass.states.get(e) and hass.states.get(e).state == "on")} for e in heaters],
-        "gas": {k: gas_equivalent(hass, v["kwh"], v.get("eur"), device) for k, v in totals.items()},
+        "gas": {k: gas_equivalent(hass, v["kwh"], v.get("eur"), device, v.get("kwh_hp", 0.0), v.get("eur_hp", 0.0))
+                for k, v in totals.items()},
         "device": device,
+        "via_roommind": bool(climate and climate.startswith("climate.roommind_") and st is not None),
+        "explicit": isinstance(h.get("devices"), list),
+        "devices": [device_status(hass, c, meter.device_today(area, c) if meter is not None else None) for c in room_devices(hass, room)],
     }
+
+
+def device_status(hass: HomeAssistant, climate: str, today: dict[str, Any] | None = None) -> dict[str, Any]:
+    st = hass.states.get(climate)
+    a = st.attributes if st is not None else {}
+    timer = sleep_timer(hass, climate)
+    ts = hass.states.get(timer) if timer else None
+    return {
+        "entity": climate, "name": a.get("friendly_name") or climate, "state": st.state if st is not None else None,
+        "action": a.get("hvac_action"), "current": a.get("current_temperature"), "target": a.get("temperature"),
+        "min": a.get("min_temp"), "max": a.get("max_temp"), "step": a.get("target_temp_step"),
+        "hvac_modes": a.get("hvac_modes") or [],
+        "fan": a.get("fan_mode"), "fan_modes": a.get("fan_modes") or [],
+        "swing": a.get("swing_mode"), "swing_modes": a.get("swing_modes") or [],
+        "hswing": a.get("swing_horizontal_mode"), "hswing_modes": a.get("swing_horizontal_modes") or [],
+        "preset": a.get("preset_mode"), "presets": a.get("preset_modes") or [],
+        "sleep": None if ts is None else {"entity": timer, "value": _float(ts.state), "min": ts.attributes.get("min"),
+                                          "max": ts.attributes.get("max"), "step": ts.attributes.get("step"),
+                                          "unit": ts.attributes.get("unit_of_measurement")},
+        "today": today,
+    }
+
+
+def _float(v: Any) -> float | None:
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def house_status(hass: HomeAssistant) -> dict[str, Any]:
@@ -360,7 +457,15 @@ def house_status(hass: HomeAssistant) -> dict[str, Any]:
     found = sorted(s.entity_id for s in hass.states.async_all("climate") if s.entity_id.startswith("climate.roommind_"))
     ctl = hass.data.get(DOMAIN, {}).get("heating_ctl") or Heating(hass)
     sit = ctl.situations()
+    outdoor = []
+    for u in g.get("outdoor") or []:
+        if isinstance(u, dict):
+            st = hass.states.get(u.get("sensor") or "")
+            outdoor.append({**u, "watts": _float(st.state) if st is not None else None,
+                            "unit": st.attributes.get("unit_of_measurement") if st is not None else None})
+    climates = sorted(s.entity_id for s in hass.states.async_all("climate") if not s.entity_id.startswith("climate.roommind_"))
     return {"selector": sel, "value": selector_value(hass, sel), "min": lo, "max": hi, "rooms": rooms,
+            "outdoor": outdoor, "climates": climates,
             "now": {k: sit[k] for k in ("armed_away", "armed_home", "holiday", "summer", "season", "vacation")},
             "season_sensor": season_sensor(hass), "holiday_calendar": holiday_calendar(hass), "held": ctl.held.get(sel) if sel else None,
-            "roommind": found, "month": gas_equivalent(hass, month["kwh"], month.get("eur"))}
+            "roommind": found, "month": gas_equivalent(hass, month["kwh"], month.get("eur"), "electric", month.get("kwh_hp", 0.0), month.get("eur_hp", 0.0))}

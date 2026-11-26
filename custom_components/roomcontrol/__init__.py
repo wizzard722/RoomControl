@@ -618,7 +618,10 @@ PANEL_SERVICES = {
     "lock": ("lock", "unlock", "open"),
     "switch": ("turn_on", "turn_off"),  # a room's switches (room → Switches)
     "remote": ("turn_on", "turn_off"),  # a room's switches can be remotes (e.g. an NVIDIA Shield)
-    "climate": ("set_preset_mode", "set_temperature"),  # a room's heating (room → Heating)
+    # a room's heating and cooling (room → Heating & cooling)
+    "climate": ("set_preset_mode", "set_temperature", "set_hvac_mode", "set_fan_mode", "set_swing_mode",
+                "set_swing_horizontal_mode", "turn_on", "turn_off"),
+    "number": ("set_value",),  # the sleep timer of a room's climate device
 }
 
 
@@ -651,6 +654,12 @@ async def ws_call_service(
         known.update(sw.get("entity_id") for sw in room.get("switches", []) or [] if isinstance(sw, dict))
         heat = room.get("heating") if isinstance(room.get("heating"), dict) else {}
         known.add(heat.get("climate") or f"climate.roommind_{room.get('area_id')}")
+        from .heating import room_devices, sleep_timer  # noqa: PLC0415
+
+        for dev in room_devices(hass, room):
+            known.add(dev)
+            if timer := sleep_timer(hass, dev):
+                known.add(timer)
     own = {
         s.entity_id for s in hass.states.async_all(domain)
         if s.attributes.get("roomcontrol_area") is not None

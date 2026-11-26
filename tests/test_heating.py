@@ -113,5 +113,47 @@ async def main():
           ("climate.roommind_woon", 1, 600, 19.4, 0.068))
     hs = HT.house_status(hass)
     check("house status: rooms and RoomMind found", ([r["area"] for r in hs["rooms"]], hs["roommind"]), (["woon", "keuken"], ["climate.roommind_woon"]))
+    # air conditioners: found in the area, sleep timer on the same device, outdoor unit split
+    from homeassistant.helpers import device_registry as dr, area_registry as ar
+    from homeassistant import config_entries
+    from homeassistant.config_entries import ConfigEntry
+    await ar.async_load(hass); await dr.async_load(hass)
+    hass.config_entries = config_entries.ConfigEntries(hass, {}); await hass.config_entries.async_initialize()
+    entry = ConfigEntry(version=1, minor_version=1, domain="lg_thinq", title="x", data={}, options={}, source="user", unique_id=None, discovery_keys={}, subentries_data=None)
+    hass.config_entries._entries[entry.entry_id] = entry
+    areg = ar.async_get(hass); dreg = dr.async_get(hass); ereg = er.async_get(hass)
+    woon = areg.async_create("Woon")
+    rooms[0]["area_id"] = woon.id
+    dev1 = dreg.async_get_or_create(config_entry_id=entry.entry_id, identifiers={("lg", "ac1")}, name="LG Woon")
+    dreg.async_update_device(dev1.id, area_id=woon.id)
+    c1 = ereg.async_get_or_create("climate", "lg_thinq", "ac1", device_id=dev1.id, suggested_object_id="lg_woon")
+    t1 = ereg.async_get_or_create("number", "lg_thinq", "ac1_sleep", device_id=dev1.id, suggested_object_id="lg_woon_sleep_timer", translation_key="sleep_timer")
+    dev2 = dreg.async_get_or_create(config_entry_id=entry.entry_id, identifiers={("lg", "ac2")}, name="LG Slaap")
+    c2 = ereg.async_get_or_create("climate", "lg_thinq", "ac2", device_id=dev2.id, suggested_object_id="lg_slaap")
+    S(c1.entity_id, "heat", {"hvac_action": "heating", "fan_mode": "auto", "fan_modes": ["auto", "low", "high"], "swing_mode": "off", "swing_modes": ["off", "on"]})
+    S(c2.entity_id, "cool", {"hvac_action": "cooling"})
+    S(t1.entity_id, "0", {"min": 0, "max": 12, "step": 1, "unit_of_measurement": "h"})
+    check("devices in the area", HT.room_devices(hass, rooms[0]), [c1.entity_id])
+    check("sleep timer of the same device", HT.sleep_timer(hass, c1.entity_id), t1.entity_id)
+    check("device's room", HT.device_room(hass, c1.entity_id), woon.id)
+    hass.data[DOMAIN]["settings"]["heating"]["outdoor"] = [{"name": "Buiten 1", "sensor": "sensor.buiten1", "units": [c1.entity_id, c2.entity_id]}]
+    S("sensor.buiten1", "1.2", {"unit_of_measurement": "kW"})
+    m2 = EM.EnergyMeter(hass); hass.data[DOMAIN]["meter"] = m2
+    t2 = dt_util.as_utc(dt_util.as_local(dt_util.utcnow()).replace(hour=9, minute=0, second=0, microsecond=0))
+    with patch.object(EM.dt_util, "utcnow", return_value=t2 + timedelta(hours=1)):
+        m2.add(st, t2)
+        for i in range(1, 121):
+            m2.add(st, t2 + timedelta(seconds=30 * i))
+        tot = m2.heat_totals(woon.id); dt = m2.device_today(woon.id, c1.entity_id)
+        rs = HT.room_status(hass, woon.id)
+    check("outdoor 1.2 kW split over 2 running units: 0.6 kWh each", round(dt["kwh"], 2), 0.6)
+    check("heating unit counts as heat pump heat", (round(tot["day"]["kwh_hp"], 2), round(dt["heat"], 2)), (0.6, 0.6))
+    check("cooling unit is not heat", round(m2.heat_totals(None)["day"]["kwh_hp"], 2), 0.6)
+    g2 = rs["gas"]["day"]
+    check("gas: heater 0.6 × 1 + air conditioner 0.6 × COP 3.5 = 2.7 kWh heat", round(g2["heat"], 2), 2.7)
+    d0 = rs["devices"][0]
+    check("device status", (d0["entity"], d0["fan"], d0["fan_modes"], d0["sleep"]["entity"], d0["sleep"]["unit"]), (c1.entity_id, "auto", ["auto", "low", "high"], t1.entity_id, "h"))
+    rooms[0]["heating"]["devices"] = [c2.entity_id]
+    check("devices set by hand", HT.room_devices(hass, rooms[0]), [c2.entity_id])
     await hass.async_stop(); print("ALL PASS" if ok else "SOME FAILED")
 asyncio.run(main())
