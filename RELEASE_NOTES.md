@@ -5,7 +5,7 @@
 ### Heating & cooling: the Overview card folded
 
 - The heating card on Overview is **folded**: the gauge, the status and the schedule, plus one line with the air conditioners and their use ("Airco Huiskamer ≈ 60 W"). The arrow at the top right unfolds Comfort · Eco · +1°, the schedules, the heater line and the air conditioners.
-- The visible part of the card also shows the power drawn now: **"Drawing ≈ 900 W"** – the air conditioners' share of their outdoor units plus the heaters with power metering.
+- Heating & cooling gets a section heading on Overview like Light bundles and Devices, with the power drawn now on the right (**"≈ 900 W"**): the air conditioners' share of their outdoor units plus the heaters with power metering.
 
 ## 4.0.4 – Smarter outdoor units
 
