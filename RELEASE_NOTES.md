@@ -1,70 +1,64 @@
 # Release notes
 
-## 4.0.0
+## 4.0.0 – Four Seasons
 
-A big release: heating and cooling per room (RoomMind, air conditioners such as LG ThinQ, schedules as time slots, outdoor units, gas comparison), a new energy overview with a chronograph dial, and the order of the settings cards.
+RoomControl 4 brings **heating and cooling** into every room: RoomMind thermostats, air conditioners (such as LG ThinQ), schedules you edit as time slots, rules for the seasons and holidays, and a comparison with gas. Energy gets a second overview with a chronograph dial, and you can put the room settings cards in your own order.
 
-### Rooms: Heating (RoomMind)
+### 🔥 Heating & cooling per room
 
-- A room has a new settings card **Heating & cooling** for [RoomMind](https://github.com/snazzybean/roommind) (or another thermostat):
-  - the room's thermostat (`climate.roommind_<room>` is found by itself), with the temperature now, the target and its status;
-  - **schedule choice**: RoomMind switches schedules with an `input_number` (1 = first schedule, …) or an `input_boolean` (off = 1, on = 2), for **this room** or for the **whole house**; the room's schedule helpers are listed in that order, with today's blocks, and a tap makes one active;
-  - **switching by RoomControl**: on Alarm Armed Away (or Armed Vacation), RoomControl's vacation mode, nobody home for a number of hours, Alarm Armed Home, a **holiday** (the calendar of Home Assistant's Holiday integration, found by itself, plus own days like 24-12) or **summer** (Home Assistant's Season integration), the selector goes to a chosen schedule — the first rule that applies wins, in that order — and back afterwards (unless someone changed it in between); this shows in the room's Debug log;
-  - the room's **heater with power metering** (the room switches of kind "Heater") and **what it would have used as gas**: heat = kWh × COP (electric 1, heat pump e.g. 3.5), m³ = heat ÷ (9.77 kWh/m³ × 90 % boiler efficiency), with the cost of the electricity against the same heat from gas, for today, 7 days and the month.
-- The room's **Overview** gets a heating card: a gauge from now to the target, the schedule, Comfort · Eco · +1° · Back to schedule, the schedules to choose from and the heater's use today as gas.
-- **General settings › Heating**: the whole house's selector with a name per value, which rooms follow it, the house rules, and the gas comparison settings (gas price, boiler efficiency, energy in gas, heat pump COP) with this month's total.
-- The energy meter keeps heaters' kWh and cost per day; new websocket command `roomcontrol/heating`, and the panel may set a room thermostat's preset and temperature.
+A new room card **Heating & cooling** (Settings) and a heating card on the room's **Overview**.
 
-### Rooms: air conditioners (LG ThinQ) in Heating & cooling
+- **Thermostat (RoomMind)** – `climate.roommind_<room>` is found by itself (or choose another thermostat): temperature now, target and status. On Overview: a gauge from now to the target, **Comfort · Eco · +1° · Back to schedule**.
+- **Schedule choice** – RoomMind switches schedules with an `input_number` (1 = first schedule) or an `input_boolean` (off = 1, on = 2), for **this room** or for the **whole house**. Tap a schedule to make it active.
+- **Schedules as time slots** – each schedule helper is shown in RoomControl's time slot editor, with **Heating** (`heat_temperature`) and **Cooling** (`cool_temperature`) or one **Temperature**. A change is written straight into the schedule in Home Assistant, so RoomMind follows it. Blocks on several days become one time slot; a block past midnight is one time slot; other keys in a block are kept. Overlapping time slots are not saved (with a message); YAML schedules are read-only. **New schedule** creates a schedule helper and links it to the room.
+- **Rules that switch the schedule** (room or whole house; the first that applies wins, and the schedule goes back afterwards unless someone changed it):
+  1. Alarm Armed Away (or Armed Vacation)
+  2. Vacation (RoomControl)
+  3. Nobody home for a number of hours
+  4. Alarm Armed Home
+  5. Holiday – the calendar of Home Assistant's **Holiday** integration, found by itself, plus your own days (e.g. 24-12, 31-12)
+  6. Summer – Home Assistant's **Season** integration
+- Every switch shows in the room's Debug log.
 
-- The room card is now **Heating & cooling**, with **Devices**: the room's climate devices (e.g. LG ThinQ air conditioners) are found in its area, or added and removed by hand.
-- Per device: mode, target temperature, **fan**, **swing**, **horizontal swing** and the **sleep timer** (the device's own number entity), only the choices the device offers. With a RoomMind thermostat in the room, mode and temperature stay with RoomMind; fan, swing and sleep timer are set on the device.
-- **At Alarm Armed Home (night)** per device: fan, swing, horizontal swing and sleep timer to set when the alarm goes to armed home ("don't change" leaves one alone); shown in the room's Debug log.
-- The room's Overview heating card shows each device with quick buttons (tap = next fan mode, swing, horizontal swing, sleep timer) and, without RoomMind, an on/off button.
-- **General settings › Heating & cooling › Outdoor units**: an outdoor unit's power is split over its indoor units that run; while heating it counts as a heat pump (× COP) in the gas comparison, and each device shows today's kWh.
+### ❄️ Air conditioners (e.g. LG ThinQ)
 
-### Heating & cooling: time slots for air conditioners and schedules
+- **Devices** – the climate devices in the room's area are found by themselves (or added by hand).
+- Per device: **mode**, **target temperature**, **fan**, **swing**, **horizontal swing** and the **sleep timer** (up to **12 hours**) – only the choices the device offers. With RoomMind in the room, mode and temperature stay with RoomMind.
+- **Time slots per air conditioner** – the usual time slot editor (days, time / dusk / dark, until time / sunrise, normal / vacation) with the settings to use. They are set at the start; at the end RoomControl puts back what it changed.
+- **At Alarm Armed Home (night)** – e.g. fan quiet, swing off, sleep timer 2 h.
+- **Overview** – per air conditioner quick buttons: tap for the next fan mode, swing, horizontal swing or sleep timer, and on/off without RoomMind.
 
-- **Air conditioner time slots**: per device, one or more time slots (the usual time slot editor: days, start time / dusk / dark, end time / sunrise, normal / vacation) with the settings to use: fan, swing, horizontal swing, sleep timer and, without RoomMind, mode and temperature. At the start RoomControl sets them; at the end it puts back what it changed (unless someone changed it in between; the sleep timer runs out). Shown in the room's Debug log.
-- **Schedules as time slots**: each schedule helper of a room is shown as time slots (blocks with the same times and temperatures on several days become one slot; a block running past midnight is one slot), with **Heating** (`heat_temperature`) and **Cooling** (`cool_temperature`) or one **Temperature** (`temperature`). A change is written straight into the schedule in Home Assistant (`schedule/update`), so RoomMind follows it; other keys in a block are kept, the slot's name is kept as `name`. Overlapping slots are not saved (with a message); schedules made in YAML are shown read-only.
-- **New schedule**: create a schedule helper from the room's card; it is linked to the room straight away.
-- **Sleep timer up to 12 hours**: Off · 1 · 2 · 3 · 4 · 6 · 8 · 10 · 12 h.
+### ⚡ Outdoor units and the gas comparison
 
-### Heating & cooling: outdoor units without a meter
+- **Outdoor units** – with a **power meter**, or without one **estimated via their phase**, the same way as the car charger (the phase − the rooms on it − the car charging there; only while an indoor unit heats or cools; at most a maximum, default 2.5 kW). Set up at the air conditioner in the room, shared between rooms.
+- Their power is split over the indoor units that run and now counts for those **rooms** in Energy (now, today, the room's kWh sensor, less "not assigned").
+- **As gas** – for heaters with power metering (room switches of kind "Heater") and air conditioners: heat = kWh × COP, m³ = heat ÷ (9.77 kWh/m³ × 90 % boiler efficiency), and what the electricity cost against the same heat from gas – today, 7 days and month. Gas price, efficiency, energy in gas and heat pump COP are set under **General settings › Heating & cooling**.
 
-- An outdoor unit is measured with a **power meter** or, without one, **estimated via its phase**, the same way as the car charger: the use on its phase − the rooms on that phase − the car when it charges there − metered outdoor units on that phase (with 3 phases also at most the house − all rooms), only while one of its indoor units heats or cools, at most a maximum (default 2.5 kW).
-- Set up per room at the air conditioner (Heating & cooling › device › **Outdoor unit**: choose one, or "+ New outdoor unit"; name, power meter or phase + maximum, which other indoor units share it), and in General settings.
-- The outdoor units' power (measured or estimated) now counts for the **rooms** of their indoor units in Energy (room now and today, the room's kWh sensor, less "not assigned"), in Overview 2's On now and Complications, and as heat pump heat in the gas comparison. The car's estimate subtracts a metered outdoor unit on its phase.
+### ⏱️ Energy: Overview 2 – the chronograph
 
-### Energy: new tab "Overview 2" (chronograph)
+A new tab **Overview 2** next to Overview, in a black-and-gold instrument style:
 
-- Energy has a new tab **Overview 2** next to Overview (which stays as it is), in a black-and-gold "instrument" style:
-  - a **dial** with today's 24 hours around it (per hour: from the sun and from the grid, hours still to come greyed out), a hand at the current time, today's kWh and cost in the middle, and three small counters (Sun, Own use, Grid; tap one to switch between today and now);
-  - chips: compared with yesterday at the same time, and the base load;
-  - **On now**: small gauges for what uses power right now (tap a switch or light bundle to switch it off);
-  - **Coming up**: the next 24 hours with the price line, cheap / normal / expensive, the expected sun and what is planned;
-  - **Complications**: today's biggest users (devices, light bundles, switches, the car, not assigned) with their share, time on and how often they went on;
-  - **Notable**: the saving tips (light in an empty room, standby while nobody is home, a task at a dear hour) with Apply and dismiss;
-  - "What happened", folded.
-- The energy meter now also keeps kWh **per hour** (house, grid in/out, sun) and **per part** (kWh, minutes on, times switched on) for the last 8 days. Today's hours from before RoomControl counted are filled in from Home Assistant's Energy dashboard. New websocket command `roomcontrol/energy_overview2`.
+- a **dial** with today's 24 hours (from the sun and from the grid per hour), a hand at the current time, today's kWh and cost, and three small counters (Sun · Own use · Grid; tap to switch between today and now);
+- chips: compared with yesterday at the same time, and the base load;
+- **On now** – small gauges for what uses power right now (tap to switch it off);
+- **Coming up** – the next 24 hours: price line, cheap / normal / expensive, expected sun and what is planned;
+- **Complications** – today's biggest users with their share, time on and how often they went on;
+- **Notable** – saving tips with Apply and dismiss.
 
-### Rooms: change the order of the settings cards
+The energy meter now keeps kWh per hour and per device (8 days); today's hours from before the update come from Home Assistant's Energy dashboard.
 
-- A room's Settings tab has an "Order" button next to the search field. It shows the cards as a list: drag a card by its handle (mouse or finger) or use the up/down arrows, then tap Done.
-- The order applies to all rooms (general setting `room_card_order`); cards a room does not use are skipped, and new cards keep their default place. "Default order" resets it.
+### 🧩 Smaller changes
 
-### Alarm: Dim is part of "Not on motion"
+- **Order of the settings cards** – an "Order" button on a room's Settings tab: drag a card by its handle or use the arrows. The order applies to all rooms.
+- **Alarm** – the Dim switch is now part of the "Not on motion" option (Armed Home).
+- **Prediction** – the light bundles' time slots count in the room's prediction model; a new model starts from them.
+- **Fixed** – no more empty space under a heater's temperature sensor (room switches).
 
-- In a room's alarm settings (Armed Home), the Dim switch now sits inside the "Not on motion" option card, below its explanation, instead of as a separate row under the options. It still only shows when "Not on motion" is chosen.
+### Good to know
 
-### Prediction: the light bundles' time slots count
-- The prediction model now knows whether one of the room's light bundles has a time slot running (Normal / Leave / Vacation, dusk and dark as for the bundles) and learns how much that weighs.
-- A new model starts from those time slots: about 70 % in a time slot, 15 % outside, instead of a flat 50 %; the more it learns, the more it counts on itself (on its own after about 3 days). The card says "starts on your time slots".
-- The timeline shows the time slots as a strip under the bars.
-- The text under "How certain" no longer says the prediction isn't used: it is used (Settings → Prediction) once it is ready.
-
-### Room switches: no empty space under the temperature sensor
-- Fixed: a heater's temperature sensor picker (room → Settings → Switches) left a large empty space under it.
+- Counting per device, per heater and per outdoor unit starts with this version; week and month figures fill up from now on.
+- Editing and creating schedules needs a Home Assistant administrator.
+- New websocket commands: `roomcontrol/heating`, `roomcontrol/energy_overview2`.
 
 ## 3.0.10
 
