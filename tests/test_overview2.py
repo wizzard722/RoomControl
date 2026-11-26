@@ -63,5 +63,16 @@ async def main():
     m.add(status(1000), dt_util.as_utc(datetime(2026, 11, 25, 12, 0, 0, tzinfo=tz)) - timedelta(seconds=30))
     m.add(status(1000), dt_util.as_utc(datetime(2026, 11, 25, 12, 0, 0, tzinfo=tz)))
     check("old day keeps totals but not hours/parts", ("hours" in old, "parts" in old), (False, False))
+    # expected use per hour: median over the last full days
+    m2 = EM.EnergyMeter(hass)
+    base = datetime(2026, 11, 26, 12, 0, tzinfo=tz)
+    for i, v in enumerate((1.0, 2.0, 9.0)):  # hour 7: 1, 2 and 9 kWh on three days
+        hrs = [0.3] * 24; hrs[7] = v
+        m2.days[(base - timedelta(days=i + 1)).strftime("%Y-%m-%d")] = {"hours": {"house": hrs}}
+    m2.days["2026-11-26"] = {"hours": {"house": [5.0] * 24}}  # today does not count
+    with patch.object(EM.dt_util, "utcnow", return_value=dt_util.as_utc(base)):
+        up = m2.use_profile()
+    check("use profile: 3 days, hour 7 median 2.0, others 0.3", (up["days"], up["kw"][7], up["kw"][3]), (3, 2.0, 0.3))
+    check("no history: None", EM.EnergyMeter(hass).use_profile(), None)
     await hass.async_stop(); print("ALL PASS" if ok else "SOME FAILED")
 asyncio.run(main())

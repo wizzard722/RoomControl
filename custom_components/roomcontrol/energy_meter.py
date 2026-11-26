@@ -393,6 +393,25 @@ class EnergyMeter:
         rec = (self.days.get(dt_util.as_local(dt_util.utcnow()).strftime("%Y-%m-%d")) or {}).get("ac", {}).get(f"{area or ''}|ac:{climate}")
         return None if rec is None else {k: round(v, 3) for k, v in rec.items()}
 
+    def use_profile(self, days: int = 7) -> dict[str, Any] | None:
+        """The house's expected use per local hour: the median kWh of that hour
+        over the last `days` full days that have hours (Energy › Planning)."""
+        import statistics  # noqa: PLC0415
+
+        today = dt_util.as_local(dt_util.utcnow()).date()
+        cols: list[list[float]] = [[] for _ in range(24)]
+        used = 0
+        for i in range(1, days + 1):
+            h = ((self.days.get((today - timedelta(days=i)).isoformat()) or {}).get("hours") or {}).get("house")
+            if not isinstance(h, list) or len(h) != 24 or sum(h) < 0.5:
+                continue
+            used += 1
+            for k, v in enumerate(h):
+                cols[k].append(float(v))
+        if not used:
+            return None
+        return {"kw": [round(statistics.median(c), 2) if c else 0.0 for c in cols], "days": used}
+
     def heat_totals(self, area: str | None) -> dict[str, dict[str, Any]]:
         """Heaters' kWh and € today, the last 7 days and this month (one room, or all)."""
         now = dt_util.as_local(dt_util.utcnow())

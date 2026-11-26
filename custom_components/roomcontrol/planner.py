@@ -818,6 +818,7 @@ class Planner:
             "rows": [{"start": r["start"].isoformat(), "buy": None if r["buy"] is None else round(r["buy"], 4),
                       "sun_kw": round(r["sun_kw"], 2), "co2": None if r["co2"] is None else round(r["co2"])} for r in rows],
             "devices": devices,
+            "use_profile": meter.use_profile() if (meter := self.hass.data.get(DOMAIN, {}).get("meter")) is not None else None,
             "savings": {"month": round(sum(r["ref"] - r["cost"] for r in priced), 2) if priced else None,
                         "runs": len(runs), "kwh": round(sum(r["kwh"] for r in runs), 1)},
         }
