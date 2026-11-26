@@ -7,6 +7,7 @@
 - The chart "Next 24 hours" (Planning, and on Overview) has a **kW axis on the left** for the expected sun and a **price axis on the right** (€/kWh), with in-between values (e.g. every 5 cents and every 0.5 kW; the step follows the day's range).
 - **Expected use**: a blue line per hour – the house's usual use per hour (median of the last 7 days, from the hours counted since 4.0.0) plus what is planned (car, boiler and other devices with their power). Where the line is under the sun bars, the sun covers the use.
 - **Tap an hour** (or use the arrow keys): the time, expected sun, expected use and the price with its level show above the chart; the hour is marked in the chart.
+- A **line at the current time** (with "now 21:02" above it), on the exact minute within the first hour; it moves along every minute, and the price-now dot sits on it.
 - The cheap / expensive thresholds are in the legend now ("cheap ≤ € 0.45", "expensive ≥ € 0.54") instead of as labels in the chart.
 
 ## 4.0.0 – Four Seasons
