@@ -201,6 +201,16 @@ async def main():
     check("at most max_kw (2.5 kW)", HT.outdoor_split(hass, st3)[0]["watts"], 2500.0)
     S(c1.entity_id, "off", {}); S(c2.entity_id, "off", {})
     check("no indoor unit running: 0", HT.outdoor_split(hass, st3)[0]["watts"], 0.0)
+    # learning the unknown use of L2 while the air conditioners are off, then taking it off
+    ctl = HT.Heating(hass); hass.data[DOMAIN]["heating_ctl"] = ctl
+    st3["phases"]["L2"] = 850  # rooms on L2 600 → 250 W unknown
+    HT.outdoor_split(hass, st3)
+    check("learned unknown on L2: 250 W", round(ctl.unknown_for("L2")), 250)
+    S(c1.entity_id, "heat", {"hvac_action": "heating"})
+    st3["phases"]["L2"] = 2050  # 600 rooms + 250 unknown + 1200 outdoor unit
+    u2 = HT.outdoor_split(hass, st3)[0]
+    check("estimate minus the unknown: 1200 W", (u2["watts"], u2["unknown"]), (1200.0, 250))
+    del hass.data[DOMAIN]["heating_ctl"]; S(c1.entity_id, "off", {})
     hass.data[DOMAIN]["settings"]["heating"]["outdoor"].append({"name": "Buiten 1", "sensor": "sensor.buiten1", "phase": "L1", "units": []})
     check("metered outdoor units per phase (for the car estimate)", HT.metered_outdoor(hass, True), {"L1": 1200.0})
     rooms[0]["heating"]["devices"] = [c2.entity_id]

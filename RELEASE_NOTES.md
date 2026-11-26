@@ -1,5 +1,18 @@
 # Release notes
 
+## 4.0.4 – Smarter outdoor units
+
+### Heating & cooling: outdoor units without a meter, more accurate
+
+- The estimate of an outdoor unit without a meter now also subtracts the **unknown use of its phase**: what is left on the phase while the air conditioners are off (fridge, router, …), learned per hour of the day. So it is: the phase − the rooms on it − the car charging there − metered outdoor units − that unknown use, only while an indoor unit heats or cools. The learned unknown use is shown with the outdoor unit.
+- **Maximum power (type plate)** – the field "Maximum" is renamed and explained: it is only a safety cap, the input power on the type plate (e.g. 2 kW), not a minimum.
+- **Indoor units** of an outdoor unit: only the air conditioners chosen in a room are listed (no more thermostats such as the Atag).
+
+### Heating & cooling: layout
+
+- "Switching by RoomControl" is now **"Switch schedule automatically"**, with one line explaining it. On a phone the schedule choice sits below the situation, full width, instead of squeezing the text into a narrow column.
+- Fixed: large empty spaces under the entity pickers in General settings › Heating & cooling.
+
 ## 4.0.3 – More schedules
 
 ### Heating & cooling: add several schedules

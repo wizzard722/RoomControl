@@ -42,9 +42,11 @@ General setting "heating":
              outdoor units: "meter" = their own power sensor; "phase" = no
              meter, estimated like the car charger: the use on its phase −
              the rooms on that phase − the car charging there − metered
-             outdoor units on that phase (3 phases: also at most the house −
-             all rooms), only while one of its indoor units heats or cools,
-             0..max_kw. The power is split over the indoor units that run and
+             outdoor units on that phase − the "unknown" use of that phase
+             (learned per hour of the day while none of the phase's
+             estimated units runs: what is left on the phase then is the
+             fridge, router, …), only while one of its indoor units heats or
+             cools; at most max_kw (a safety cap, the type plate's input). The power is split over the indoor units that run and
              added to their rooms (energy.py status: part kind "ac"; energy_meter
              day "ac": kWh, and while heating "heat" for the gas comparison)}
 
@@ -260,10 +262,28 @@ def outdoor_split(hass: HomeAssistant, status: dict[str, Any]) -> list[dict[str,
         ph = (r.get("phase") or "") if three else "L1"
         on_phase[ph] = on_phase.get(ph, 0.0) + (r.get("watts") or 0.0)
     house = sum(v for v in phases.values() if v is not None) if phases and all(v is not None for v in phases.values()) else None
+    ctl = hass.data.get(DOMAIN, {}).get("heating_ctl")
+    units = outdoor_units(hass)
+
+    def rest(ph: str) -> float | None:
+        """The phase minus what is known on it (rooms, car, metered outdoor units)."""
+        pw = phases.get(ph)
+        if pw is None:
+            return None
+        return pw - on_phase.get(ph, 0.0) - (car_w if car.get("phase", "L1") == ph else 0.0) - metered.get(ph, 0.0)
+
+    runs = {i: _running(hass, [c for c in u.get("units") or [] if isinstance(c, str)]) for i, u in enumerate(units)}
+    if ctl is not None:  # learn the unknown use of a phase while its estimated units are off
+        for ph in {((u.get("phase") or "L1") if three else "L1") for u in units if _unit_mode(u) == "phase"}:
+            if any(runs[i][0] for i, u in enumerate(units) if _unit_mode(u) == "phase" and ((u.get("phase") or "L1") if three else "L1") == ph):
+                continue
+            r = rest(ph)
+            if r is not None:
+                ctl.learn_unknown(ph, max(0.0, r))
     out = []
-    for i, u in enumerate(outdoor_units(hass)):
+    for i, u in enumerate(units):
         mode = _unit_mode(u)
-        run, heating = _running(hass, [c for c in u.get("units") or [] if isinstance(c, str)])
+        run, heating = runs[i]
         ph = (u.get("phase") or "L1") if three else "L1"
         watts: float | None
         if mode == "meter":
@@ -272,16 +292,18 @@ def outdoor_split(hass: HomeAssistant, status: dict[str, Any]) -> list[dict[str,
         elif not run:
             watts = 0.0
         else:
-            pw = phases.get(ph)
-            if pw is None:
+            r = rest(ph)
+            if r is None:
                 watts = None
             else:
-                est = pw - on_phase.get(ph, 0.0) - (car_w if car.get("phase", "L1") == ph else 0.0) - metered.get(ph, 0.0)
+                unk = ctl.unknown_for(ph) if ctl is not None else 0.0
+                est = r - unk
                 if three and house is not None:
-                    est = min(est, house - sum(on_phase.values()) - car_w - sum(metered.values()))
+                    est = min(est, house - sum(on_phase.values()) - car_w - sum(metered.values()) - unk)
                 watts = min(max(0.0, est), _num(u.get("max_kw"), DEFAULT_OUTDOOR_KW) * 1000)
         split = {c: round(watts / len(run), 1) for c in run} if watts and run else {}
         out.append({"index": i, "name": u.get("name") or f"#{i + 1}", "mode": mode, "phase": ph if mode == "phase" else u.get("phase"),
+                    "unknown": round(ctl.unknown_for(ph)) if ctl is not None and mode == "phase" else None,
                     "watts": None if watts is None else round(watts, 1), "split": split,
                     "heating": {c: heating.get(c, False) for c in split}})
     return out
@@ -351,16 +373,19 @@ class Heating:
         self._watch: CALLBACK_TYPE | None = None
         self._was_home_armed: bool | None = None
         self.dev_held: dict[str, dict[str, Any]] = {}  # climate → {"key", "prev", "set"}
+        self.unknown: dict[str, list[float | None]] = {}  # phase → W per hour, while the ACs are off
+        self._unk_at: dict[str, datetime] = {}
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
         self.held = {k: v for k, v in (data.get("held") or {}).items() if isinstance(v, dict)}
         self.nobody_since = data.get("nobody_since") if isinstance(data.get("nobody_since"), str) else None
         self.dev_held = {k: v for k, v in (data.get("dev_held") or {}).items() if isinstance(v, dict)}
+        self.unknown = {k: v for k, v in (data.get("unknown") or {}).items() if isinstance(v, list) and len(v) == 24}
 
     def _save(self) -> None:
         self._store.async_delay_save(lambda: {"held": self.held, "nobody_since": self.nobody_since,
-                                              "dev_held": self.dev_held}, 10)
+                                              "dev_held": self.dev_held, "unknown": self.unknown}, 10)
 
     @callback
     def start(self) -> None:
@@ -396,6 +421,29 @@ class Heating:
         self._tick()
 
     # ── what applies now ──────────────────────────────────────────────────
+
+    def learn_unknown(self, phase: str, watts: float, now: datetime | None = None) -> None:
+        """What is left on a phase while its estimated outdoor units are off,
+        per local hour (moving average, at most every 25 s)."""
+        now = now or dt_util.utcnow()
+        last = self._unk_at.get(phase)
+        if last is not None and (now - last).total_seconds() < 25:
+            return
+        self._unk_at[phase] = now
+        row = self.unknown.setdefault(phase, [None] * 24)
+        h = dt_util.as_local(now).hour
+        row[h] = round(watts if row[h] is None else row[h] * 0.95 + watts * 0.05, 1)
+        self._save()
+
+    def unknown_for(self, phase: str, now: datetime | None = None) -> float:
+        row = self.unknown.get(phase) or []
+        if not row:
+            return 0.0
+        v = row[dt_util.as_local(now or dt_util.utcnow()).hour]
+        if v is not None:
+            return v
+        known = [x for x in row if x is not None]
+        return sum(known) / len(known) if known else 0.0
 
     def situations(self, now: datetime | None = None) -> dict[str, Any]:
         from .rooms import anyone_home  # noqa: PLC0415
@@ -663,7 +711,8 @@ def outdoor_now(hass: HomeAssistant) -> list[dict[str, Any]]:
     """The outdoor units with their power now (from the last energy tick)."""
     energy = hass.data.get(DOMAIN, {}).get("energy")
     last = {u["index"]: u for u in ((getattr(energy, "last_status", None) or {}).get("outdoor") or [])} if energy else {}
-    return [{**u, "watts": (last.get(i) or {}).get("watts"), "unit": "W", "estimated": _unit_mode(u) == "phase"}
+    return [{**u, "watts": (last.get(i) or {}).get("watts"), "unknown": (last.get(i) or {}).get("unknown"),
+             "unit": "W", "estimated": _unit_mode(u) == "phase"}
             for i, u in enumerate(outdoor_units(hass))]
 
 
@@ -713,7 +762,8 @@ def house_status(hass: HomeAssistant) -> dict[str, Any]:
     ctl = hass.data.get(DOMAIN, {}).get("heating_ctl") or Heating(hass)
     sit = ctl.situations()
     outdoor = outdoor_now(hass)
-    climates = sorted(s.entity_id for s in hass.states.async_all("climate") if not s.entity_id.startswith("climate.roommind_"))
+    climates = sorted({c for r in hass.data.get(DOMAIN, {}).get("rooms", []) for c in room_devices(hass, r)}
+                      | {c for u in g.get("outdoor") or [] if isinstance(u, dict) for c in u.get("units") or []})
     return {"selector": sel, "value": selector_value(hass, sel), "min": lo, "max": hi, "rooms": rooms,
             "outdoor": outdoor, "climates": climates,
             "now": {k: sit[k] for k in ("armed_away", "armed_home", "holiday", "summer", "season", "vacation")},
