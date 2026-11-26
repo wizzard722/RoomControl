@@ -24,8 +24,8 @@ Room option "heating":
                   when it ends, what was changed is put back (unless someone
                   changed it in between; the sleep timer is left to run out),
   "devices": [climate, ...] the room's heating/cooling devices (e.g. LG ThinQ
-             air conditioners); missing = the climates in the room's area
-             (not the RoomMind thermostat),
+             air conditioners), only the ones the user chose (the climates
+             in the room's area are offered as suggestions),
   "device": "electric" | "heatpump"}
 General setting "heating":
  {"selector": the house's selector, "names": {"1": "Normaal", ...},
@@ -103,15 +103,22 @@ def _area_of(hass: HomeAssistant, entity_id: str) -> str | None:
 
 
 def room_devices(hass: HomeAssistant, room: dict[str, Any] | None) -> list[str]:
-    """The room's climate devices: the ones set, else those in its area."""
+    """The room's climate devices: only the ones the user chose."""
     h = heating_cfg(room)
     if isinstance(h.get("devices"), list):
         return [d for d in h["devices"] if isinstance(d, str) and d.startswith("climate.")]
+    return []
+
+
+def area_climates(hass: HomeAssistant, room: dict[str, Any] | None) -> list[str]:
+    """Climates in the room's area that are not the thermostat or chosen yet (suggestions)."""
+    h = heating_cfg(room)
     area = (room or {}).get("area_id")
+    chosen = set(room_devices(hass, room))
     thermostat = h.get("climate") or f"climate.roommind_{area}"
     return sorted(s.entity_id for s in hass.states.async_all("climate")
                   if s.entity_id != thermostat and not s.entity_id.startswith("climate.roommind_")
-                  and _area_of(hass, s.entity_id) == area)
+                  and s.entity_id not in chosen and _area_of(hass, s.entity_id) == area)
 
 
 def device_room(hass: HomeAssistant, climate: str) -> str | None:
@@ -628,6 +635,7 @@ def room_status(hass: HomeAssistant, area: str) -> dict[str, Any]:
         "thermostat": None if st is None else {
             "state": st.state, "current": st.attributes.get("current_temperature"),
             "target": st.attributes.get("temperature"), "action": st.attributes.get("hvac_action"),
+            "target_low": st.attributes.get("target_temp_low"), "target_high": st.attributes.get("target_temp_high"),
             "preset": st.attributes.get("preset_mode"), "presets": st.attributes.get("preset_modes") or [],
             "override_until": st.attributes.get("override_until"), "window_open": st.attributes.get("window_open"),
             "presence_away": st.attributes.get("presence_away"), "name": st.attributes.get("friendly_name")},
@@ -645,6 +653,8 @@ def room_status(hass: HomeAssistant, area: str) -> dict[str, Any]:
         "schedule_ids": schedule_ids(hass, h.get("schedules") or []),
         "devices": [device_status(hass, c, meter.device_today(area, c) if meter is not None else None) for c in room_devices(hass, room)],
         "outdoor": outdoor_now(hass),
+        "suggest": [{"entity": c, "name": (hass.states.get(c).attributes.get("friendly_name") if hass.states.get(c) else None) or c}
+                    for c in area_climates(hass, room)],
         "three": int(_num((hass.data.get(DOMAIN, {}).get("settings", {}).get("energy") or {}).get("phases"), 1)) == 3,
     }
 
@@ -665,6 +675,7 @@ def device_status(hass: HomeAssistant, climate: str, today: dict[str, Any] | Non
     return {
         "entity": climate, "name": a.get("friendly_name") or climate, "state": st.state if st is not None else None,
         "action": a.get("hvac_action"), "current": a.get("current_temperature"), "target": a.get("temperature"),
+        "target_low": a.get("target_temp_low"), "target_high": a.get("target_temp_high"),
         "min": a.get("min_temp"), "max": a.get("max_temp"), "step": a.get("target_temp_step"),
         "hvac_modes": a.get("hvac_modes") or [],
         "fan": a.get("fan_mode"), "fan_modes": a.get("fan_modes") or [],

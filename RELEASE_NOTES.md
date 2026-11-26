@@ -1,5 +1,13 @@
 # Release notes
 
+## 4.0.2 – Your choice of devices
+
+### Heating & cooling: devices only when you choose them
+
+- A room's **Devices** (Heating & cooling) are no longer filled in by themselves: a thermostat in the room's area (e.g. the central heating's Atag) is not linked unless you add it. The climate devices found in the room's area are offered under **"Found in this room"** – one tap adds one – and the entity picker adds any other. Settings of a device you had (time slots, night settings, outdoor unit) come back when you add it again.
+- **Target with RoomMind in Auto** (heating and cooling): shown as "20.0°–24.0°" (the heating and cooling targets) instead of "—", in the room card, on Overview and per device.
+- Fixed: a large empty space under the thermostat picker in the Heating & cooling card.
+
 ## 4.0.1 – Sun & use axes
 
 ### Energy: the 24-hour chart gets axes and the expected use

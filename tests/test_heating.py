@@ -133,7 +133,10 @@ async def main():
     S(c1.entity_id, "heat", {"hvac_action": "heating", "fan_mode": "auto", "fan_modes": ["auto", "low", "high"], "swing_mode": "off", "swing_modes": ["off", "on"]})
     S(c2.entity_id, "cool", {"hvac_action": "cooling"})
     S(t1.entity_id, "0", {"min": 0, "max": 12, "step": 1, "unit_of_measurement": "h"})
-    check("devices in the area", HT.room_devices(hass, rooms[0]), [c1.entity_id])
+    check("nothing chosen: no devices", HT.room_devices(hass, rooms[0]), [])
+    check("climates in the area are suggestions", HT.area_climates(hass, rooms[0]), [c1.entity_id])
+    rooms[0]["heating"]["devices"] = [c1.entity_id]
+    check("chosen: a device, no longer a suggestion", (HT.room_devices(hass, rooms[0]), HT.area_climates(hass, rooms[0])), ([c1.entity_id], []))
     check("sleep timer of the same device", HT.sleep_timer(hass, c1.entity_id), t1.entity_id)
     check("device's room", HT.device_room(hass, c1.entity_id), woon.id)
     hass.data[DOMAIN]["settings"]["heating"]["outdoor"] = [{"name": "Buiten 1", "sensor": "sensor.buiten1", "units": [c1.entity_id, c2.entity_id]}]
