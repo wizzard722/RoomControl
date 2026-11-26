@@ -19,8 +19,8 @@ Room option "heating":
 General setting "heating":
  {"selector": the house's selector, "names": {"1": "Normaal", ...},
   "rules": {...as for a room}, "nobody_h": hours,
-  "holiday_calendar": a calendar (e.g. the Holiday integration's) — a day
-  with an event on is a holiday; "holiday_dates": ["MM-DD", ...] own days,
+  "holiday_calendar": a calendar — a day with an event on is a holiday
+  (default: the Holiday integration's calendar); "holiday_dates": ["MM-DD", ...] own days,
   "season_sensor": the Season integration's sensor (default sensor.season;
   "summer" = summer),
   "gas_price": € per m³ (else Energy › bill gas price), "efficiency": % of
@@ -73,6 +73,22 @@ def general_cfg(hass: HomeAssistant) -> dict[str, Any]:
 
 def _num(v: Any, default: float) -> float:
     return float(v) if isinstance(v, (int, float)) and v > 0 else default
+
+
+def holiday_calendar(hass: HomeAssistant) -> str | None:
+    """The calendar with holidays: the one set, else the Holiday integration's."""
+    chosen = general_cfg(hass).get("holiday_calendar")
+    if chosen:
+        return chosen
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    try:
+        entries = list(er.async_get(hass).entities.values())
+    except (AttributeError, KeyError):  # registry not loaded
+        return None
+    found = sorted(e.entity_id for e in entries
+                   if e.platform == "holiday" and e.domain == "calendar" and not e.disabled_by)
+    return found[0] if found else None
 
 
 def season_sensor(hass: HomeAssistant) -> str | None:
@@ -175,7 +191,7 @@ class Heating:
             self._watch()
         settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
         g = general_cfg(self.hass)
-        ids = [e for e in [settings.get(SETTING_ALARM_ENTITY), g.get("holiday_calendar"), season_sensor(self.hass)] if e]
+        ids = [e for e in [settings.get(SETTING_ALARM_ENTITY), holiday_calendar(self.hass), season_sensor(self.hass)] if e]
         ids += list(household_persons(self.hass))
         self._watch = async_track_state_change_event(self.hass, ids, self._on_state) if ids else None
         self._tick()
@@ -200,7 +216,8 @@ class Heating:
             self.nobody_since = now.isoformat()
         since = dt_util.parse_datetime(self.nobody_since) if self.nobody_since else None
         g = general_cfg(hass)
-        cal = hass.states.get(g["holiday_calendar"]) if g.get("holiday_calendar") else None
+        cal_id = holiday_calendar(hass)
+        cal = hass.states.get(cal_id) if cal_id else None
         today = dt_util.as_local(now).strftime("%m-%d")
         dates = {str(d) for d in g.get("holiday_dates") or []}
         season = hass.states.get(season_sensor(hass) or "")
@@ -345,5 +362,5 @@ def house_status(hass: HomeAssistant) -> dict[str, Any]:
     sit = ctl.situations()
     return {"selector": sel, "value": selector_value(hass, sel), "min": lo, "max": hi, "rooms": rooms,
             "now": {k: sit[k] for k in ("armed_away", "armed_home", "holiday", "summer", "season", "vacation")},
-            "season_sensor": season_sensor(hass), "held": ctl.held.get(sel) if sel else None,
+            "season_sensor": season_sensor(hass), "holiday_calendar": holiday_calendar(hass), "held": ctl.held.get(sel) if sel else None,
             "roommind": found, "month": gas_equivalent(hass, month["kwh"], month.get("eur"))}

@@ -17,6 +17,7 @@ def check(label, got, want):
 
 async def main():
     hass = HomeAssistant(tempfile.mkdtemp()); dt_util.set_default_time_zone(dt_util.get_time_zone("Europe/Amsterdam")); await hass.async_start()
+    from homeassistant.helpers import entity_registry as er0; await er0.async_load(hass)
     calls = []
     async def set_value(call): calls.append((call.data["entity_id"], call.data["value"])); hass.states.async_set(call.data["entity_id"], str(float(call.data["value"])), {"min": 1, "max": 3})
     hass.services.async_register("input_number", "set_value", set_value)
@@ -72,6 +73,14 @@ async def main():
     check("no rule: back to 1", calls[-1], ("input_number.schema_huis", 1))
     g["holiday_dates"] = [dt_util.now().strftime("%m-%d")]; h._tick(); await hass.async_block_till_done()
     check("own date is a holiday: 3", calls[-1], ("input_number.schema_huis", 3))
+    # without a calendar set: the Holiday integration's calendar is used
+    from homeassistant.helpers import entity_registry as er
+    ent = er.async_get(hass).async_get_or_create("calendar", "holiday", "nl", suggested_object_id="nederland")
+    g.pop("holiday_calendar"); g["holiday_dates"] = []; S(ent.entity_id, "on")
+    check("Holiday integration's calendar found", HT.holiday_calendar(hass), ent.entity_id)
+    h._tick(); await hass.async_block_till_done()
+    check("its holiday: still 3", h.held["input_number.schema_huis"]["set"], 3)
+    g["holiday_dates"] = [dt_util.now().strftime("%m-%d")]
     sit = h.situations()
     check("situations", (sit["holiday"], sit["summer"], sit["season"]), (True, False, "autumn"))
     g["holiday_dates"] = []; g["rules"] = {"armed_away": 3, "nobody": 3}; h._tick(); await hass.async_block_till_done()
