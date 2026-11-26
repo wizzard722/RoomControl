@@ -6,7 +6,7 @@ A big release: heating and cooling per room (RoomMind, air conditioners such as 
 
 ### Rooms: Heating (RoomMind)
 
-- A room has a new settings card **Heating** for [RoomMind](https://github.com/snazzybean/roommind) (or another thermostat):
+- A room has a new settings card **Heating & cooling** for [RoomMind](https://github.com/snazzybean/roommind) (or another thermostat):
   - the room's thermostat (`climate.roommind_<room>` is found by itself), with the temperature now, the target and its status;
   - **schedule choice**: RoomMind switches schedules with an `input_number` (1 = first schedule, …) or an `input_boolean` (off = 1, on = 2), for **this room** or for the **whole house**; the room's schedule helpers are listed in that order, with today's blocks, and a tap makes one active;
   - **switching by RoomControl**: on Alarm Armed Away (or Armed Vacation), RoomControl's vacation mode, nobody home for a number of hours, Alarm Armed Home, a **holiday** (the calendar of Home Assistant's Holiday integration, found by itself, plus own days like 24-12) or **summer** (Home Assistant's Season integration), the selector goes to a chosen schedule — the first rule that applies wins, in that order — and back afterwards (unless someone changed it in between); this shows in the room's Debug log;
@@ -21,7 +21,7 @@ A big release: heating and cooling per room (RoomMind, air conditioners such as 
 - Per device: mode, target temperature, **fan**, **swing**, **horizontal swing** and the **sleep timer** (the device's own number entity), only the choices the device offers. With a RoomMind thermostat in the room, mode and temperature stay with RoomMind; fan, swing and sleep timer are set on the device.
 - **At Alarm Armed Home (night)** per device: fan, swing, horizontal swing and sleep timer to set when the alarm goes to armed home ("don't change" leaves one alone); shown in the room's Debug log.
 - The room's Overview heating card shows each device with quick buttons (tap = next fan mode, swing, horizontal swing, sleep timer) and, without RoomMind, an on/off button.
-- **General settings › Heating & cooling › Outdoor units with a power meter**: an outdoor unit's power is split over its indoor units that run; while heating it counts as a heat pump (× COP) in the gas comparison, and each device shows today's kWh.
+- **General settings › Heating & cooling › Outdoor units**: an outdoor unit's power is split over its indoor units that run; while heating it counts as a heat pump (× COP) in the gas comparison, and each device shows today's kWh.
 
 ### Heating & cooling: time slots for air conditioners and schedules
 
