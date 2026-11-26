@@ -1,0 +1,2 @@
+# What the tests need (GitHub Actions: .github/workflows/tests.yml)
+homeassistant==2026.2.3
