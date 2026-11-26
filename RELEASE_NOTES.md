@@ -15,6 +15,7 @@
 
 - The room card is now **Heating & cooling**, with **Devices**: the room's climate devices (e.g. LG ThinQ air conditioners) are found in its area, or added and removed by hand.
 - Per device: mode, target temperature, **fan**, **swing**, **horizontal swing** and the **sleep timer** (the device's own number entity), only the choices the device offers. With a RoomMind thermostat in the room, mode and temperature stay with RoomMind; fan, swing and sleep timer are set on the device.
+- **At Alarm Armed Home (night)** per device: fan, swing, horizontal swing and sleep timer to set when the alarm goes to armed home ("don't change" leaves one alone); shown in the room's Debug log.
 - The room's Overview heating card shows each device with quick buttons (tap = next fan mode, swing, horizontal swing, sleep timer) and, without RoomMind, an on/off button.
 - **General settings › Heating & cooling › Outdoor units with a power meter**: an outdoor unit's power is split over its indoor units that run; while heating it counts as a heat pump (× COP) in the gas comparison, and each device shows today's kWh.
 

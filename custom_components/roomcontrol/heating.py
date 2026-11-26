@@ -15,6 +15,9 @@ Room option "heating":
             "holiday": n, "summer": n} (value to switch to),
   "nobody_h": hours nobody home before "nobody" applies (default 2),
   "tile": bool (Overview card, default True),
+  "device_night": {climate: {"fan_mode", "swing_mode", "swing_horizontal_mode",
+                  "sleep": value}} set on a device when the alarm goes to
+                  armed home (the night); missing keys are left alone,
   "devices": [climate, ...] the room's heating/cooling devices (e.g. LG ThinQ
              air conditioners); missing = the climates in the room's area
              (not the RoomMind thermostat),
@@ -223,6 +226,7 @@ class Heating:
         self.nobody_since: str | None = None
         self._unsubs: list[CALLBACK_TYPE] = []
         self._watch: CALLBACK_TYPE | None = None
+        self._was_home_armed: bool | None = None
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
@@ -323,6 +327,9 @@ class Heating:
     @callback
     def _tick(self, *_: Any) -> None:
         sit = self.situations()
+        if sit["armed_home"] and self._was_home_armed is False:
+            self._night_devices()
+        self._was_home_armed = sit["armed_home"]
         seen = set()
         for sel, cfg, area in self.targets():
             seen.add(sel)
@@ -344,6 +351,32 @@ class Heating:
         for sel in [s for s in self.held if s not in seen]:
             del self.held[sel]
         self._save()
+
+    def _night_devices(self) -> None:
+        """Alarm went to armed home: each device's night settings."""
+        for room in self.hass.data.get(DOMAIN, {}).get("rooms", []):
+            night = heating_cfg(room).get("device_night")
+            if not isinstance(night, dict):
+                continue
+            for climate, cfg in night.items():
+                st = self.hass.states.get(climate)
+                if st is None or st.state in ("off", "unavailable") or not isinstance(cfg, dict):
+                    continue
+                for attr, service, options in (("fan_mode", "set_fan_mode", "fan_modes"),
+                                               ("swing_mode", "set_swing_mode", "swing_modes"),
+                                               ("swing_horizontal_mode", "set_swing_horizontal_mode", "swing_horizontal_modes")):
+                    value = cfg.get(attr)
+                    if value and value in (st.attributes.get(options) or []) and st.attributes.get(attr) != value:
+                        self.hass.async_create_task(self.hass.services.async_call(
+                            "climate", service, {"entity_id": climate, attr: value}, blocking=False))
+                timer = sleep_timer(self.hass, climate)
+                if timer and isinstance(cfg.get("sleep"), (int, float)):
+                    self.hass.async_create_task(self.hass.services.async_call(
+                        "number", "set_value", {"entity_id": timer, "value": cfg["sleep"]}, blocking=False))
+                light = self.hass.data.get(DOMAIN, {}).get("entities", {}).get(room.get("area_id"))
+                if light is not None and hasattr(light, "_debug"):
+                    light._debug.append({"at": dt_util.utcnow().isoformat(), "kind": "info", "reason": "heating_night",
+                                         "bundles": [st.attributes.get("friendly_name") or climate], "items": [climate]})
 
     def _set(self, sel: str, value: int, rule: str | None, area: str | None) -> None:
         _LOGGER.debug("Heating: %s → %s (%s)", sel, value, rule)

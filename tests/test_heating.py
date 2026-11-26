@@ -153,6 +153,17 @@ async def main():
     check("gas: heater 0.6 × 1 + air conditioner 0.6 × COP 3.5 = 2.7 kWh heat", round(g2["heat"], 2), 2.7)
     d0 = rs["devices"][0]
     check("device status", (d0["entity"], d0["fan"], d0["fan_modes"], d0["sleep"]["entity"], d0["sleep"]["unit"]), (c1.entity_id, "auto", ["auto", "low", "high"], t1.entity_id, "h"))
+    # night settings on armed home
+    svc = []
+    async def rec(call): svc.append((call.domain, call.service, dict(call.data)))
+    for dom, sv in (("climate", "set_fan_mode"), ("climate", "set_swing_mode"), ("number", "set_value")):
+        hass.services.async_register(dom, sv, rec)
+    rooms[0]["heating"]["device_night"] = {c1.entity_id: {"fan_mode": "low", "swing_mode": "off", "sleep": 2}}
+    S("alarm_control_panel.a", "disarmed"); h._tick(); await hass.async_block_till_done(); svc.clear()
+    S("alarm_control_panel.a", "armed_home"); h._tick(); await hass.async_block_till_done()
+    check("armed home: fan low, sleep 2 h (swing already off)", sorted((x[1], list(x[2].values())[-1]) for x in svc), [("set_fan_mode", "low"), ("set_value", 2)])
+    svc.clear(); h._tick(); await hass.async_block_till_done()
+    check("only on the change to armed home", svc, [])
     rooms[0]["heating"]["devices"] = [c2.entity_id]
     check("devices set by hand", HT.room_devices(hass, rooms[0]), [c2.entity_id])
     await hass.async_stop(); print("ALL PASS" if ok else "SOME FAILED")
