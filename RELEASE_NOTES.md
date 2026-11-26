@@ -1,36 +1,8 @@
 # Release notes
 
-## 3.0.11
+## 4.0.0
 
-### Prediction: the light bundles' time slots count
-- The prediction model now knows whether one of the room's light bundles has a time slot running (Normal / Leave / Vacation, dusk and dark as for the bundles) and learns how much that weighs.
-- A new model starts from those time slots: about 70 % in a time slot, 15 % outside, instead of a flat 50 %; the more it learns, the more it counts on itself (on its own after about 3 days). The card says "starts on your time slots".
-- The timeline shows the time slots as a strip under the bars.
-- The text under "How certain" no longer says the prediction isn't used: it is used (Settings → Prediction) once it is ready.
-
-### Room switches: no empty space under the temperature sensor
-- Fixed: a heater's temperature sensor picker (room → Settings → Switches) left a large empty space under it.
-
-### Heating & cooling: outdoor units without a meter
-
-- An outdoor unit is measured with a **power meter** or, without one, **estimated via its phase**, the same way as the car charger: the use on its phase − the rooms on that phase − the car when it charges there − metered outdoor units on that phase (with 3 phases also at most the house − all rooms), only while one of its indoor units heats or cools, at most a maximum (default 2.5 kW).
-- Set up per room at the air conditioner (Heating & cooling › device › **Outdoor unit**: choose one, or "+ New outdoor unit"; name, power meter or phase + maximum, which other indoor units share it), and in General settings.
-- The outdoor units' power (measured or estimated) now counts for the **rooms** of their indoor units in Energy (room now and today, the room's kWh sensor, less "not assigned"), in Overview 2's On now and Complications, and as heat pump heat in the gas comparison. The car's estimate subtracts a metered outdoor unit on its phase.
-
-### Heating & cooling: time slots for air conditioners and schedules
-
-- **Air conditioner time slots**: per device, one or more time slots (the usual time slot editor: days, start time / dusk / dark, end time / sunrise, normal / vacation) with the settings to use: fan, swing, horizontal swing, sleep timer and, without RoomMind, mode and temperature. At the start RoomControl sets them; at the end it puts back what it changed (unless someone changed it in between; the sleep timer runs out). Shown in the room's Debug log.
-- **Schedules as time slots**: each schedule helper of a room is shown as time slots (blocks with the same times and temperatures on several days become one slot; a block running past midnight is one slot), with **Heating** (`heat_temperature`) and **Cooling** (`cool_temperature`) or one **Temperature** (`temperature`). A change is written straight into the schedule in Home Assistant (`schedule/update`), so RoomMind follows it; other keys in a block are kept, the slot's name is kept as `name`. Overlapping slots are not saved (with a message); schedules made in YAML are shown read-only.
-- **New schedule**: create a schedule helper from the room's card; it is linked to the room straight away.
-- **Sleep timer up to 12 hours**: Off · 1 · 2 · 3 · 4 · 6 · 8 · 10 · 12 h.
-
-### Rooms: air conditioners (LG ThinQ) in Heating & cooling
-
-- The room card is now **Heating & cooling**, with **Devices**: the room's climate devices (e.g. LG ThinQ air conditioners) are found in its area, or added and removed by hand.
-- Per device: mode, target temperature, **fan**, **swing**, **horizontal swing** and the **sleep timer** (the device's own number entity), only the choices the device offers. With a RoomMind thermostat in the room, mode and temperature stay with RoomMind; fan, swing and sleep timer are set on the device.
-- **At Alarm Armed Home (night)** per device: fan, swing, horizontal swing and sleep timer to set when the alarm goes to armed home ("don't change" leaves one alone); shown in the room's Debug log.
-- The room's Overview heating card shows each device with quick buttons (tap = next fan mode, swing, horizontal swing, sleep timer) and, without RoomMind, an on/off button.
-- **General settings › Heating & cooling › Outdoor units with a power meter**: an outdoor unit's power is split over its indoor units that run; while heating it counts as a heat pump (× COP) in the gas comparison, and each device shows today's kWh.
+A big release: heating and cooling per room (RoomMind, air conditioners such as LG ThinQ, schedules as time slots, outdoor units, gas comparison), a new energy overview with a chronograph dial, and the order of the settings cards.
 
 ### Rooms: Heating (RoomMind)
 
@@ -42,6 +14,27 @@
 - The room's **Overview** gets a heating card: a gauge from now to the target, the schedule, Comfort · Eco · +1° · Back to schedule, the schedules to choose from and the heater's use today as gas.
 - **General settings › Heating**: the whole house's selector with a name per value, which rooms follow it, the house rules, and the gas comparison settings (gas price, boiler efficiency, energy in gas, heat pump COP) with this month's total.
 - The energy meter keeps heaters' kWh and cost per day; new websocket command `roomcontrol/heating`, and the panel may set a room thermostat's preset and temperature.
+
+### Rooms: air conditioners (LG ThinQ) in Heating & cooling
+
+- The room card is now **Heating & cooling**, with **Devices**: the room's climate devices (e.g. LG ThinQ air conditioners) are found in its area, or added and removed by hand.
+- Per device: mode, target temperature, **fan**, **swing**, **horizontal swing** and the **sleep timer** (the device's own number entity), only the choices the device offers. With a RoomMind thermostat in the room, mode and temperature stay with RoomMind; fan, swing and sleep timer are set on the device.
+- **At Alarm Armed Home (night)** per device: fan, swing, horizontal swing and sleep timer to set when the alarm goes to armed home ("don't change" leaves one alone); shown in the room's Debug log.
+- The room's Overview heating card shows each device with quick buttons (tap = next fan mode, swing, horizontal swing, sleep timer) and, without RoomMind, an on/off button.
+- **General settings › Heating & cooling › Outdoor units with a power meter**: an outdoor unit's power is split over its indoor units that run; while heating it counts as a heat pump (× COP) in the gas comparison, and each device shows today's kWh.
+
+### Heating & cooling: time slots for air conditioners and schedules
+
+- **Air conditioner time slots**: per device, one or more time slots (the usual time slot editor: days, start time / dusk / dark, end time / sunrise, normal / vacation) with the settings to use: fan, swing, horizontal swing, sleep timer and, without RoomMind, mode and temperature. At the start RoomControl sets them; at the end it puts back what it changed (unless someone changed it in between; the sleep timer runs out). Shown in the room's Debug log.
+- **Schedules as time slots**: each schedule helper of a room is shown as time slots (blocks with the same times and temperatures on several days become one slot; a block running past midnight is one slot), with **Heating** (`heat_temperature`) and **Cooling** (`cool_temperature`) or one **Temperature** (`temperature`). A change is written straight into the schedule in Home Assistant (`schedule/update`), so RoomMind follows it; other keys in a block are kept, the slot's name is kept as `name`. Overlapping slots are not saved (with a message); schedules made in YAML are shown read-only.
+- **New schedule**: create a schedule helper from the room's card; it is linked to the room straight away.
+- **Sleep timer up to 12 hours**: Off · 1 · 2 · 3 · 4 · 6 · 8 · 10 · 12 h.
+
+### Heating & cooling: outdoor units without a meter
+
+- An outdoor unit is measured with a **power meter** or, without one, **estimated via its phase**, the same way as the car charger: the use on its phase − the rooms on that phase − the car when it charges there − metered outdoor units on that phase (with 3 phases also at most the house − all rooms), only while one of its indoor units heats or cools, at most a maximum (default 2.5 kW).
+- Set up per room at the air conditioner (Heating & cooling › device › **Outdoor unit**: choose one, or "+ New outdoor unit"; name, power meter or phase + maximum, which other indoor units share it), and in General settings.
+- The outdoor units' power (measured or estimated) now counts for the **rooms** of their indoor units in Energy (room now and today, the room's kWh sensor, less "not assigned"), in Overview 2's On now and Complications, and as heat pump heat in the gas comparison. The car's estimate subtracts a metered outdoor unit on its phase.
 
 ### Energy: new tab "Overview 2" (chronograph)
 
@@ -63,6 +56,15 @@
 ### Alarm: Dim is part of "Not on motion"
 
 - In a room's alarm settings (Armed Home), the Dim switch now sits inside the "Not on motion" option card, below its explanation, instead of as a separate row under the options. It still only shows when "Not on motion" is chosen.
+
+### Prediction: the light bundles' time slots count
+- The prediction model now knows whether one of the room's light bundles has a time slot running (Normal / Leave / Vacation, dusk and dark as for the bundles) and learns how much that weighs.
+- A new model starts from those time slots: about 70 % in a time slot, 15 % outside, instead of a flat 50 %; the more it learns, the more it counts on itself (on its own after about 3 days). The card says "starts on your time slots".
+- The timeline shows the time slots as a strip under the bars.
+- The text under "How certain" no longer says the prediction isn't used: it is used (Settings → Prediction) once it is ready.
+
+### Room switches: no empty space under the temperature sensor
+- Fixed: a heater's temperature sensor picker (room → Settings → Switches) left a large empty space under it.
 
 ## 3.0.10
 
