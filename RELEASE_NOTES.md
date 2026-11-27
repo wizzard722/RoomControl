@@ -1,5 +1,13 @@
 # Release notes
 
+## 4.0.7 – Schedule choice
+
+### Heating & cooling: Schemakeuze made by RoomControl
+
+- **Create schedule choice**: a button in a room's heating settings (and in General settings › Heating for the whole house) makes the selector helper (input_number "Schemakeuze <room>", 1 … number of schedules, in the room's area) and puts it in place. RoomMind can use it as its schedule selector (RoomMind only reads input_number / input_boolean).
+- New entity **Schemakeuze** (a select with the schedule names) on the room's device, or on the General device for the whole house: Integrations → RoomControl → room → Schemakeuze. It follows the helper both ways.
+- A helper made by RoomControl follows the number of schedules of the room; for the house you set the number of schedules.
+
 ## 4.0.6 – Alarm-aware schedules
 
 ### Heating & cooling: switch schedule automatically by the alarm

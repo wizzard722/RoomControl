@@ -51,7 +51,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.LIGHT, Platform.COVER, Platform.SENSOR, Platform.BINARY_SENSOR, Platform.FAN, Platform.SWITCH, Platform.BUTTON, Platform.LOCK, Platform.NOTIFY]
+PLATFORMS = [Platform.LIGHT, Platform.COVER, Platform.SENSOR, Platform.BINARY_SENSOR, Platform.FAN, Platform.SWITCH, Platform.BUTTON, Platform.LOCK, Platform.NOTIFY, Platform.SELECT]
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
@@ -992,7 +992,8 @@ def ws_energy_overview(
 
 @websocket_api.websocket_command(
     {vol.Required("type"): f"{DOMAIN}/heating", vol.Optional("area_id"): str,
-     vol.Optional("set"): vol.All(int, vol.Range(min=0, max=99)), vol.Optional("schedule_id"): str}
+     vol.Optional("set"): vol.All(int, vol.Range(min=0, max=99)), vol.Optional("schedule_id"): str,
+     vol.Optional("selector_id"): str, vol.Optional("selector_entity"): str}
 )
 @websocket_api.async_response
 async def ws_heating(
@@ -1006,6 +1007,21 @@ async def ws_heating(
 
     if "schedule_id" in msg:  # a schedule helper just made in the panel: its entity
         connection.send_result(msg["id"], {"entity": schedule_entity(hass, msg["schedule_id"])})
+        return
+    if "selector_id" in msg or "selector_entity" in msg:
+        # A Schemakeuze helper (input_number) made in the panel: its entity, in the
+        # room's area; or, for an entity, the helper's id (to update its range).
+        from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+        reg = er.async_get(hass)
+        if "selector_id" in msg:
+            ent_id = reg.async_get_entity_id("input_number", "input_number", msg["selector_id"])
+            if ent_id and msg.get("area_id"):
+                reg.async_update_entity(ent_id, area_id=msg["area_id"])
+            connection.send_result(msg["id"], {"entity": ent_id})
+        else:
+            ent = reg.async_get(msg["selector_entity"])
+            connection.send_result(msg["id"], {"id": ent.unique_id if ent is not None and ent.platform == "input_number" else None})
         return
     area = msg.get("area_id")
     if "set" in msg:
