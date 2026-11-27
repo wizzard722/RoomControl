@@ -53,23 +53,23 @@ async def main():
     with patch.object(HT.dt_util, "utcnow", return_value=t + timedelta(hours=2, minutes=1)):
         h._tick(); await hass.async_block_till_done()
     check("2 h nobody home: house to 3", calls, [("input_number.schema_huis", 3)])
-    # armed home, holiday, summer, and the order
+    # armed home, holiday, disarmed, and the order
     S("person.p", "home"); h._tick(); await hass.async_block_till_done()
     g = hass.data[DOMAIN]["settings"]["heating"]
-    g["rules"] = {"armed_away": 3, "armed_home": 2, "holiday": 3, "summer": 4}
-    g["holiday_calendar"] = "calendar.feestdagen"; S("calendar.feestdagen", "off"); S("sensor.season", "winter")
+    g["rules"] = {"armed_away": 3, "armed_home": 2, "holiday": 3}
+    g["holiday_calendar"] = "calendar.feestdagen"; S("calendar.feestdagen", "off")
     S("input_number.schema_huis", "1.0", {"min": 1, "max": 4}); h.held.clear(); calls.clear()
     h._tick(); await hass.async_block_till_done()
-    check("winter, no holiday: stays 1", calls, [])
+    check("no holiday: stays 1", calls, [])
     S("alarm_control_panel.a", "armed_home"); h._tick(); await hass.async_block_till_done()
     check("armed home: 2", calls[-1], ("input_number.schema_huis", 2))
-    S("sensor.season", "summer"); h._tick(); await hass.async_block_till_done()
-    check("armed home wins over summer", calls[-1], ("input_number.schema_huis", 2))
-    S("alarm_control_panel.a", "disarmed"); h._tick(); await hass.async_block_till_done()
-    check("disarmed in summer: 4", calls[-1], ("input_number.schema_huis", 4))
+    S("alarm_control_panel.a", "armed_night"); h._tick(); await hass.async_block_till_done()
+    check("armed night counts as armed home", h.held["input_number.schema_huis"]["set"], 2)
     S("calendar.feestdagen", "on"); h._tick(); await hass.async_block_till_done()
-    check("holiday wins over summer: 3", calls[-1], ("input_number.schema_huis", 3))
-    S("calendar.feestdagen", "off"); S("sensor.season", "autumn"); h._tick(); await hass.async_block_till_done()
+    check("armed home wins over holiday", calls[-1], ("input_number.schema_huis", 2))
+    S("alarm_control_panel.a", "disarmed"); h._tick(); await hass.async_block_till_done()
+    check("holiday: 3", calls[-1], ("input_number.schema_huis", 3))
+    S("calendar.feestdagen", "off"); h._tick(); await hass.async_block_till_done()
     check("no rule: back to 1", calls[-1], ("input_number.schema_huis", 1))
     g["holiday_dates"] = [dt_util.now().strftime("%m-%d")]; h._tick(); await hass.async_block_till_done()
     check("own date is a holiday: 3", calls[-1], ("input_number.schema_huis", 3))
@@ -82,7 +82,22 @@ async def main():
     check("its holiday: still 3", h.held["input_number.schema_huis"]["set"], 3)
     g["holiday_dates"] = [dt_util.now().strftime("%m-%d")]
     sit = h.situations()
-    check("situations", (sit["holiday"], sit["summer"], sit["season"]), (True, False, "autumn"))
+    check("situations", (sit["holiday"], sit["disarmed"], sit["leave"], sit["vacation"]), (True, True, False, False))
+    # leave (verlof), vacation, disarmed, and armed vacation without a vacation value
+    g["holiday_dates"] = []; g["rules"] = {"armed_away": 3, "leave": 2, "disarmed": 4}
+    S("input_number.schema_huis", "1.0", {"min": 1, "max": 4}); h.held.clear(); calls.clear()
+    h._tick(); await hass.async_block_till_done()
+    check("disarmed: 4", calls[-1], ("input_number.schema_huis", 4))
+    hass.data[DOMAIN]["vacation"] = "home"; h._tick(); await hass.async_block_till_done()
+    check("verlof wins over disarmed: 2", calls[-1], ("input_number.schema_huis", 2))
+    hass.data[DOMAIN]["vacation"] = "normal"; S("alarm_control_panel.a", "armed_vacation"); h._tick(); await hass.async_block_till_done()
+    check("armed vacation, no vacation value: as armed away 3", [c for c in calls if c[0] == "input_number.schema_huis"][-1], ("input_number.schema_huis", 3))
+    g["rules"]["vacation"] = 1; h._tick(); await hass.async_block_till_done()
+    check("armed vacation with its own value: 1", calls[-1], ("input_number.schema_huis", 1))
+    S("alarm_control_panel.a", "armed_away"); h._tick(); await hass.async_block_till_done()
+    check("armed away: 3", calls[-1], ("input_number.schema_huis", 3))
+    S("alarm_control_panel.a", "disarmed"); g["rules"] = {}; h._tick(); await hass.async_block_till_done()
+    check("no rule: back to 1 again", [c for c in calls if c[0] == "input_number.schema_huis"][-1], ("input_number.schema_huis", 1))
     g["holiday_dates"] = []; g["rules"] = {"armed_away": 3, "nobody": 3}; h._tick(); await hass.async_block_till_done()
     S("input_number.schema_huis", "1.0", {"min": 1, "max": 3}); h.held.clear(); calls.clear()
     # gas equivalent

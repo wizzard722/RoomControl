@@ -1,5 +1,15 @@
 # Release notes
 
+## 4.0.6 – Alarm-aware schedules
+
+### Heating & cooling: switch schedule automatically
+
+- New rules: **Leave (Verlof)** (RoomControl's Verlof mode) and **Alarm Disarmed** (the alarm is off and no rule above applies).
+- **Vacation** is its own rule now: the alarm on Armed Vacation or RoomControl's Vakantie. Left on "don't switch", Armed Vacation still uses the Armed Away schedule, as before.
+- Armed Away is only Armed Away; **Armed Night** counts as Armed Home.
+- The **Summer** rule and the season sensor are removed.
+- Order (the first that applies wins): Armed Away · Vacation · Nobody home · Armed Home · Leave · Holiday · Disarmed. For a room and for the whole house.
+
 ## 4.0.5 – Folded heating card
 
 ### Heating & cooling: the Overview card folded
