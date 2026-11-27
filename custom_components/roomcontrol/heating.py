@@ -12,7 +12,7 @@ Room option "heating":
   "selector": input_number / input_boolean (scope "room"),
   "schedules": [schedule.*, ...] in selector order (for names and preview),
   "rules": {"armed_away": n, "vacation": n, "nobody": n, "armed_home": n,
-            "leave": n, "holiday": n, "disarmed": n} (value to switch to),
+            "armed_night": n, "leave": n, "holiday": n, "disarmed": n} (value to switch to),
   "nobody_h": hours nobody home before "nobody" applies (default 2),
   "tile": bool (Overview card, default True),
   "device_night": {climate: {"fan_mode", "swing_mode", "swing_horizontal_mode",
@@ -64,7 +64,7 @@ Rules, in this order (the first that applies wins): the alarm is armed away;
 vacation (the alarm is armed vacation or RoomControl's mode is "away"
 (vakantie); without a vacation value, armed vacation uses the armed away
 value, as before 4.0.6); nobody has been home for nobody_h hours; the alarm
-is armed home (or armed night); RoomControl's mode is "home" (verlof); today
+is armed home; the alarm is armed night; RoomControl's mode is "home" (verlof); today
 is a holiday; the alarm is disarmed. The selector is set to that rule's value.
 The value it had is kept and put back when no rule applies any more, unless
 someone changed the selector in between.
@@ -93,7 +93,7 @@ DEFAULT_EFFICIENCY = 90.0
 DEFAULT_GAS_KWH = 9.77
 DEFAULT_COP = 3.5
 DEFAULT_NOBODY_H = 2.0
-RULE_ORDER = ("armed_away", "vacation", "nobody", "armed_home", "leave", "holiday", "disarmed")
+RULE_ORDER = ("armed_away", "vacation", "nobody", "armed_home", "armed_night", "leave", "holiday", "disarmed")
 
 
 def _area_of(hass: HomeAssistant, entity_id: str) -> str | None:
@@ -542,7 +542,8 @@ class Heating:
         mode = hass.data.get(DOMAIN, {}).get("vacation")
         return {"armed_away": st is not None and st.state == "armed_away",
                 "armed_vacation": st is not None and st.state == "armed_vacation",
-                "armed_home": st is not None and st.state in ("armed_home", "armed_night"),
+                "armed_home": st is not None and st.state == "armed_home",
+                "armed_night": st is not None and st.state == "armed_night",
                 "disarmed": st is not None and st.state == "disarmed",
                 "holiday": (cal is not None and cal.state == "on") or today in dates,
                 "vacation": mode == "away" or (st is not None and st.state == "armed_vacation"),
@@ -580,9 +581,10 @@ class Heating:
     @callback
     def _tick(self, *_: Any) -> None:
         sit = self.situations()
-        if sit["armed_home"] and self._was_home_armed is False:
+        night = sit["armed_home"] or sit["armed_night"]  # the devices' night settings
+        if night and self._was_home_armed is False:
             self._night_devices()
-        self._was_home_armed = sit["armed_home"]
+        self._was_home_armed = night
         try:
             self._device_slots()
         except Exception:  # noqa: BLE001 - never break the schedule rules
@@ -860,6 +862,6 @@ def house_status(hass: HomeAssistant) -> dict[str, Any]:
                       | {c for u in g.get("outdoor") or [] if isinstance(u, dict) for c in u.get("units") or []})
     return {"selector": sel, "value": selector_value(hass, sel), "min": lo, "max": hi, "rooms": rooms,
             "outdoor": outdoor, "climates": climates,
-            "now": {k: sit[k] for k in ("armed_away", "armed_home", "holiday", "vacation", "leave", "disarmed")},
+            "now": {k: sit[k] for k in ("armed_away", "armed_home", "armed_night", "holiday", "vacation", "leave", "disarmed")},
             "holiday_calendar": holiday_calendar(hass), "held": ctl.held.get(sel) if sel else None,
             "roommind": found, "month": gas_equivalent(hass, month["kwh"], month.get("eur"), "electric", month.get("kwh_hp", 0.0), month.get("eur_hp", 0.0))}
