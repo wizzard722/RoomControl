@@ -70,6 +70,9 @@ async def main():
     # a holiday goes before disarmed
     g["rules"] = {"disarmed": 1, "holiday": 3}; g["holiday_calendar"] = "calendar.feestdagen"; S("calendar.feestdagen", "on")
     h._tick(); await hass.async_block_till_done()
+    S("alarm_control_panel.a", "disarmed"); h._tick(); await hass.async_block_till_done()
+    check("holiday option off: disarmed 1", huis(), ("input_number.schema_huis", 1))
+    g["holiday_on"] = True; S("alarm_control_panel.a", "armed_away"); h._tick(); await hass.async_block_till_done()
     check("armed away on a holiday: no rule, back", h.held.get("input_number.schema_huis"), None)
     S("alarm_control_panel.a", "disarmed"); h._tick(); await hass.async_block_till_done()
     check("disarmed on a holiday: 3", huis(), ("input_number.schema_huis", 3))

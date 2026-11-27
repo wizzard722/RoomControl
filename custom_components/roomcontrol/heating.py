@@ -14,6 +14,7 @@ Room option "heating":
   "rules": {"armed_away": n, "armed_vacation": n, "armed_home": n,
             "armed_night": n, "disarmed": n, (value to switch to per alarm state)
             "holiday": n} (disarmed on a holiday: goes before "disarmed"),
+  "holiday_on": bool, the option that turns the holiday schedule on (default off),
   "tile": bool (Overview card, default True),
   "device_night": {climate: {"fan_mode", "swing_mode", "swing_horizontal_mode",
                   "sleep": value}} set on a device when the alarm goes to
@@ -527,7 +528,8 @@ class Heating:
     @staticmethod
     def wanted(cfg: dict[str, Any], sit: dict[str, Any]) -> tuple[str | None, int | None]:
         rules = cfg.get("rules") if isinstance(cfg.get("rules"), dict) else {}
-        if sit.get("disarmed") and sit.get("holiday") and isinstance(rules.get("holiday"), (int, float)):
+        if (cfg.get("holiday_on") and sit.get("disarmed") and sit.get("holiday")
+                and isinstance(rules.get("holiday"), (int, float))):
             return "holiday", int(rules["holiday"])  # the holiday schedule goes before disarmed
         for rule in RULE_ORDER:
             value = rules.get(rule)
