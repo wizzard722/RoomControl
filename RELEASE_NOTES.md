@@ -9,6 +9,11 @@
 - Removed: the rules Vacation (RoomControl), Nobody home and Summer, with the season sensor. A schedule chosen for one of these is no longer used; choose it again under the alarm state.
 - The air conditioners' night settings also apply on Armed Night.
 
+### Heating & cooling on Overview as tiles
+
+- Heating & cooling on Overview looks like Devices now: tiles for the **thermostat** (temperature → target, heating/cooling), the **schedule** and each **air conditioner** (mode, target, ≈ watts; amber while running).
+- Tap the thermostat for Comfort · Eco · +1° (and the heaters with their gas comparison), the schedule tile to pick a schedule. An air conditioner tile switches it on or off (via RoomMind: opens its settings); **⋯** opens fan, swing, sleep timer and its outdoor unit share.
+
 ## 4.0.5 – Folded heating card
 
 ### Heating & cooling: the Overview card folded
