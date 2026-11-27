@@ -5,7 +5,8 @@
 ### Heating & cooling: switch schedule automatically by the alarm
 
 - Switching schedules follows **only the alarm state**: choose a schedule for **Armed Away**, **Armed Vacation**, **Armed Home**, **Armed Night** and **Disarmed**. There is one state at a time, so there is no order any more. A state left on "don't switch" puts the schedule back to what it was.
-- Removed: the rules Vacation (RoomControl), Nobody home, Holiday and Summer, with the holiday calendar, own holiday days and season sensor in General settings › Heating. A schedule chosen for one of these is no longer used; choose it again under the alarm state.
+- **Holiday (Disarmed)**: on a holiday with the alarm off, this schedule goes before the Disarmed schedule (left on "don't switch": the Disarmed schedule). Holidays come from Home Assistant's Holiday integration or your own days (General settings › Heating › Holidays).
+- Removed: the rules Vacation (RoomControl), Nobody home and Summer, with the season sensor. A schedule chosen for one of these is no longer used; choose it again under the alarm state.
 - The air conditioners' night settings also apply on Armed Night.
 
 ## 4.0.5 – Folded heating card

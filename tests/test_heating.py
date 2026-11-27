@@ -66,7 +66,24 @@ async def main():
     hass.data[DOMAIN]["vacation"] = "home"; S("person.p", "not_home"); h._tick(); await hass.async_block_till_done()
     check("verlof and nobody home don't count: still 3", huis(), ("input_number.schema_huis", 3))
     hass.data[DOMAIN]["vacation"] = "normal"; S("person.p", "home")
-    check("situations: only the alarm state", h.situations(), {"armed_away": True, "armed_vacation": False, "armed_home": False, "armed_night": False, "disarmed": False})
+    check("situations: only the alarm state", h.situations(), {"armed_away": True, "armed_vacation": False, "armed_home": False, "armed_night": False, "disarmed": False, "holiday": False})
+    # a holiday goes before disarmed
+    g["rules"] = {"disarmed": 1, "holiday": 3}; g["holiday_calendar"] = "calendar.feestdagen"; S("calendar.feestdagen", "on")
+    h._tick(); await hass.async_block_till_done()
+    check("armed away on a holiday: no rule, back", h.held.get("input_number.schema_huis"), None)
+    S("alarm_control_panel.a", "disarmed"); h._tick(); await hass.async_block_till_done()
+    check("disarmed on a holiday: 3", huis(), ("input_number.schema_huis", 3))
+    S("calendar.feestdagen", "off"); h._tick(); await hass.async_block_till_done()
+    check("holiday over: disarmed 1", huis(), ("input_number.schema_huis", 1))
+    g["rules"] = {"disarmed": 1}; S("calendar.feestdagen", "on"); h._tick(); await hass.async_block_till_done()
+    check("no holiday value: disarmed schedule", h.held["input_number.schema_huis"]["set"], 1)
+    g["holiday_dates"] = [dt_util.now().strftime("%m-%d")]; S("calendar.feestdagen", "off"); g["rules"]["holiday"] = 4
+    h._tick(); await hass.async_block_till_done()
+    check("own date is a holiday: 4", huis(), ("input_number.schema_huis", 4))
+    g["holiday_dates"] = []; g.pop("holiday_calendar")
+    from homeassistant.helpers import entity_registry as er
+    ent = er.async_get(hass).async_get_or_create("calendar", "holiday", "nl", suggested_object_id="nederland")
+    check("Holiday integration's calendar found", HT.holiday_calendar(hass), ent.entity_id)
     S("alarm_control_panel.a", "disarmed"); g["rules"] = {"armed_away": 3}; h._tick(); await hass.async_block_till_done()
     from homeassistant.helpers import entity_registry as er
     S("input_number.schema_huis", "1.0", {"min": 1, "max": 3}); h.held.clear(); calls.clear()

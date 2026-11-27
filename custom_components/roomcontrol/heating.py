@@ -12,7 +12,8 @@ Room option "heating":
   "selector": input_number / input_boolean (scope "room"),
   "schedules": [schedule.*, ...] in selector order (for names and preview),
   "rules": {"armed_away": n, "armed_vacation": n, "armed_home": n,
-            "armed_night": n, "disarmed": n} (value to switch to per alarm state),
+            "armed_night": n, "disarmed": n, (value to switch to per alarm state)
+            "holiday": n} (disarmed on a holiday: goes before "disarmed"),
   "tile": bool (Overview card, default True),
   "device_night": {climate: {"fan_mode", "swing_mode", "swing_horizontal_mode",
                   "sleep": value}} set on a device when the alarm goes to
@@ -29,6 +30,8 @@ Room option "heating":
 General setting "heating":
  {"selector": the house's selector, "names": {"1": "Normaal", ...},
   "rules": {...as for a room},
+  "holiday_calendar": a calendar — a day with an event on is a holiday
+  (default: the Holiday integration's calendar); "holiday_dates": ["MM-DD", ...] own days,
   "gas_price": € per m³ (else Energy › bill gas price), "efficiency": % of
   the gas boiler (default 90), "gas_kwh": kWh per m³ (default 9.77),
   "cop": heat pump COP (default 3.5),
@@ -59,7 +62,8 @@ id says "sleep") are set on the device itself.
 
 Rules follow the alarm only: per alarm state (armed away, armed vacation,
 armed home, armed night, disarmed) a value; there is one state at a time,
-so no order. The selector is set to the value of the alarm's state.
+so no order. The selector is set to the value of the alarm's state. Disarmed
+on a holiday (holiday calendar or own days) uses "holiday" when it is set.
 The value it had is kept and put back when no rule applies any more, unless
 someone changed the selector in between.
 
@@ -184,6 +188,22 @@ def general_cfg(hass: HomeAssistant) -> dict[str, Any]:
 
 def _num(v: Any, default: float) -> float:
     return float(v) if isinstance(v, (int, float)) and v > 0 else default
+
+
+def holiday_calendar(hass: HomeAssistant) -> str | None:
+    """The calendar with holidays: the one set, else the Holiday integration's."""
+    chosen = general_cfg(hass).get("holiday_calendar")
+    if chosen:
+        return chosen
+    from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+    try:
+        entries = list(er.async_get(hass).entities.values())
+    except (AttributeError, KeyError):  # registry not loaded
+        return None
+    found = sorted(e.entity_id for e in entries
+                   if e.platform == "holiday" and e.domain == "calendar" and not e.disabled_by)
+    return found[0] if found else None
 
 
 DEFAULT_OUTDOOR_KW = 2.5
@@ -438,7 +458,7 @@ class Heating:
         if self._watch:
             self._watch()
         settings = self.hass.data.get(DOMAIN, {}).get("settings", {})
-        ids = [e for e in [settings.get(SETTING_ALARM_ENTITY)] if e]
+        ids = [e for e in [settings.get(SETTING_ALARM_ENTITY), holiday_calendar(self.hass)] if e]
         self._watch = async_track_state_change_event(self.hass, ids, self._on_state) if ids else None
         self._tick()
 
@@ -497,11 +517,18 @@ class Heating:
         alarm = self.hass.data.get(DOMAIN, {}).get("settings", {}).get(SETTING_ALARM_ENTITY)
         st = self.hass.states.get(alarm) if alarm else None
         state = st.state if st is not None else None
-        return {rule: state == rule for rule in RULE_ORDER}
+        cal_id = holiday_calendar(self.hass)
+        cal = self.hass.states.get(cal_id) if cal_id else None
+        today = dt_util.as_local(now or dt_util.utcnow()).strftime("%m-%d")
+        dates = {str(d) for d in general_cfg(self.hass).get("holiday_dates") or []}
+        return {**{rule: state == rule for rule in RULE_ORDER},
+                "holiday": (cal is not None and cal.state == "on") or today in dates}
 
     @staticmethod
     def wanted(cfg: dict[str, Any], sit: dict[str, Any]) -> tuple[str | None, int | None]:
         rules = cfg.get("rules") if isinstance(cfg.get("rules"), dict) else {}
+        if sit.get("disarmed") and sit.get("holiday") and isinstance(rules.get("holiday"), (int, float)):
+            return "holiday", int(rules["holiday"])  # the holiday schedule goes before disarmed
         for rule in RULE_ORDER:
             value = rules.get(rule)
             if sit.get(rule) and isinstance(value, (int, float)):
@@ -805,5 +832,5 @@ def house_status(hass: HomeAssistant) -> dict[str, Any]:
     return {"selector": sel, "value": selector_value(hass, sel), "min": lo, "max": hi, "rooms": rooms,
             "outdoor": outdoor, "climates": climates,
             "now": sit,
-            "held": ctl.held.get(sel) if sel else None,
+            "holiday_calendar": holiday_calendar(hass), "held": ctl.held.get(sel) if sel else None,
             "roommind": found, "month": gas_equivalent(hass, month["kwh"], month.get("eur"), "electric", month.get("kwh_hp", 0.0), month.get("eur_hp", 0.0))}
